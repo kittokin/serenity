@@ -35,16 +35,18 @@ class DateConstructor final : public NativeFunction {
 
 public:
     explicit DateConstructor(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~DateConstructor() override;
 
-    virtual Value call(Interpreter&) override;
-    virtual Value construct(Interpreter&, Function& new_target) override;
+    virtual Value call() override;
+    virtual Value construct(Function& new_target) override;
 
 private:
     virtual bool has_constructor() const override { return true; }
 
     JS_DECLARE_NATIVE_FUNCTION(now);
+    JS_DECLARE_NATIVE_FUNCTION(parse);
+    JS_DECLARE_NATIVE_FUNCTION(utc);
 };
 
 }

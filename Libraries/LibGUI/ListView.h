@@ -45,7 +45,7 @@ public:
 
     int horizontal_padding() const { return m_horizontal_padding; }
 
-    void scroll_into_view(const ModelIndex&, Orientation);
+    virtual void scroll_into_view(const ModelIndex& index, bool scroll_horizontally, bool scroll_vertically) override;
 
     Gfx::IntPoint adjusted_position(const Gfx::IntPoint&) const;
 
@@ -57,18 +57,21 @@ public:
 
     virtual void select_all() override;
 
-    void move_selection(int steps);
-
     Function<void()> on_escape_pressed;
 
-private:
-    ListView();
+    virtual void move_cursor(CursorMovement, SelectionUpdate) override;
+    void move_cursor_relative(int steps, SelectionUpdate);
 
-    virtual void did_update_model(unsigned flags) override;
+protected:
+    ListView();
+    virtual void paint_list_item(Painter&, int row_index, int painted_item_index);
+
+private:
+    virtual void model_did_update(unsigned flags) override;
     virtual void paint_event(PaintEvent&) override;
-    virtual void doubleclick_event(MouseEvent&) override;
     virtual void keydown_event(KeyEvent&) override;
     virtual void resize_event(ResizeEvent&) override;
+    virtual void mousemove_event(MouseEvent&) override;
 
     Gfx::IntRect content_rect(int row) const;
     int item_count() const;

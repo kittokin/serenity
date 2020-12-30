@@ -31,7 +31,9 @@
 #include <WebContent/WebContentClientEndpoint.h>
 #include <WebContent/WebContentServerEndpoint.h>
 
-class WebContentView;
+namespace Web {
+
+class OutOfProcessWebView;
 
 class WebContentClient
     : public IPC::ServerConnection<WebContentClientEndpoint, WebContentServerEndpoint>
@@ -42,10 +44,10 @@ public:
     virtual void handshake() override;
 
 private:
-    WebContentClient(WebContentView&);
+    WebContentClient(OutOfProcessWebView&);
 
     virtual void handle(const Messages::WebContentClient::DidPaint&) override;
-    virtual void handle(const Messages::WebContentClient::DidFinishLoad&) override;
+    virtual void handle(const Messages::WebContentClient::DidFinishLoading&) override;
     virtual void handle(const Messages::WebContentClient::DidInvalidateContentRect&) override;
     virtual void handle(const Messages::WebContentClient::DidChangeSelection&) override;
     virtual void handle(const Messages::WebContentClient::DidLayout&) override;
@@ -58,6 +60,9 @@ private:
     virtual void handle(const Messages::WebContentClient::DidStartLoading&) override;
     virtual void handle(const Messages::WebContentClient::DidRequestContextMenu&) override;
     virtual void handle(const Messages::WebContentClient::DidRequestLinkContextMenu&) override;
+    virtual OwnPtr<Messages::WebContentClient::DidRequestAlertResponse> handle(const Messages::WebContentClient::DidRequestAlert&) override;
 
-    WebContentView& m_view;
+    OutOfProcessWebView& m_view;
 };
+
+}

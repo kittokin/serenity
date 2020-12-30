@@ -40,6 +40,7 @@ void HttpsJob::start()
 {
     ASSERT(!m_socket);
     m_socket = TLS::TLSv12::construct(this);
+    m_socket->set_root_certificates(m_override_ca_certificates ? *m_override_ca_certificates : DefaultRootCACertificates::the().certificates());
     m_socket->on_tls_connected = [this] {
 #ifdef HTTPSJOB_DEBUG
         dbg() << "HttpsJob: on_connected callback";
@@ -64,6 +65,10 @@ void HttpsJob::start()
     m_socket->on_tls_finished = [&] {
         finish_up();
     };
+    m_socket->on_tls_certificate_request = [this](auto&) {
+        if (on_certificate_requested)
+            on_certificate_requested(*this);
+    };
     bool success = ((TLS::TLSv12&)*m_socket).connect(m_request.url().host(), m_request.url().port());
     if (!success) {
         deferred_invoke([this](auto&) {
@@ -80,6 +85,15 @@ void HttpsJob::shutdown()
     m_socket->on_tls_connected = nullptr;
     remove_child(*m_socket);
     m_socket = nullptr;
+}
+
+void HttpsJob::set_certificate(String certificate, String private_key)
+{
+    if (!m_socket->add_client_key(certificate.bytes(), private_key.bytes())) {
+        dbg() << "LibHTTP: Failed to set a client certificate";
+        // FIXME: Do something about this failure
+        ASSERT_NOT_REACHED();
+    }
 }
 
 void HttpsJob::read_while_data_available(Function<IterationDecision()> read)
@@ -109,7 +123,7 @@ bool HttpsJob::can_read_line() const
     return m_socket->can_read_line();
 }
 
-ByteBuffer HttpsJob::read_line(size_t size)
+String HttpsJob::read_line(size_t size)
 {
     return m_socket->read_line(size);
 }
@@ -129,7 +143,7 @@ bool HttpsJob::eof() const
     return m_socket->eof();
 }
 
-bool HttpsJob::write(const ByteBuffer& data)
+bool HttpsJob::write(ReadonlyBytes data)
 {
     return m_socket->write(data);
 }

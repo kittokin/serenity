@@ -34,6 +34,7 @@ class Console final : public Kernel::CharacterDevice {
     AK_MAKE_ETERNAL
 public:
     static Console& the();
+    static void initialize();
     static bool is_initialized();
 
     Console();
@@ -42,13 +43,16 @@ public:
     // ^CharacterDevice
     virtual bool can_read(const Kernel::FileDescription&, size_t) const override;
     virtual bool can_write(const Kernel::FileDescription&, size_t) const override { return true; }
-    virtual ssize_t read(Kernel::FileDescription&, size_t, u8*, ssize_t) override;
-    virtual ssize_t write(Kernel::FileDescription&, size_t, const u8*, ssize_t) override;
+    virtual Kernel::KResultOr<size_t> read(Kernel::FileDescription&, size_t, Kernel::UserOrKernelBuffer&, size_t) override;
+    virtual Kernel::KResultOr<size_t> write(Kernel::FileDescription&, size_t, const Kernel::UserOrKernelBuffer&, size_t) override;
     virtual const char* class_name() const override { return "Console"; }
 
     void put_char(char);
 
     const CircularQueue<char, 16384>& logbuffer() const { return m_logbuffer; }
+
+    // ^Device
+    virtual mode_t required_mode() const override { return 0666; }
 
 private:
     CircularQueue<char, 16384> m_logbuffer;

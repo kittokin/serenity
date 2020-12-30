@@ -38,38 +38,52 @@ class IconView : public AbstractView {
 public:
     virtual ~IconView() override;
 
+    enum class FlowDirection {
+        LeftToRight,
+        TopToBottom,
+    };
+
+    FlowDirection flow_direction() const { return m_flow_direction; }
+    void set_flow_direction(FlowDirection);
+
     int content_width() const;
     int horizontal_padding() const { return m_horizontal_padding; }
 
-    void scroll_into_view(const ModelIndex&, Orientation);
+    virtual void scroll_into_view(const ModelIndex&, bool scroll_horizontally = true, bool scroll_vertically = true) override;
+
     Gfx::IntSize effective_item_size() const { return m_effective_item_size; }
 
     int model_column() const { return m_model_column; }
     void set_model_column(int column) { m_model_column = column; }
 
     virtual ModelIndex index_at_event_position(const Gfx::IntPoint&) const override;
+    virtual Gfx::IntRect content_rect(const ModelIndex&) const override;
 
     virtual void select_all() override;
 
 private:
     IconView();
 
-    virtual void did_update_model(unsigned flags) override;
+    virtual void model_did_update(unsigned flags) override;
     virtual void paint_event(PaintEvent&) override;
     virtual void second_paint_event(PaintEvent&) override;
     virtual void resize_event(ResizeEvent&) override;
     virtual void mousedown_event(MouseEvent&) override;
     virtual void mousemove_event(MouseEvent&) override;
     virtual void mouseup_event(MouseEvent&) override;
-    virtual void keydown_event(KeyEvent&) override;
     virtual void drag_move_event(DragEvent&) override;
+    virtual void did_change_hovered_index(const ModelIndex& old_index, const ModelIndex& new_index) override;
+    virtual void did_change_cursor_index(const ModelIndex& old_index, const ModelIndex& new_index) override;
+
+    virtual void move_cursor(CursorMovement, SelectionUpdate) override;
 
     struct ItemData {
         Gfx::IntRect text_rect;
         Gfx::IntRect icon_rect;
         int icon_offset_y;
         int text_offset_y;
-        Variant data;
+        String text;
+        Vector<StringView> wrapped_text_lines;
         ModelIndex index;
         bool valid { false };
         bool selected { false }; // always valid
@@ -79,7 +93,7 @@ private:
         void invalidate()
         {
             valid = false;
-            data.clear();
+            text = {};
         }
 
         bool is_intersecting(const Gfx::IntRect& rect) const
@@ -96,42 +110,10 @@ private:
     };
 
     template<typename Function>
-    IterationDecision for_each_item_intersecting_rect(const Gfx::IntRect& rect, Function f) const
-    {
-        ASSERT(model());
-        if (rect.is_empty())
-            return IterationDecision::Continue;
-        int begin_row, begin_column;
-        column_row_from_content_position(rect.top_left(), begin_row, begin_column);
-        int end_row, end_column;
-        column_row_from_content_position(rect.bottom_right(), end_row, end_column);
-        int items_per_column = end_column - begin_column + 1;
-        int item_index = max(0, begin_row * m_visual_column_count + begin_column);
-        int last_index = min(item_count(), end_row * m_visual_column_count + end_column + 1);
-        while (item_index < last_index) {
-            for (int i = item_index; i < min(item_index + items_per_column, last_index); i++) {
-                auto& item_data = get_item_data(i);
-                if (item_data.is_intersecting(rect)) {
-                    auto decision = f(item_data);
-                    if (decision != IterationDecision::Continue)
-                        return decision;
-                }
-            }
-            item_index += m_visual_column_count;
-        };
-        return IterationDecision::Continue;
-    }
+    IterationDecision for_each_item_intersecting_rect(const Gfx::IntRect&, Function) const;
 
     template<typename Function>
-    IterationDecision for_each_item_intersecting_rects(const Vector<Gfx::IntRect>& rects, Function f) const
-    {
-        for (auto& rect : rects) {
-            auto decision = for_each_item_intersecting_rect(rect, f);
-            if (decision != IterationDecision::Continue)
-                return decision;
-        }
-        return IterationDecision::Continue;
-    }
+    IterationDecision for_each_item_intersecting_rects(const Vector<Gfx::IntRect>&, Function) const;
 
     void column_row_from_content_position(const Gfx::IntPoint& content_position, int& row, int& column) const
     {
@@ -146,6 +128,7 @@ private:
     void get_item_rects(int item_index, ItemData& item_data, const Gfx::Font&) const;
     bool update_rubber_banding(const Gfx::IntPoint&);
     void scroll_out_of_view_timer_fired();
+    int items_per_page() const;
 
     void reinit_item_cache() const;
     int model_index_to_item_index(const ModelIndex& model_index) const
@@ -183,6 +166,8 @@ private:
     Gfx::IntPoint m_rubber_band_current;
 
     ModelIndex m_drop_candidate_index;
+
+    FlowDirection m_flow_direction { FlowDirection::LeftToRight };
 
     mutable Vector<ItemData> m_item_data_cache;
     mutable int m_selected_count_cache { 0 };

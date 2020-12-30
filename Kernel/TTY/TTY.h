@@ -27,32 +27,36 @@
 #pragma once
 
 #include <AK/CircularDeque.h>
+#include <AK/WeakPtr.h>
 #include <Kernel/Devices/CharacterDevice.h>
 #include <Kernel/DoubleBuffer.h>
+#include <Kernel/ProcessGroup.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
-
-class Process;
 
 class TTY : public CharacterDevice {
 public:
     virtual ~TTY() override;
 
-    virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) override;
-    virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) override;
+    virtual KResultOr<size_t> read(FileDescription&, size_t, UserOrKernelBuffer&, size_t) override;
+    virtual KResultOr<size_t> write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t) override;
     virtual bool can_read(const FileDescription&, size_t) const override;
     virtual bool can_write(const FileDescription&, size_t) const override;
     virtual int ioctl(FileDescription&, unsigned request, FlatPtr arg) override final;
     virtual String absolute_path(const FileDescription&) const override { return tty_name(); }
 
-    virtual StringView tty_name() const = 0;
+    virtual String tty_name() const = 0;
 
     unsigned short rows() const { return m_rows; }
     unsigned short columns() const { return m_columns; }
 
-    void set_pgid(pid_t pgid) { m_pgid = pgid; }
-    pid_t pgid() const { return m_pgid; }
+    ProcessGroupID pgid() const
+    {
+        if (auto pg = m_pg.strong_ref())
+            return pg->pgid();
+        return 0;
+    }
 
     void set_termios(const termios&);
     bool should_generate_signals() const { return m_termios.c_lflag & ISIG; }
@@ -63,12 +67,15 @@ public:
     void set_default_termios();
     void hang_up();
 
+    // ^Device
+    virtual mode_t required_mode() const override { return 0620; }
+
 protected:
-    virtual ssize_t on_tty_write(const u8*, ssize_t) = 0;
+    virtual ssize_t on_tty_write(const UserOrKernelBuffer&, ssize_t) = 0;
     void set_size(unsigned short columns, unsigned short rows);
 
     TTY(unsigned major, unsigned minor);
-    void emit(u8);
+    void emit(u8, bool do_evaluate_block_conditions = false);
     virtual void echo(u8) = 0;
 
     bool can_do_backspace() const;
@@ -93,7 +100,8 @@ private:
     virtual bool is_tty() const final override { return true; }
 
     CircularDeque<u8, 1024> m_input_buffer;
-    pid_t m_pgid { 0 };
+    WeakPtr<Process> m_original_process_parent;
+    WeakPtr<ProcessGroup> m_pg;
     termios m_termios;
     unsigned short m_rows { 0 };
     unsigned short m_columns { 0 };

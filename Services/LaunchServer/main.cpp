@@ -32,17 +32,14 @@
 #include <stdio.h>
 #include <unistd.h>
 
-int main(int argc, char** argv)
+int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
 {
-    (void)argc;
-    (void)argv;
-
     Core::EventLoop event_loop;
     auto server = Core::LocalServer::construct();
 
     auto launcher = LaunchServer::Launcher();
 
-    launcher.load_handlers("/res/apps");
+    launcher.load_handlers();
     launcher.load_config(Core::ConfigFile::get_for_app("LaunchServer"));
 
     if (pledge("stdio accept rpath proc exec", nullptr) < 0) {

@@ -79,6 +79,7 @@ public:
     unsigned access() const { return m_access; }
 
     void set_name(const String& name) { m_name = name; }
+    void set_name(String&& name) { m_name = move(name); }
 
     const VMObject& vmobject() const { return *m_vmobject; }
     VMObject& vmobject() { return *m_vmobject; }
@@ -117,7 +118,7 @@ public:
     {
         return (vaddr - m_range.base()).get() / PAGE_SIZE;
     }
-    
+
     VirtualAddress vaddr_from_page_index(size_t page_index) const
     {
         return vaddr().offset(page_index * PAGE_SIZE);
@@ -171,7 +172,7 @@ public:
     void set_executable(bool b) { set_access_bit(Access::Execute, b); }
 
     void set_page_directory(PageDirectory&);
-    void map(PageDirectory&);
+    bool map(PageDirectory&);
     enum class ShouldDeallocateVirtualMemoryRange {
         No,
         Yes,
@@ -201,13 +202,13 @@ private:
     }
 
     bool commit(size_t page_index);
-    void remap_page(size_t index, bool with_flush = true);
+    bool remap_page(size_t index, bool with_flush = true);
 
     PageFaultResponse handle_cow_fault(size_t page_index);
     PageFaultResponse handle_inode_fault(size_t page_index);
     PageFaultResponse handle_zero_fault(size_t page_index);
 
-    void map_individual_page_impl(size_t page_index);
+    bool map_individual_page_impl(size_t page_index);
 
     RefPtr<PageDirectory> m_page_directory;
     Range m_range;
@@ -224,5 +225,29 @@ private:
     bool m_kernel : 1 { false };
     mutable OwnPtr<Bitmap> m_cow_map;
 };
+
+inline unsigned prot_to_region_access_flags(int prot)
+{
+    unsigned access = 0;
+    if (prot & PROT_READ)
+        access |= Region::Access::Read;
+    if (prot & PROT_WRITE)
+        access |= Region::Access::Write;
+    if (prot & PROT_EXEC)
+        access |= Region::Access::Execute;
+    return access;
+}
+
+inline int region_access_flags_to_prot(unsigned access)
+{
+    int prot = 0;
+    if (access & Region::Access::Read)
+        prot |= PROT_READ;
+    if (access & Region::Access::Write)
+        prot |= PROT_WRITE;
+    if (access & Region::Access::Execute)
+        prot |= PROT_EXEC;
+    return prot;
+}
 
 }

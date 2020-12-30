@@ -25,11 +25,13 @@
  */
 
 #include <LibGUI/Application.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Painter.h>
 #include <LibGfx/Path.h>
 
@@ -143,7 +145,7 @@ void Canvas::draw()
     path.close();
     painter.fill_path(path, Color::Yellow, Gfx::Painter::WindingRule::EvenOdd);
 
-    auto buggie = Gfx::Bitmap::load_from_file("/res/icons/buggie.png");
+    auto buggie = Gfx::Bitmap::load_from_file("/res/graphics/buggie.png");
     painter.blit({ 280, 280 }, *buggie, buggie->rect(), 0.5);
     painter.blit_scaled({ 360, 280, buggie->rect().width() * 2, buggie->rect().height() * 2 }, *buggie, buggie->rect(), 0.5, 0.5);
 
@@ -160,12 +162,12 @@ void Canvas::draw()
     painter.draw_text({ 520, 360, 240, 30 }, "Emojis! 🙂😂🐞🦄", Gfx::TextAlignment::Center, Color::White);
 
     painter.draw_rect({ 520, 410, 240, 80 }, Color::DarkGray);
-    painter.draw_text({ 520, 415, 240, 20 }, "Normal text", Gfx::Font::default_font(), Gfx::TextAlignment::CenterLeft, Color::Red);
-    painter.draw_text({ 520, 430, 240, 20 }, "Bold text", Gfx::Font::default_bold_font(), Gfx::TextAlignment::CenterLeft, Color::Green);
-    painter.draw_text({ 520, 450, 240, 20 }, "Normal text (fixed width)", Gfx::Font::default_fixed_width_font(), Gfx::TextAlignment::CenterLeft, Color::Blue);
-    painter.draw_text({ 520, 465, 240, 20 }, "Bold text (fixed width)", Gfx::Font::default_bold_fixed_width_font(), Gfx::TextAlignment::CenterLeft, Color::Yellow);
+    painter.draw_text({ 520, 415, 240, 20 }, "Normal text", Gfx::FontDatabase::default_font(), Gfx::TextAlignment::CenterLeft, Color::Red);
+    painter.draw_text({ 520, 430, 240, 20 }, "Bold text", Gfx::FontDatabase::default_bold_font(), Gfx::TextAlignment::CenterLeft, Color::Green);
+    painter.draw_text({ 520, 450, 240, 20 }, "Normal text (fixed width)", Gfx::FontDatabase::default_fixed_width_font(), Gfx::TextAlignment::CenterLeft, Color::Blue);
+    painter.draw_text({ 520, 465, 240, 20 }, "Bold text (fixed width)", Gfx::FontDatabase::default_bold_fixed_width_font(), Gfx::TextAlignment::CenterLeft, Color::Yellow);
 
-    auto font = Gfx::Font::load_from_file("/res/fonts/PebbletonBold11.font");
+    auto font = Gfx::Font::load_from_file("/res/fonts/PebbletonBold14.font");
     painter.draw_rect({ 520, 510, 240, 30 }, Color::DarkGray);
     painter.draw_text({ 520, 510, 240, 30 }, "Hello friends! :^)", *font, Gfx::TextAlignment::Center, Color::White);
 
@@ -198,11 +200,29 @@ int main(int argc, char** argv)
 {
     auto app = GUI::Application::construct(argc, argv);
 
+    if (pledge("stdio rpath shared_buffer", nullptr) < 0) {
+        perror("pledge");
+        return 1;
+    }
+
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(nullptr, nullptr) < 0) {
+        perror("unveil");
+        return 1;
+    }
+
     auto window = GUI::Window::construct();
     window->set_double_buffering_enabled(true);
     window->set_title("LibGfx Demo");
     window->set_resizable(false);
-    window->set_rect(100, 100, WIDTH, HEIGHT);
+    window->resize(WIDTH, HEIGHT);
+
+    auto app_icon = GUI::Icon::default_icon("app-libgfx-demo");
+    window->set_icon(app_icon.bitmap_for_size(16));
     window->set_main_widget<Canvas>();
     window->show();
 

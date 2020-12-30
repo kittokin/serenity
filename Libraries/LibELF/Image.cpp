@@ -24,7 +24,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/Demangle.h>
 #include <AK/Memory.h>
+#include <AK/QuickSort.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <LibELF/Image.h>
@@ -32,11 +34,12 @@
 
 namespace ELF {
 
-Image::Image(const u8* buffer, size_t size)
+Image::Image(const u8* buffer, size_t size, bool verbose_logging)
     : m_buffer(buffer)
     , m_size(size)
+    , m_verbose_logging(verbose_logging)
 {
-    m_valid = parse();
+    parse();
 }
 
 Image::~Image()
@@ -63,6 +66,7 @@ static const char* object_file_type_to_string(Elf32_Half type)
 
 StringView Image::section_index_to_string(unsigned index) const
 {
+    ASSERT(m_valid);
     if (index == SHN_UNDEF)
         return "Undefined";
     if (index >= SHN_LORESERVE)
@@ -72,6 +76,9 @@ StringView Image::section_index_to_string(unsigned index) const
 
 unsigned Image::symbol_count() const
 {
+    ASSERT(m_valid);
+    if (!section_count())
+        return 0;
     return section(m_symbol_table_section_index).entry_count();
 }
 
@@ -101,12 +108,13 @@ void Image::dump() const
         dbgprintf("       flags: %x\n", program_header.flags());
         dbgprintf("        \n");
         dbgprintf("    }\n");
+        return IterationDecision::Continue;
     });
 
     for (unsigned i = 0; i < header().e_shnum; ++i) {
         auto& section = this->section(i);
         dbgprintf("    Section %u: {\n", i);
-        dbgprintf("        name: %s\n", section.name());
+        dbgprintf("        name: %.*s\n", (int)section.name().length(), section.name().characters_without_null_termination());
         dbgprintf("        type: %x\n", section.type());
         dbgprintf("      offset: %x\n", section.offset());
         dbgprintf("        size: %u\n", section.size());
@@ -118,8 +126,9 @@ void Image::dump() const
     for (unsigned i = 1; i < symbol_count(); ++i) {
         auto& sym = symbol(i);
         dbgprintf("Symbol @%u:\n", i);
-        dbgprintf("    Name: %s\n", sym.name());
-        dbgprintf("    In section: %s\n", section_index_to_string(sym.section_index()));
+        dbgprintf("    Name: %.*s\n", (int)sym.name().length(), sym.name().characters_without_null_termination());
+        StringView section_index_string = section_index_to_string(sym.section_index());
+        dbgprintf("    In section: %.*s\n", (int)section_index_string.length(), section_index_string.characters_without_null_termination());
         dbgprintf("    Value: %x\n", sym.value());
         dbgprintf("    Size: %u\n", sym.size());
     }
@@ -129,26 +138,38 @@ void Image::dump() const
 
 unsigned Image::section_count() const
 {
+    ASSERT(m_valid);
     return header().e_shnum;
 }
 
 unsigned Image::program_header_count() const
 {
+    ASSERT(m_valid);
     return header().e_phnum;
 }
 
 bool Image::parse()
 {
-    if (!validate_elf_header(header(), m_size)) {
-        dbgputstr("Image::parse(): ELF Header not valid\n");
-        return false;
+    if (m_size < sizeof(Elf32_Ehdr) || !validate_elf_header(header(), m_size, m_verbose_logging)) {
+        if (m_verbose_logging)
+            dbgputstr("Image::parse(): ELF Header not valid\n");
+        return m_valid = false;
     }
+
+    if (!validate_program_headers(header(), m_size, m_buffer, m_size, nullptr, m_verbose_logging)) {
+        if (m_verbose_logging)
+            dbgputstr("Image::parse(): ELF Program Headers not valid\n");
+        return m_valid = false;
+    }
+
+    m_valid = true;
 
     // First locate the string tables.
     for (unsigned i = 0; i < section_count(); ++i) {
         auto& sh = section_header(i);
         if (sh.sh_type == SHT_SYMTAB) {
-            ASSERT(!m_symbol_table_section_index || m_symbol_table_section_index == i);
+            if (m_symbol_table_section_index && m_symbol_table_section_index != i)
+                return m_valid = false;
             m_symbol_table_section_index = i;
         }
         if (sh.sh_type == SHT_STRTAB && i != header().e_shstrndx) {
@@ -163,17 +184,19 @@ bool Image::parse()
         m_sections.set(section.name(), move(i));
     }
 
-    return true;
+    return m_valid;
 }
 
 StringView Image::table_string(unsigned table_index, unsigned offset) const
 {
+    ASSERT(m_valid);
     auto& sh = section_header(table_index);
     if (sh.sh_type != SHT_STRTAB)
         return nullptr;
     size_t computed_offset = sh.sh_offset + offset;
     if (computed_offset >= m_size) {
-        dbgprintf("SHENANIGANS! Image::table_string() computed offset outside image.\n");
+        if (m_verbose_logging)
+            dbgprintf("SHENANIGANS! Image::table_string() computed offset outside image.\n");
         return {};
     }
     size_t max_length = m_size - computed_offset;
@@ -183,38 +206,45 @@ StringView Image::table_string(unsigned table_index, unsigned offset) const
 
 StringView Image::section_header_table_string(unsigned offset) const
 {
+    ASSERT(m_valid);
     return table_string(header().e_shstrndx, offset);
 }
 
 StringView Image::table_string(unsigned offset) const
 {
+    ASSERT(m_valid);
     return table_string(m_string_table_section_index, offset);
 }
 
 const char* Image::raw_data(unsigned offset) const
 {
+    ASSERT(offset < m_size); // Callers must check indices into raw_data()'s result are also in bounds.
     return reinterpret_cast<const char*>(m_buffer) + offset;
 }
 
 const Elf32_Ehdr& Image::header() const
 {
+    ASSERT(m_size >= sizeof(Elf32_Ehdr));
     return *reinterpret_cast<const Elf32_Ehdr*>(raw_data(0));
 }
 
 const Elf32_Phdr& Image::program_header_internal(unsigned index) const
 {
+    ASSERT(m_valid);
     ASSERT(index < header().e_phnum);
     return *reinterpret_cast<const Elf32_Phdr*>(raw_data(header().e_phoff + (index * sizeof(Elf32_Phdr))));
 }
 
 const Elf32_Shdr& Image::section_header(unsigned index) const
 {
+    ASSERT(m_valid);
     ASSERT(index < header().e_shnum);
     return *reinterpret_cast<const Elf32_Shdr*>(raw_data(header().e_shoff + (index * header().e_shentsize)));
 }
 
 const Image::Symbol Image::symbol(unsigned index) const
 {
+    ASSERT(m_valid);
     ASSERT(index < symbol_count());
     auto* raw_syms = reinterpret_cast<const Elf32_Sym*>(raw_data(section(m_symbol_table_section_index).offset()));
     return Symbol(*this, index, raw_syms[index]);
@@ -222,14 +252,21 @@ const Image::Symbol Image::symbol(unsigned index) const
 
 const Image::Section Image::section(unsigned index) const
 {
+    ASSERT(m_valid);
     ASSERT(index < section_count());
     return Section(*this, index);
 }
 
 const Image::ProgramHeader Image::program_header(unsigned index) const
 {
+    ASSERT(m_valid);
     ASSERT(index < program_header_count());
     return ProgramHeader(*this, index);
+}
+
+FlatPtr Image::program_header_table_offset() const
+{
+    return header().e_phoff;
 }
 
 const Image::Relocation Image::RelocationSection::relocation(unsigned index) const
@@ -250,13 +287,14 @@ const Image::RelocationSection Image::Section::relocations() const
         return static_cast<const RelocationSection>(m_image.section(0));
 
 #ifdef Image_DEBUG
-    dbgprintf("Found relocations for %s in %s\n", name(), relocation_section.name());
+    dbgprintf("Found relocations for %s in %s\n", name().to_string().characters(), relocation_section.name().to_string().characters());
 #endif
     return static_cast<const RelocationSection>(relocation_section);
 }
 
 const Image::Section Image::lookup_section(const String& name) const
 {
+    ASSERT(m_valid);
     if (auto it = m_sections.find(name); it != m_sections.end())
         return section((*it).value);
     return section(0);
@@ -266,6 +304,105 @@ StringView Image::Symbol::raw_data() const
 {
     auto& section = this->section();
     return { section.raw_data() + (value() - section.address()), size() };
+}
+
+Optional<Image::Symbol> Image::find_demangled_function(const String& name) const
+{
+    Optional<Image::Symbol> found;
+    for_each_symbol([&](const Image::Symbol symbol) {
+        if (symbol.type() != STT_FUNC)
+            return IterationDecision::Continue;
+        auto demangled = demangle(symbol.name());
+        auto index_of_paren = demangled.index_of("(");
+        if (index_of_paren.has_value()) {
+            demangled = demangled.substring(0, index_of_paren.value());
+        }
+        if (demangled != name)
+            return IterationDecision::Continue;
+        found = symbol;
+        return IterationDecision::Break;
+    });
+    return found;
+}
+
+Optional<Image::Symbol> Image::find_symbol(u32 address, u32* out_offset) const
+{
+    auto symbol_count = this->symbol_count();
+    if (!symbol_count)
+        return {};
+
+    SortedSymbol* sorted_symbols = nullptr;
+    if (m_sorted_symbols.is_empty()) {
+        m_sorted_symbols.ensure_capacity(symbol_count);
+        for_each_symbol([this](auto& symbol) {
+            m_sorted_symbols.append({ symbol.value(), symbol.name(), {}, symbol });
+            return IterationDecision::Continue;
+        });
+        quick_sort(m_sorted_symbols, [](auto& a, auto& b) {
+            return a.address < b.address;
+        });
+    }
+    sorted_symbols = m_sorted_symbols.data();
+
+    for (size_t i = 0; i < symbol_count; ++i) {
+        if (sorted_symbols[i].address > address) {
+            if (i == 0)
+                return {};
+            auto& symbol = sorted_symbols[i - 1];
+            if (out_offset)
+                *out_offset = address - symbol.address;
+            return symbol.symbol;
+        }
+    }
+    return {};
+}
+
+String Image::symbolicate(u32 address, u32* out_offset) const
+{
+    auto symbol_count = this->symbol_count();
+    if (!symbol_count) {
+        if (out_offset)
+            *out_offset = 0;
+        return "??";
+    }
+    SortedSymbol* sorted_symbols = nullptr;
+
+    if (m_sorted_symbols.is_empty()) {
+        m_sorted_symbols.ensure_capacity(symbol_count);
+        for_each_symbol([this](auto& symbol) {
+            m_sorted_symbols.append({ symbol.value(), symbol.name(), {}, {} });
+            return IterationDecision::Continue;
+        });
+        quick_sort(m_sorted_symbols, [](auto& a, auto& b) {
+            return a.address < b.address;
+        });
+    }
+    sorted_symbols = m_sorted_symbols.data();
+
+    for (size_t i = 0; i < symbol_count; ++i) {
+        if (sorted_symbols[i].address > address) {
+            if (i == 0) {
+                if (out_offset)
+                    *out_offset = 0;
+                return "!!";
+            }
+            auto& symbol = sorted_symbols[i - 1];
+
+            auto& demangled_name = symbol.demangled_name;
+            if (demangled_name.is_null()) {
+                demangled_name = demangle(symbol.name);
+            }
+
+            if (out_offset) {
+                *out_offset = address - symbol.address;
+                return demangled_name;
+            }
+            return String::format("%s +%u", demangled_name.characters(), address - symbol.address);
+        }
+    }
+    if (out_offset)
+        *out_offset = 0;
+    return "??";
 }
 
 } // end namespace ELF

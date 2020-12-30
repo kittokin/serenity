@@ -32,6 +32,7 @@
 #include <AK/RefCounted.h>
 #include <AK/String.h>
 #include <AK/WeakPtr.h>
+#include <Kernel/FileSystem/FIFO.h>
 #include <Kernel/FileSystem/FileSystem.h>
 #include <Kernel/FileSystem/InodeIdentifier.h>
 #include <Kernel/FileSystem/InodeMetadata.h>
@@ -66,16 +67,16 @@ public:
     InodeIdentifier identifier() const { return { fsid(), index() }; }
     virtual InodeMetadata metadata() const = 0;
 
-    KResultOr<ByteBuffer> read_entire(FileDescription* = nullptr) const;
+    KResultOr<NonnullOwnPtr<KBuffer>> read_entire(FileDescription* = nullptr) const;
 
-    virtual ssize_t read_bytes(off_t, ssize_t, u8* buffer, FileDescription*) const = 0;
-    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntry&)>) const = 0;
+    virtual ssize_t read_bytes(off_t, ssize_t, UserOrKernelBuffer& buffer, FileDescription*) const = 0;
+    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntryView&)>) const = 0;
     virtual RefPtr<Inode> lookup(StringView name) = 0;
-    virtual ssize_t write_bytes(off_t, ssize_t, const u8* data, FileDescription*) = 0;
+    virtual ssize_t write_bytes(off_t, ssize_t, const UserOrKernelBuffer& data, FileDescription*) = 0;
     virtual KResultOr<NonnullRefPtr<Inode>> create_child(const String& name, mode_t, dev_t, uid_t, gid_t) = 0;
     virtual KResult add_child(Inode&, const StringView& name, mode_t) = 0;
     virtual KResult remove_child(const StringView& name) = 0;
-    virtual size_t directory_entry_count() const = 0;
+    virtual KResultOr<size_t> directory_entry_count() const = 0;
     virtual KResult chmod(mode_t) = 0;
     virtual KResult chown(uid_t, gid_t) = 0;
     virtual KResult truncate(u64) { return KSuccess; }
@@ -101,9 +102,10 @@ public:
     void will_be_destroyed();
 
     void set_shared_vmobject(SharedInodeVMObject&);
-    SharedInodeVMObject* shared_vmobject() { return m_shared_vmobject.ptr(); }
-    const SharedInodeVMObject* shared_vmobject() const { return m_shared_vmobject.ptr(); }
+    RefPtr<SharedInodeVMObject> shared_vmobject() const;
+    bool is_shared_vmobject(const SharedInodeVMObject&) const;
 
+    static InlineLinkedList<Inode>& all_with_lock();
     static void sync();
 
     bool has_watchers() const { return !m_watchers.is_empty(); }
@@ -111,19 +113,23 @@ public:
     void register_watcher(Badge<InodeWatcher>, InodeWatcher&);
     void unregister_watcher(Badge<InodeWatcher>, InodeWatcher&);
 
+    FIFO& fifo();
+
     // For InlineLinkedListNode.
     Inode* m_next { nullptr };
     Inode* m_prev { nullptr };
 
+    static SpinLock<u32>& all_inodes_lock();
+
 protected:
     Inode(FS& fs, unsigned index);
     void set_metadata_dirty(bool);
-    void inode_contents_changed(off_t, ssize_t, const u8*);
+    void inode_contents_changed(off_t, ssize_t, const UserOrKernelBuffer&);
     void inode_size_changed(size_t old_size, size_t new_size);
     KResult prepare_to_write_data();
 
-    void did_add_child(const String& name);
-    void did_remove_child(const String& name);
+    void did_add_child(const InodeIdentifier&);
+    void did_remove_child(const InodeIdentifier&);
 
     mutable Lock m_lock { "Inode" };
 
@@ -134,6 +140,7 @@ private:
     RefPtr<LocalSocket> m_socket;
     HashTable<InodeWatcher*> m_watchers;
     bool m_metadata_dirty { false };
+    RefPtr<FIFO> m_fifo;
 };
 
 }

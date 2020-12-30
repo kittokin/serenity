@@ -32,8 +32,8 @@ namespace AK {
 
 template<typename PtrType, int inline_capacity = 0>
 class NonnullPtrVector : public Vector<PtrType, inline_capacity> {
-    typedef typename PtrType::ElementType T;
-    typedef Vector<PtrType, inline_capacity> Base;
+    using T = typename PtrType::ElementType;
+    using Base = Vector<PtrType, inline_capacity>;
 
 public:
     NonnullPtrVector()
@@ -51,25 +51,26 @@ public:
 
     using Base::size;
 
-    using Iterator = VectorIterator<NonnullPtrVector, T>;
-    Iterator begin() { return Iterator(*this, 0); }
-    Iterator end() { return Iterator(*this, size()); }
+    using ConstIterator = SimpleIterator<const NonnullPtrVector, const T>;
+    using Iterator = SimpleIterator<NonnullPtrVector, T>;
 
-    using ConstIterator = VectorIterator<const NonnullPtrVector, const T>;
-    ConstIterator begin() const { return ConstIterator(*this, 0); }
-    ConstIterator end() const { return ConstIterator(*this, size()); }
+    ALWAYS_INLINE constexpr ConstIterator begin() const { return ConstIterator::begin(*this); }
+    ALWAYS_INLINE constexpr Iterator begin() { return Iterator::begin(*this); }
 
-    PtrType& ptr_at(int index) { return Base::at(index); }
-    const PtrType& ptr_at(int index) const { return Base::at(index); }
+    ALWAYS_INLINE constexpr ConstIterator end() const { return ConstIterator::end(*this); }
+    ALWAYS_INLINE constexpr Iterator end() { return Iterator::end(*this); }
 
-    T& at(int index) { return *Base::at(index); }
-    const T& at(int index) const { return *Base::at(index); }
-    T& operator[](int index) { return at(index); }
-    const T& operator[](int index) const { return at(index); }
-    T& first() { return at(0); }
-    const T& first() const { return at(0); }
-    T& last() { return at(size() - 1); }
-    const T& last() const { return at(size() - 1); }
+    ALWAYS_INLINE PtrType& ptr_at(int index) { return Base::at(index); }
+    ALWAYS_INLINE const PtrType& ptr_at(int index) const { return Base::at(index); }
+
+    ALWAYS_INLINE T& at(int index) { return *Base::at(index); }
+    ALWAYS_INLINE const T& at(int index) const { return *Base::at(index); }
+    ALWAYS_INLINE T& operator[](int index) { return at(index); }
+    ALWAYS_INLINE const T& operator[](int index) const { return at(index); }
+    ALWAYS_INLINE T& first() { return at(0); }
+    ALWAYS_INLINE const T& first() const { return at(0); }
+    ALWAYS_INLINE T& last() { return at(size() - 1); }
+    ALWAYS_INLINE const T& last() const { return at(size() - 1); }
 
 private:
     // NOTE: You can't use resize() on a NonnullFooPtrVector since making the vector

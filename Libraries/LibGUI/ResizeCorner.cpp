@@ -24,11 +24,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <LibGfx/CharacterBitmap.h>
-#include <LibGfx/Palette.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/ResizeCorner.h>
 #include <LibGUI/Window.h>
+#include <LibGfx/CharacterBitmap.h>
+#include <LibGfx/Palette.h>
 
 namespace GUI {
 
@@ -77,9 +77,9 @@ static const int s_resize_corner_bitmap_height = 16;
 
 ResizeCorner::ResizeCorner()
 {
+    set_override_cursor(Gfx::StandardCursor::ResizeDiagonalTLBR);
     set_background_role(ColorRole::Button);
-    set_size_policy(SizePolicy::Fixed, SizePolicy::Fixed);
-    set_preferred_size(16, 18);
+    set_fixed_size(16, 18);
 }
 
 ResizeCorner::~ResizeCorner()
@@ -108,18 +108,6 @@ void ResizeCorner::mousedown_event(MouseEvent& event)
     if (event.button() == MouseButton::Left)
         window()->start_wm_resize();
     Widget::mousedown_event(event);
-}
-
-void ResizeCorner::enter_event(Core::Event& event)
-{
-    window()->set_override_cursor(StandardCursor::ResizeDiagonalTLBR);
-    Widget::enter_event(event);
-}
-
-void ResizeCorner::leave_event(Core::Event& event)
-{
-    window()->set_override_cursor(StandardCursor::None);
-    Widget::leave_event(event);
 }
 
 }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html contenteditable="true">
 <head>
 <title>Welcome!</title>
 <!-- this is a comment -->
@@ -16,8 +16,17 @@ body {
 h1 {
     color: #a00;
 }
+a {
+    color: #ae7250;
+}
+a:hover {
+    color: #f4cca0;
+}
 span#ua {
     color: red;
+}
+span#loadtime {
+    color: yellow;
 }
 </style>
 <script src="welcome.js"></script>
@@ -26,16 +35,25 @@ span#ua {
     <h1>Welcome to the Serenity Browser!</h1>
     <p>This is a very simple browser built on the LibWeb and LibJS engines.</p>
     <p>Your user agent is: <b><span id="ua"></span></b></p>
+    <p>This page loaded in <b><span id="loadtime"></span></b> ms</p>
     <p>Some small test pages:</p>
     <ul>
+        <li><a href="contenteditable.html">contenteditable</a></li>
+        <li><a href="clear-1.html">clearing floats</a></li>
+        <li><a href="float-1.html">floating boxes</a></li>
+        <li><a href="padding-inline.html">inline elements with padding</a></li>
+        <li><a href="event-bubbling-and-multiple-listeners.html">event bubbling and multiple listeners</a></li>
+        <li><a href="checkbox.html">checkbox</a></li>
         <li><a href="canvas-rotate.html">canvas rotate()</a></li>
         <li><a href="margin-collapse-2.html">margin collapsing 2</a></li>
         <li><a href="margin-collapse-1.html">margin collapsing 1</a></li>
         <li><a href="position-absolute-from-edges.html">position: absolute, offset from edges</a></li>
+        <li><a href="svg.html">svg element</a></li>
         <li><a href="iframe.html">iframe</a></li>
         <li><a href="many-buggies.html">many buggies</a></li>
         <li><a href="bmpsuite.html">BMP test suite</a></li>
         <li><a href="jpg.html">JPG Images</a></li>
+        <li><a href="gifsuite.html">GIF test suite</a></li>
         <li><a href="palette.html">system palette color css extension</a></li>
         <li><a href="inline-block-link.html">link inside display: inline-block</a></li>
         <li><a href="set-interval.html">setInterval() test</a></li>
@@ -87,5 +105,8 @@ span#ua {
         <li><a href="pgmsuite.html">PGM test suite</a></li>
         <li><a href="ppmsuite.html">PPM test suite</a></li>
     </ul>
+    <script>
+        document.getElementById("loadtime").innerHTML = performance.now();
+    </script>
 </body>
 </html>

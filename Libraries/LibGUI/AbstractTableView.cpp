@@ -28,6 +28,8 @@
 #include <AK/Vector.h>
 #include <LibGUI/AbstractTableView.h>
 #include <LibGUI/Action.h>
+#include <LibGUI/Button.h>
+#include <LibGUI/HeaderView.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Model.h>
 #include <LibGUI/Painter.h>
@@ -37,10 +39,18 @@
 
 namespace GUI {
 
-static const int minimum_column_width = 2;
-
 AbstractTableView::AbstractTableView()
 {
+    set_selection_behavior(SelectionBehavior::SelectRows);
+    m_corner_button = add<Button>();
+    m_corner_button->move_to_back();
+    m_corner_button->set_background_role(Gfx::ColorRole::ThreedShadow1);
+    m_corner_button->set_fill_with_background_color(true);
+    m_column_header = add<HeaderView>(*this, Gfx::Orientation::Horizontal);
+    m_column_header->move_to_back();
+    m_row_header = add<HeaderView>(*this, Gfx::Orientation::Vertical);
+    m_row_header->move_to_back();
+    m_row_header->set_visible(false);
     set_should_hide_unnecessary_scrollbars(true);
 }
 
@@ -65,20 +75,19 @@ void AbstractTableView::update_column_sizes()
     auto& model = *this->model();
     int column_count = model.column_count();
     int row_count = model.row_count();
-    int key_column = model.key_column();
 
     for (int column = 0; column < column_count; ++column) {
-        if (is_column_hidden(column))
+        if (!column_header().is_section_visible(column))
             continue;
-        int header_width = header_font().width(model.column_name(column));
-        if (column == key_column && model.is_column_sortable(column))
+        int header_width = m_column_header->font().width(model.column_name(column));
+        if (column == m_key_column && model.is_column_sortable(column))
             header_width += font().width(" \xE2\xAC\x86"); // UPWARDS BLACK ARROW
         int column_width = header_width;
         for (int row = 0; row < row_count; ++row) {
-            auto cell_data = model.data(model.index(row, column));
+            auto cell_data = model.index(row, column).data();
             int cell_width = 0;
             if (cell_data.is_icon()) {
-                cell_width = item_height();
+                cell_width = row_height();
             } else if (cell_data.is_bitmap()) {
                 cell_width = cell_data.as_bitmap().width();
             } else if (cell_data.is_valid()) {
@@ -86,9 +95,22 @@ void AbstractTableView::update_column_sizes()
             }
             column_width = max(column_width, cell_width);
         }
-        auto& column_data = this->column_data(column);
-        column_data.width = max(column_data.width, column_width);
-        column_data.has_initialized_width = true;
+        column_header().set_section_size(column, max(m_column_header->section_size(column), column_width));
+    }
+}
+
+void AbstractTableView::update_row_sizes()
+{
+    if (!model())
+        return;
+
+    auto& model = *this->model();
+    int row_count = model.row_count();
+
+    for (int row = 0; row < row_count; ++row) {
+        if (!column_header().is_section_visible(row))
+            continue;
+        row_header().set_section_size(row, row_height());
     }
 }
 
@@ -99,248 +121,54 @@ void AbstractTableView::update_content_size()
 
     int content_width = 0;
     int column_count = model()->column_count();
+
     for (int i = 0; i < column_count; ++i) {
-        if (!is_column_hidden(i))
+        if (column_header().is_section_visible(i))
             content_width += column_width(i) + horizontal_padding() * 2;
     }
-    int content_height = item_count() * item_height();
+    int content_height = item_count() * row_height();
 
     set_content_size({ content_width, content_height });
-    set_size_occupied_by_fixed_elements({ 0, header_height() });
+    set_size_occupied_by_fixed_elements({ row_header().width(), column_header().height() });
+    layout_headers();
 }
 
-Gfx::IntRect AbstractTableView::header_rect(int column_index) const
+TableCellPaintingDelegate* AbstractTableView::column_painting_delegate(int column) const
 {
-    if (!model())
-        return {};
-    if (is_column_hidden(column_index))
-        return {};
-    int x_offset = 0;
-    for (int i = 0; i < column_index; ++i) {
-        if (is_column_hidden(i))
-            continue;
-        x_offset += column_width(i) + horizontal_padding() * 2;
-    }
-    return { x_offset, 0, column_width(column_index) + horizontal_padding() * 2, header_height() };
+    // FIXME: This should return a const pointer I think..
+    return const_cast<TableCellPaintingDelegate*>(m_column_painting_delegate.get(column).value_or(nullptr));
 }
 
-void AbstractTableView::set_hovered_header_index(int index)
+void AbstractTableView::set_column_painting_delegate(int column, OwnPtr<TableCellPaintingDelegate> delegate)
 {
-    if (m_hovered_column_header_index == index)
-        return;
-    m_hovered_column_header_index = index;
-    update_headers();
-}
-
-void AbstractTableView::paint_headers(Painter& painter)
-{
-    if (!headers_visible())
-        return;
-    int exposed_width = max(content_size().width(), width());
-    painter.fill_rect({ 0, 0, exposed_width, header_height() }, palette().button());
-    painter.draw_line({ 0, 0 }, { exposed_width - 1, 0 }, palette().threed_highlight());
-    painter.draw_line({ 0, header_height() - 1 }, { exposed_width - 1, header_height() - 1 }, palette().threed_shadow1());
-    int x_offset = 0;
-    int column_count = model()->column_count();
-    for (int column_index = 0; column_index < column_count; ++column_index) {
-        if (is_column_hidden(column_index))
-            continue;
-        int column_width = this->column_width(column_index);
-        bool is_key_column = model()->key_column() == column_index;
-        Gfx::IntRect cell_rect(x_offset, 0, column_width + horizontal_padding() * 2, header_height());
-        bool pressed = column_index == m_pressed_column_header_index && m_pressed_column_header_is_pressed;
-        bool hovered = column_index == m_hovered_column_header_index && model()->is_column_sortable(column_index);
-        Gfx::StylePainter::paint_button(painter, cell_rect, palette(), Gfx::ButtonStyle::Normal, pressed, hovered);
-        String text;
-        if (is_key_column) {
-            StringBuilder builder;
-            builder.append(model()->column_name(column_index));
-            auto sort_order = model()->sort_order();
-            if (sort_order == SortOrder::Ascending)
-                builder.append(" \xE2\xAC\x86"); // UPWARDS BLACK ARROW
-            else if (sort_order == SortOrder::Descending)
-                builder.append(" \xE2\xAC\x87"); // DOWNWARDS BLACK ARROW
-            text = builder.to_string();
-        } else {
-            text = model()->column_name(column_index);
-        }
-        auto text_rect = cell_rect.translated(horizontal_padding(), 0);
-        if (pressed)
-            text_rect.move_by(1, 1);
-        painter.draw_text(text_rect, text, header_font(), Gfx::TextAlignment::CenterLeft, palette().button_text());
-        x_offset += column_width + horizontal_padding() * 2;
-    }
-}
-
-bool AbstractTableView::is_column_hidden(int column) const
-{
-    return !column_data(column).visibility;
-}
-
-void AbstractTableView::set_column_hidden(int column, bool hidden)
-{
-    auto& column_data = this->column_data(column);
-    if (column_data.visibility == !hidden)
-        return;
-    column_data.visibility = !hidden;
-    if (column_data.visibility_action) {
-        column_data.visibility_action->set_checked(!hidden);
-    }
-    update_content_size();
-    update();
-}
-
-Menu& AbstractTableView::ensure_header_context_menu()
-{
-    // FIXME: This menu needs to be rebuilt if the model is swapped out,
-    //        or if the column count/names change.
-    if (!m_header_context_menu) {
-        ASSERT(model());
-        m_header_context_menu = Menu::construct();
-
-        for (int column = 0; column < model()->column_count(); ++column) {
-            auto& column_data = this->column_data(column);
-            auto name = model()->column_name(column);
-            column_data.visibility_action = Action::create_checkable(name, [this, column](auto& action) {
-                set_column_hidden(column, !action.is_checked());
-            });
-            column_data.visibility_action->set_checked(column_data.visibility);
-
-            m_header_context_menu->add_action(*column_data.visibility_action);
-        }
-    }
-    return *m_header_context_menu;
-}
-
-const Gfx::Font& AbstractTableView::header_font()
-{
-    return Gfx::Font::default_bold_font();
-}
-
-void AbstractTableView::set_cell_painting_delegate(int column, OwnPtr<TableCellPaintingDelegate>&& delegate)
-{
-    column_data(column).cell_painting_delegate = move(delegate);
-}
-
-void AbstractTableView::update_headers()
-{
-    Gfx::IntRect rect { 0, 0, frame_inner_rect().width(), header_height() };
-    rect.move_by(frame_thickness(), frame_thickness());
-    update(rect);
-}
-
-AbstractTableView::ColumnData& AbstractTableView::column_data(int column) const
-{
-    if (static_cast<size_t>(column) >= m_column_data.size())
-        m_column_data.resize(column + 1);
-    return m_column_data.at(column);
-}
-
-Gfx::IntRect AbstractTableView::column_resize_grabbable_rect(int column) const
-{
-    if (!model())
-        return {};
-    auto header_rect = this->header_rect(column);
-    return { header_rect.right() - 1, header_rect.top(), 4, header_rect.height() };
+    if (!delegate)
+        m_column_painting_delegate.remove(column);
+    else
+        m_column_painting_delegate.set(column, move(delegate));
 }
 
 int AbstractTableView::column_width(int column_index) const
 {
     if (!model())
         return 0;
-    return column_data(column_index).width;
+    return m_column_header->section_size(column_index);
 }
 
-void AbstractTableView::mousemove_event(MouseEvent& event)
+void AbstractTableView::set_column_width(int column, int width)
+{
+    column_header().set_section_size(column, width);
+}
+
+Gfx::TextAlignment AbstractTableView::column_header_alignment(int column_index) const
 {
     if (!model())
-        return AbstractView::mousemove_event(event);
-
-    auto adjusted_position = this->adjusted_position(event.position());
-    Gfx::IntPoint horizontally_adjusted_position(adjusted_position.x(), event.position().y());
-
-    if (m_in_column_resize) {
-        auto delta = adjusted_position - m_column_resize_origin;
-        int new_width = m_column_resize_original_width + delta.x();
-        if (new_width <= minimum_column_width)
-            new_width = minimum_column_width;
-        ASSERT(m_resizing_column >= 0 && m_resizing_column < model()->column_count());
-        auto& column_data = this->column_data(m_resizing_column);
-        if (column_data.width != new_width) {
-            column_data.width = new_width;
-            update_content_size();
-            update();
-        }
-        return;
-    }
-
-    if (m_pressed_column_header_index != -1) {
-        auto header_rect = this->header_rect(m_pressed_column_header_index);
-        if (header_rect.contains(horizontally_adjusted_position)) {
-            set_hovered_header_index(m_pressed_column_header_index);
-            if (!m_pressed_column_header_is_pressed)
-                update_headers();
-            m_pressed_column_header_is_pressed = true;
-        } else {
-            set_hovered_header_index(-1);
-            if (m_pressed_column_header_is_pressed)
-                update_headers();
-            m_pressed_column_header_is_pressed = false;
-        }
-        return;
-    }
-
-    if (event.buttons() == 0) {
-        int column_count = model()->column_count();
-        bool found_hovered_header = false;
-        for (int i = 0; i < column_count; ++i) {
-            if (column_resize_grabbable_rect(i).contains(horizontally_adjusted_position)) {
-                window()->set_override_cursor(StandardCursor::ResizeColumn);
-                set_hovered_header_index(-1);
-                return;
-            }
-            if (header_rect(i).contains(horizontally_adjusted_position)) {
-                set_hovered_header_index(i);
-                found_hovered_header = true;
-            }
-        }
-        if (!found_hovered_header)
-            set_hovered_header_index(-1);
-    }
-    window()->set_override_cursor(StandardCursor::None);
-
-    AbstractView::mousemove_event(event);
+        return Gfx::TextAlignment::CenterLeft;
+    return m_column_header->section_alignment(column_index);
 }
 
-void AbstractTableView::mouseup_event(MouseEvent& event)
+void AbstractTableView::set_column_header_alignment(int column, Gfx::TextAlignment alignment)
 {
-    auto adjusted_position = this->adjusted_position(event.position());
-    Gfx::IntPoint horizontally_adjusted_position(adjusted_position.x(), event.position().y());
-    if (event.button() == MouseButton::Left) {
-        if (m_in_column_resize) {
-            if (!column_resize_grabbable_rect(m_resizing_column).contains(horizontally_adjusted_position))
-                window()->set_override_cursor(StandardCursor::None);
-            m_in_column_resize = false;
-            return;
-        }
-        if (m_pressed_column_header_index != -1) {
-            auto header_rect = this->header_rect(m_pressed_column_header_index);
-            if (header_rect.contains(horizontally_adjusted_position)) {
-                auto new_sort_order = SortOrder::Ascending;
-                if (model()->key_column() == m_pressed_column_header_index)
-                    new_sort_order = model()->sort_order() == SortOrder::Ascending
-                        ? SortOrder::Descending
-                        : SortOrder::Ascending;
-                model()->set_key_column_and_sort_order(m_pressed_column_header_index, new_sort_order);
-            }
-            m_pressed_column_header_index = -1;
-            m_pressed_column_header_is_pressed = false;
-            update_headers();
-            return;
-        }
-    }
-
-    AbstractView::mouseup_event(event);
+    column_header().set_section_alignment(column, alignment);
 }
 
 void AbstractTableView::mousedown_event(MouseEvent& event)
@@ -350,30 +178,6 @@ void AbstractTableView::mousedown_event(MouseEvent& event)
 
     if (event.button() != MouseButton::Left)
         return AbstractView::mousedown_event(event);
-
-    auto adjusted_position = this->adjusted_position(event.position());
-    Gfx::IntPoint horizontally_adjusted_position(adjusted_position.x(), event.position().y());
-
-    if (event.y() < header_height()) {
-        int column_count = model()->column_count();
-        for (int i = 0; i < column_count; ++i) {
-            if (column_resize_grabbable_rect(i).contains(horizontally_adjusted_position)) {
-                m_resizing_column = i;
-                m_in_column_resize = true;
-                m_column_resize_original_width = column_width(i);
-                m_column_resize_origin = adjusted_position;
-                return;
-            }
-            auto header_rect = this->header_rect(i);
-            if (header_rect.contains(horizontally_adjusted_position) && model()->is_column_sortable(i)) {
-                m_pressed_column_header_index = i;
-                m_pressed_column_header_is_pressed = true;
-                update_headers();
-                return;
-            }
-        }
-        return;
-    }
 
     bool is_toggle;
     auto index = index_at_event_position(event.position(), is_toggle);
@@ -420,55 +224,38 @@ int AbstractTableView::item_count() const
     return model()->row_count();
 }
 
-void AbstractTableView::move_selection(int steps)
+void AbstractTableView::move_cursor_relative(int vertical_steps, int horizontal_steps, SelectionUpdate selection_update)
 {
     if (!model())
         return;
     auto& model = *this->model();
     ModelIndex new_index;
-    if (!selection().is_empty()) {
-        auto old_index = selection().first();
-        new_index = model.index(old_index.row() + steps, old_index.column());
+    if (cursor_index().is_valid()) {
+        new_index = model.index(cursor_index().row() + vertical_steps, cursor_index().column() + horizontal_steps);
     } else {
         new_index = model.index(0, 0);
     }
-    if (model.is_valid(new_index)) {
-        selection().set(new_index);
-        scroll_into_view(new_index, Orientation::Vertical);
-        update();
-    }
+    set_cursor(new_index, selection_update);
 }
 
-void AbstractTableView::scroll_into_view(const ModelIndex& index, Orientation orientation)
+void AbstractTableView::scroll_into_view(const ModelIndex& index, bool scroll_horizontally, bool scroll_vertically)
 {
-    auto rect = row_rect(index.row()).translated(0, -header_height());
-    ScrollableWidget::scroll_into_view(rect, orientation);
-}
-
-void AbstractTableView::doubleclick_event(MouseEvent& event)
-{
-    if (!model())
-        return;
-    if (event.button() == MouseButton::Left) {
-        if (event.y() < header_height())
-            return;
-        if (!selection().is_empty()) {
-            if (is_editable())
-                begin_editing(selection().first());
-            else
-                activate_selected();
-        }
+    Gfx::IntRect rect;
+    switch (selection_behavior()) {
+    case SelectionBehavior::SelectItems:
+        rect = content_rect(index);
+        break;
+    case SelectionBehavior::SelectRows:
+        rect = row_rect(index.row());
+        break;
     }
+    ScrollableWidget::scroll_into_view(rect, scroll_horizontally, scroll_vertically);
 }
 
 void AbstractTableView::context_menu_event(ContextMenuEvent& event)
 {
     if (!model())
         return;
-    if (event.position().y() < header_height()) {
-        ensure_header_context_menu().popup(event.screen_position());
-        return;
-    }
 
     bool is_toggle;
     auto index = index_at_event_position(event.position(), is_toggle);
@@ -482,13 +269,6 @@ void AbstractTableView::context_menu_event(ContextMenuEvent& event)
         on_context_menu_request(index, event);
 }
 
-void AbstractTableView::leave_event(Core::Event& event)
-{
-    AbstractView::leave_event(event);
-    window()->set_override_cursor(StandardCursor::None);
-    set_hovered_header_index(-1);
-}
-
 Gfx::IntRect AbstractTableView::content_rect(int row, int column) const
 {
     auto row_rect = this->row_rect(row);
@@ -496,7 +276,7 @@ Gfx::IntRect AbstractTableView::content_rect(int row, int column) const
     for (int i = 0; i < column; ++i)
         x += column_width(i) + horizontal_padding() * 2;
 
-    return { row_rect.x() + x, row_rect.y(), column_width(column) + horizontal_padding() * 2, item_height() };
+    return { row_rect.x() + x, row_rect.y(), column_width(column) + horizontal_padding() * 2, row_height() };
 }
 
 Gfx::IntRect AbstractTableView::content_rect(const ModelIndex& index) const
@@ -506,7 +286,10 @@ Gfx::IntRect AbstractTableView::content_rect(const ModelIndex& index) const
 
 Gfx::IntRect AbstractTableView::row_rect(int item_index) const
 {
-    return { 0, header_height() + (item_index * item_height()), max(content_size().width(), width()), item_height() };
+    return { row_header().is_visible() ? row_header().width() : 0,
+        (column_header().is_visible() ? column_header().height() : 0) + (item_index * row_height()),
+        max(content_size().width(), width()),
+        row_height() };
 }
 
 Gfx::IntPoint AbstractTableView::adjusted_position(const Gfx::IntPoint& position) const
@@ -514,12 +297,107 @@ Gfx::IntPoint AbstractTableView::adjusted_position(const Gfx::IntPoint& position
     return position.translated(horizontal_scrollbar().value() - frame_thickness(), vertical_scrollbar().value() - frame_thickness());
 }
 
-void AbstractTableView::did_update_model(unsigned flags)
+void AbstractTableView::model_did_update(unsigned flags)
 {
-    AbstractView::did_update_model(flags);
+    AbstractView::model_did_update(flags);
+    update_row_sizes();
     update_column_sizes();
     update_content_size();
     update();
+}
+
+void AbstractTableView::resize_event(ResizeEvent& event)
+{
+    AbstractView::resize_event(event);
+    layout_headers();
+}
+
+void AbstractTableView::header_did_change_section_size(Badge<HeaderView>, Gfx::Orientation, int, int)
+{
+    update_content_size();
+    update();
+}
+
+void AbstractTableView::header_did_change_section_visibility(Badge<HeaderView>, Gfx::Orientation, int, bool)
+{
+    update_content_size();
+    update();
+}
+
+void AbstractTableView::set_column_hidden(int column, bool hidden)
+{
+    column_header().set_section_visible(column, !hidden);
+}
+
+void AbstractTableView::set_column_headers_visible(bool visible)
+{
+    column_header().set_visible(visible);
+}
+
+void AbstractTableView::did_scroll()
+{
+    AbstractView::did_scroll();
+    layout_headers();
+}
+
+void AbstractTableView::layout_headers()
+{
+    if (column_header().is_visible()) {
+        int row_header_width = row_header().is_visible() ? row_header().width() : 0;
+        int vertical_scrollbar_width = vertical_scrollbar().is_visible() ? vertical_scrollbar().width() : 0;
+
+        int x = frame_thickness() + row_header_width - horizontal_scrollbar().value();
+        int y = frame_thickness();
+        int width = AK::max(content_width(), rect().width() - frame_thickness() * 2 - row_header_width - vertical_scrollbar_width);
+
+        column_header().set_relative_rect(x, y, width, column_header().min_size().height());
+    }
+
+    if (row_header().is_visible()) {
+        int column_header_height = column_header().is_visible() ? column_header().height() : 0;
+        int horizontal_scrollbar_height = horizontal_scrollbar().is_visible() ? horizontal_scrollbar().height() : 0;
+
+        int x = frame_thickness();
+        int y = frame_thickness() + column_header_height - vertical_scrollbar().value();
+        int height = AK::max(content_height(), rect().height() - frame_thickness() * 2 - column_header_height - horizontal_scrollbar_height);
+
+        row_header().set_relative_rect(x, y, row_header().min_size().width(), height);
+    }
+
+    if (row_header().is_visible() && column_header().is_visible()) {
+        m_corner_button->set_relative_rect(frame_thickness(), frame_thickness(), row_header().width(), column_header().height());
+        m_corner_button->set_visible(true);
+    } else {
+        m_corner_button->set_visible(false);
+    }
+}
+
+void AbstractTableView::keydown_event(KeyEvent& event)
+{
+    if (is_tab_key_navigation_enabled()) {
+        if (event.modifiers() == KeyModifier::Mod_Shift && event.key() == KeyCode::Key_Tab) {
+            move_cursor(CursorMovement::Left, SelectionUpdate::Set);
+            event.accept();
+            return;
+        }
+        if (!event.modifiers() && event.key() == KeyCode::Key_Tab) {
+            move_cursor(CursorMovement::Right, SelectionUpdate::Set);
+            event.accept();
+            return;
+        }
+    }
+
+    AbstractView::keydown_event(event);
+}
+
+int AbstractTableView::horizontal_padding() const
+{
+    return font().glyph_height() / 2;
+}
+
+int AbstractTableView::row_height() const
+{
+    return font().glyph_height() + 6;
 }
 
 }

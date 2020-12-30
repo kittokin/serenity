@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <AK/TypeCasts.h>
 #include <AK/Weakable.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibWeb/Forward.h>
@@ -37,22 +38,31 @@ class WindowObject final
     : public JS::GlobalObject
     , public Weakable<WindowObject> {
 public:
-    explicit WindowObject(Window&);
+    explicit WindowObject(DOM::Window&);
     virtual void initialize() override;
     virtual ~WindowObject() override;
 
-    Window& impl() { return *m_impl; }
-    const Window& impl() const { return *m_impl; }
+    DOM::Window& impl() { return *m_impl; }
+    const DOM::Window& impl() const { return *m_impl; }
+
+    Origin origin() const;
 
     XMLHttpRequestPrototype* xhr_prototype() { return m_xhr_prototype; }
     XMLHttpRequestConstructor* xhr_constructor() { return m_xhr_constructor; }
 
+    RangePrototype* range_prototype() { return m_range_prototype; }
+    RangeConstructor* range_constructor() { return m_range_constructor; }
+
 private:
     virtual const char* class_name() const override { return "WindowObject"; }
-    virtual void visit_children(Visitor&) override;
+    virtual void visit_edges(Visitor&) override;
 
     JS_DECLARE_NATIVE_GETTER(document_getter);
     JS_DECLARE_NATIVE_SETTER(document_setter);
+
+    JS_DECLARE_NATIVE_GETTER(performance_getter);
+
+    JS_DECLARE_NATIVE_GETTER(event_getter);
 
     JS_DECLARE_NATIVE_FUNCTION(alert);
     JS_DECLARE_NATIVE_FUNCTION(confirm);
@@ -65,11 +75,18 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(atob);
     JS_DECLARE_NATIVE_FUNCTION(btoa);
 
-    NonnullRefPtr<Window> m_impl;
+    NonnullRefPtr<DOM::Window> m_impl;
 
     XMLHttpRequestConstructor* m_xhr_constructor { nullptr };
     XMLHttpRequestPrototype* m_xhr_prototype { nullptr };
+
+    RangePrototype* m_range_prototype { nullptr };
+    RangeConstructor* m_range_constructor { nullptr };
 };
 
 }
 }
+
+AK_BEGIN_TYPE_TRAITS(Web::Bindings::WindowObject)
+static bool is_type(const JS::GlobalObject& global) { return String(global.class_name()) == "WindowObject"; }
+AK_END_TYPE_TRAITS()

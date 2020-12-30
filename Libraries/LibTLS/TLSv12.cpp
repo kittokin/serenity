@@ -24,9 +24,12 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/Endian.h>
+#include <LibCore/ConfigFile.h>
 #include <LibCore/DateTime.h>
 #include <LibCore/Timer.h>
 #include <LibCrypto/ASN1/DER.h>
+#include <LibCrypto/ASN1/PEM.h>
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
 #include <LibTLS/TLSv12.h>
 
@@ -38,7 +41,7 @@
 
 namespace {
 struct OIDChain {
-    void* root { nullptr };
+    OIDChain* root { nullptr };
     u8* oid { nullptr };
 };
 }
@@ -68,6 +71,25 @@ static bool _asn1_is_oid(const u8* oid, const u8* compare, size_t length = 3)
         ++i;
     }
     return true;
+}
+
+static bool _asn1_is_oid_in_chain(OIDChain* reference_chain, const u8* lookup, size_t lookup_length = 3)
+{
+    auto is_oid = [](const u8* oid, size_t oid_length, const u8* compare, size_t compare_length) {
+        if (oid_length < compare_length)
+            compare_length = oid_length;
+        for (size_t i = 0; i < compare_length; i++) {
+            if (oid[i] != compare[i])
+                return false;
+        }
+        return true;
+    };
+    for (; reference_chain; reference_chain = reference_chain->root) {
+        if (reference_chain->oid)
+            if (is_oid(reference_chain->oid, 16, lookup, lookup_length))
+                return true;
+    }
+    return false;
 }
 
 static bool _set_algorithm(CertificateKeyAlgorithm& algorithm, const u8* value, size_t length)
@@ -264,7 +286,13 @@ static ssize_t _parse_asn1(const Context& context, Certificate& cert, const u8* 
                     if (length == 1)
                         cert.version = buffer[position];
                 }
-                // print_buffer(ByteBuffer::wrap(buffer + position, length));
+                if (chain && length > 2) {
+                    if (_asn1_is_oid_in_chain(chain, Constants::san_oid)) {
+                        StringView alt_name { &buffer[position], length };
+                        cert.SAN.append(alt_name);
+                    }
+                }
+                // print_buffer(ReadonlyBytes { buffer + position, length });
                 break;
             case 0x03:
                 if (_asn1_is_field_present(fields, Constants::pk_id)) {
@@ -337,6 +365,8 @@ static ssize_t _parse_asn1(const Context& context, Certificate& cert, const u8* 
                         cert.issuer_entity = String { (const char*)buffer + position, length };
                     } else if (_asn1_is_oid(oid, Constants::subject_oid)) {
                         cert.issuer_subject = String { (const char*)buffer + position, length };
+                    } else if (_asn1_is_oid(oid, Constants::unit_oid)) {
+                        cert.issuer_unit = String { (const char*)buffer + position, length };
                     }
                 } else if (_asn1_is_field_present(fields, Constants::owner_id)) {
                     if (_asn1_is_oid(oid, Constants::country_oid)) {
@@ -349,6 +379,8 @@ static ssize_t _parse_asn1(const Context& context, Certificate& cert, const u8* 
                         cert.entity = String { (const char*)buffer + position, length };
                     } else if (_asn1_is_oid(oid, Constants::subject_oid)) {
                         cert.subject = String { (const char*)buffer + position, length };
+                    } else if (_asn1_is_oid(oid, Constants::unit_oid)) {
+                        cert.unit = String { (const char*)buffer + position, length };
                     }
                 }
                 break;
@@ -396,7 +428,7 @@ static ssize_t _parse_asn1(const Context& context, Certificate& cert, const u8* 
 }
 }
 
-Optional<Certificate> TLSv12::parse_asn1(const ByteBuffer& buffer, bool) const
+Optional<Certificate> TLSv12::parse_asn1(ReadonlyBytes buffer, bool) const
 {
     // FIXME: Our ASN.1 parser is not quite up to the task of
     //        parsing this X.509 certificate, so for the
@@ -415,7 +447,7 @@ Optional<Certificate> TLSv12::parse_asn1(const ByteBuffer& buffer, bool) const
     return cert;
 }
 
-ssize_t TLSv12::handle_certificate(const ByteBuffer& buffer)
+ssize_t TLSv12::handle_certificate(ReadonlyBytes buffer)
 {
     ssize_t res = 0;
 
@@ -490,10 +522,12 @@ ssize_t TLSv12::handle_certificate(const ByteBuffer& buffer)
             }
             remaining -= certificate_size_specific;
 
-            auto certificate = parse_asn1(buffer.slice_view(res_cert, certificate_size_specific), false);
+            auto certificate = parse_asn1(buffer.slice(res_cert, certificate_size_specific), false);
             if (certificate.has_value()) {
-                m_context.certificates.append(certificate.value());
-                valid_certificate = true;
+                if (certificate.value().is_valid()) {
+                    m_context.certificates.append(certificate.value());
+                    valid_certificate = true;
+                }
             }
             res_cert += certificate_size_specific;
         } while (remaining > 0);
@@ -512,7 +546,7 @@ ssize_t TLSv12::handle_certificate(const ByteBuffer& buffer)
     return res;
 }
 
-void TLSv12::consume(const ByteBuffer& record)
+void TLSv12::consume(ReadonlyBytes record)
 {
     if (m_context.critical_error) {
         dbg() << "There has been a critical error (" << (i8)m_context.critical_error << "), refusing to continue";
@@ -538,14 +572,14 @@ void TLSv12::consume(const ByteBuffer& record)
     dbg() << "message buffer length " << buffer_length;
 #endif
     while (buffer_length >= 5) {
-        auto length = convert_between_host_and_network(*(u16*)m_context.message_buffer.offset_pointer(index + size_offset)) + header_size;
+        auto length = AK::convert_between_host_and_network_endian(*(u16*)m_context.message_buffer.offset_pointer(index + size_offset)) + header_size;
         if (length > buffer_length) {
 #ifdef TLS_DEBUG
             dbg() << "Need more data: " << length << " | " << buffer_length;
 #endif
             break;
         }
-        auto consumed = handle_message(m_context.message_buffer.slice_view(index, length));
+        auto consumed = handle_message(m_context.message_buffer.bytes().slice(index, length));
 
 #ifdef TLS_DEBUG
         if (consumed > 0)
@@ -610,7 +644,7 @@ void TLSv12::ensure_hmac(size_t digest_size, bool local)
         break;
     }
 
-    auto hmac = make<Crypto::Authentication::HMAC<Crypto::Hash::Manager>>(ByteBuffer::wrap(local ? m_context.crypto.local_mac : m_context.crypto.remote_mac, digest_size), hash_kind);
+    auto hmac = make<Crypto::Authentication::HMAC<Crypto::Hash::Manager>>(ReadonlyBytes { local ? m_context.crypto.local_mac : m_context.crypto.remote_mac, digest_size }, hash_kind);
     if (local)
         m_hmac_local = move(hmac);
     else
@@ -699,6 +733,97 @@ void TLSv12::try_disambiguate_error() const
     }
 }
 
+void TLSv12::set_root_certificates(Vector<Certificate> certificates)
+{
+    if (!m_context.root_ceritificates.is_empty())
+        dbg() << "TLS warn: resetting root certificates!";
+
+    for (auto& cert : certificates) {
+        if (!cert.is_valid())
+            dbg() << "Certificate for " << cert.subject << " by " << cert.issuer_subject << " is invalid, things may or may not work!";
+        // FIXME: Figure out what we should do when our root certs are invalid.
+    }
+    m_context.root_ceritificates = move(certificates);
+}
+
+bool Context::verify_chain() const
+{
+    const Vector<Certificate>* local_chain = nullptr;
+    if (is_server) {
+        dbg() << "Unsupported: Server mode";
+        TODO();
+    } else {
+        local_chain = &certificates;
+    }
+
+    // FIXME: Actually verify the signature, instead of just checking the name.
+    HashMap<String, String> chain;
+    HashTable<String> roots;
+    // First, walk the root certs.
+    for (auto& cert : root_ceritificates) {
+        roots.set(cert.subject);
+        chain.set(cert.subject, cert.issuer_subject);
+    }
+
+    // Then, walk the local certs.
+    for (auto& cert : *local_chain) {
+        auto& issuer_unique_name = cert.issuer_unit.is_empty() ? cert.issuer_subject : cert.issuer_unit;
+        chain.set(cert.subject, issuer_unique_name);
+    }
+
+    // Then verify the chain.
+    for (auto& it : chain) {
+        if (it.key == it.value) { // Allow self-signed certificates.
+            if (!roots.contains(it.key))
+                dbg() << "Self-signed warning: Certificate for " << it.key << " is self-signed";
+            continue;
+        }
+
+        auto ref = chain.get(it.value);
+        if (!ref.has_value()) {
+            dbg() << "Certificate for " << it.key << " is not signed by anyone we trust (" << it.value << ")";
+            return false;
+        }
+
+        if (ref.value() == it.key) // Allow (but warn about) mutually recursively signed cert A <-> B.
+            dbg() << "Co-dependency warning: Certificate for " << ref.value() << " is issued by " << it.key << ", which itself is issued by " << ref.value();
+    }
+
+    return true;
+}
+
+static bool wildcard_matches(const StringView& host, const StringView& subject)
+{
+    if (host.matches(subject))
+        return true;
+
+    if (subject.starts_with("*."))
+        return wildcard_matches(host, subject.substring_view(2));
+
+    return false;
+}
+
+Optional<size_t> TLSv12::verify_chain_and_get_matching_certificate(const StringView& host) const
+{
+    if (m_context.certificates.is_empty() || !m_context.verify_chain())
+        return {};
+
+    if (host.is_empty())
+        return 0;
+
+    for (size_t i = 0; i < m_context.certificates.size(); ++i) {
+        auto& cert = m_context.certificates[i];
+        if (wildcard_matches(host, cert.subject))
+            return i;
+        for (auto& san : cert.SAN) {
+            if (wildcard_matches(host, san))
+                return i;
+        }
+    }
+
+    return {};
+}
+
 TLSv12::TLSv12(Core::Object* parent, Version version)
     : Core::Socket(Core::Socket::Type::TCP, parent)
 {
@@ -718,6 +843,44 @@ TLSv12::TLSv12(Core::Object* parent, Version version)
         set_fd(fd);
         set_mode(IODevice::ReadWrite);
         set_error(0);
+    }
+}
+
+bool TLSv12::add_client_key(ReadonlyBytes certificate_pem_buffer, ReadonlyBytes rsa_key) // FIXME: This should not be bound to RSA
+{
+    if (certificate_pem_buffer.is_empty() || rsa_key.is_empty()) {
+        return true;
+    }
+    auto decoded_certificate = Crypto::decode_pem(certificate_pem_buffer, 0);
+    if (decoded_certificate.is_empty()) {
+        dbg() << "Certificate not PEM";
+        return false;
+    }
+
+    auto maybe_certificate = parse_asn1(decoded_certificate);
+    if (!maybe_certificate.has_value()) {
+        dbg() << "Invalid certificate";
+        return false;
+    }
+
+    Crypto::PK::RSA rsa(rsa_key);
+    auto certificate = maybe_certificate.value();
+    certificate.private_key = rsa.private_key();
+
+    return add_client_key(certificate);
+}
+
+AK::Singleton<DefaultRootCACertificates> DefaultRootCACertificates::s_the;
+DefaultRootCACertificates::DefaultRootCACertificates()
+{
+    // FIXME: This might not be the best format, find a better way to represent CA certificates.
+    auto config = Core::ConfigFile::get_for_system("ca_certs");
+    for (auto& entity : config->groups()) {
+        Certificate cert;
+        cert.subject = entity;
+        cert.issuer_subject = config->read_entry(entity, "issuer_subject", entity);
+        cert.country = config->read_entry(entity, "country");
+        m_ca_certificates.append(move(cert));
     }
 }
 

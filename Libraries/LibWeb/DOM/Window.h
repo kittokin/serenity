@@ -32,13 +32,25 @@
 #include <AK/RefPtr.h>
 #include <LibWeb/Bindings/WindowObject.h>
 #include <LibWeb/Bindings/Wrappable.h>
+#include <LibWeb/DOM/Event.h>
+#include <LibWeb/DOM/EventTarget.h>
 
-namespace Web {
+namespace Web::DOM {
 
-class Window : public RefCounted<Window> {
+class Window final
+    : public RefCounted<Window>
+    , public EventTarget {
 public:
     static NonnullRefPtr<Window> create_with_document(Document&);
     ~Window();
+
+    using RefCounted::ref;
+    using RefCounted::unref;
+
+    virtual void ref_event_target() override { RefCounted::ref(); }
+    virtual void unref_event_target() override { RefCounted::unref(); }
+    virtual bool dispatch_event(NonnullRefPtr<Event>) override;
+    virtual Bindings::EventTargetWrapper* create_wrapper(JS::GlobalObject&) override;
 
     const Document& document() const { return m_document; }
     Document& document() { return m_document; }
@@ -53,7 +65,7 @@ public:
     void clear_timeout(i32);
     void clear_interval(i32);
 
-    void did_set_location_href(Badge<Bindings::LocationObject>, const String& new_href);
+    void did_set_location_href(Badge<Bindings::LocationObject>, const URL& new_href);
     void did_call_location_reload(Badge<Bindings::LocationObject>);
 
     Bindings::WindowObject* wrapper() { return m_wrapper; }
@@ -62,7 +74,15 @@ public:
     void set_wrapper(Badge<Bindings::WindowObject>, Bindings::WindowObject&);
 
     i32 allocate_timer_id(Badge<Timer>);
+    void deallocate_timer_id(Badge<Timer>, i32);
     void timer_did_fire(Badge<Timer>, Timer&);
+
+    HighResolutionTime::Performance& performance() { return *m_performance; }
+
+    virtual bool is_window() const override { return true; }
+
+    const Event* current_event() const { return m_current_event; }
+    void set_current_event(Event* event) { m_current_event = event; }
 
 private:
     explicit Window(Document&);
@@ -72,6 +92,13 @@ private:
 
     IDAllocator m_timer_id_allocator;
     HashMap<int, NonnullRefPtr<Timer>> m_timers;
+
+    NonnullOwnPtr<HighResolutionTime::Performance> m_performance;
+    RefPtr<Event> m_current_event;
 };
 
 }
+
+AK_BEGIN_TYPE_TRAITS(Web::DOM::Window)
+static bool is_type(const Web::DOM::EventTarget& event_target) { return event_target.is_window(); }
+AK_END_TYPE_TRAITS()

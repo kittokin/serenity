@@ -24,17 +24,15 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/ByteBuffer.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/String.h>
 #include <LibCore/File.h>
 #include <stdio.h>
 
-int main(int argc, char** argv)
+int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
 {
-    UNUSED_PARAM(argc);
-    UNUSED_PARAM(argv);
-
     if (pledge("stdio rpath", nullptr) < 0) {
         perror("pledge");
         return 1;

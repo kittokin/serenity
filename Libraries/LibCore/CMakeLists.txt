@@ -1,12 +1,16 @@
 set(SOURCES
+    Account.cpp
     ArgsParser.cpp
     ConfigFile.cpp
+    Command.cpp
     DateTime.cpp
+    DirectoryWatcher.cpp
     DirIterator.cpp
     ElapsedTimer.cpp
     Event.cpp
     EventLoop.cpp
     File.cpp
+    GetPassword.cpp
     Gzip.cpp
     IODevice.cpp
     LocalServer.cpp
@@ -17,7 +21,8 @@ set(SOURCES
     Notifier.cpp
     Object.cpp
     ProcessStatisticsReader.cpp
-    puff.c
+    Property.cpp
+    puff.cpp
     SocketAddress.cpp
     Socket.cpp
     StandardPaths.cpp
@@ -29,4 +34,4 @@ set(SOURCES
 )
 
 serenity_lib(LibCore core)
-target_link_libraries(LibCore LibC)
+target_link_libraries(LibCore LibC LibCrypt)

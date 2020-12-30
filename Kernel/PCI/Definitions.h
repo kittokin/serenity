@@ -28,7 +28,9 @@
 
 #include <AK/Function.h>
 #include <AK/LogStream.h>
+#include <AK/String.h>
 #include <AK/Types.h>
+#include <AK/Vector.h>
 
 namespace Kernel {
 
@@ -85,11 +87,11 @@ struct ID {
 };
 inline const LogStream& operator<<(const LogStream& stream, const ID value)
 {
-    return stream << "(" << String::format("%w", value.vendor_id) << ":" << String::format("%w", value.device_id) << ")";
+    return stream << String::formatted("({:04x}:{:04x})", value.vendor_id, value.device_id);
 }
 struct Address {
 public:
-    Address() {}
+    Address() { }
     Address(u16 seg)
         : m_seg(seg)
         , m_bus(0)
@@ -116,6 +118,13 @@ public:
     bool is_null() const { return !m_bus && !m_slot && !m_function; }
     operator bool() const { return !is_null(); }
 
+    // Disable default implementations that would use surprising integer promotion.
+    bool operator==(const Address&) const = delete;
+    bool operator<=(const Address&) const = delete;
+    bool operator>=(const Address&) const = delete;
+    bool operator<(const Address&) const = delete;
+    bool operator>(const Address&) const = delete;
+
     u16 seg() const { return m_seg; }
     u8 bus() const { return m_bus; }
     u8 slot() const { return m_slot; }
@@ -135,7 +144,7 @@ protected:
 
 inline const LogStream& operator<<(const LogStream& stream, const Address value)
 {
-    return stream << "PCI [" << String::format("%w", value.seg()) << ":" << String::format("%b", value.bus()) << ":" << String::format("%b", value.slot()) << "." << String::format("%b", value.function()) << "]";
+    return stream << "PCI [" << String::formatted("{:04x}:{:02x}:{:02x}:{:02x}", value.seg(), value.bus(), value.slot(), value.function()) << "]";
 }
 
 struct ChangeableAddress : public Address {
@@ -172,20 +181,33 @@ struct ChangeableAddress : public Address {
     }
 };
 
+struct Capability {
+    u8 m_id;
+    u8 m_next_pointer;
+};
+
 class PhysicalID {
 public:
-    PhysicalID(Address address, ID id)
+    PhysicalID(Address address, ID id, Vector<Capability> capabilities)
         : m_address(address)
         , m_id(id)
+        , m_capabilities(capabilities)
     {
+#ifdef PCI_DEBUG
+        for (auto capability : capabilities) {
+            dbg() << address << " has capbility " << capability.m_id;
+        }
+#endif
     }
 
+    Vector<Capability> capabilities() const { return m_capabilities; }
     const ID& id() const { return m_id; }
     const Address& address() const { return m_address; }
 
 private:
     Address m_address;
     ID m_id;
+    Vector<Capability> m_capabilities;
 };
 
 ID get_id(PCI::Address);
@@ -201,18 +223,23 @@ u32 get_BAR3(Address);
 u32 get_BAR4(Address);
 u32 get_BAR5(Address);
 u8 get_revision_id(Address);
+u8 get_programming_interface(Address);
 u8 get_subclass(Address);
 u8 get_class(Address);
 u16 get_subsystem_id(Address);
 u16 get_subsystem_vendor_id(Address);
 size_t get_BAR_space_size(Address, u8);
+Optional<u8> get_capabilities_pointer(Address);
+Vector<Capability> get_capabilities(Address);
 void enable_bus_mastering(Address);
 void disable_bus_mastering(Address);
+PhysicalID get_physical_id(Address address);
 
 class Access;
 class MMIOAccess;
 class IOAccess;
 class MMIOSegment;
+class DeviceController;
 class Device;
 
 }

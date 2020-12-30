@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2019-2020, Andrew Kaster <andrewdkaster@gmail.com>
+ * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,23 +50,36 @@ public:
 
     // Load a full ELF image from file into the current process and create an DynamicObject
     // from the SHT_DYNAMIC in the file.
-    bool load_from_image(unsigned flags);
+    RefPtr<DynamicObject> load_from_image(unsigned flags, size_t total_tls_size);
 
     // Stage 2 of loading: relocations and init functions
     // Assumes that the program headers have been loaded and that m_dynamic_object is initialized
     // Splitting loading like this allows us to use the same code to relocate a main executable as an elf binary
-    bool load_stage_2(unsigned flags);
+    bool load_stage_2(unsigned flags, size_t total_tls_size);
 
     // Intended for use by dlsym or other internal methods
     void* symbol_for_name(const char*);
 
     void dump();
 
-    // Will be called from _fixup_plt_entry, as part of the PLT trampoline
-    Elf32_Addr patch_plt_entry(u32 relocation_offset);
-
     // Requested program interpreter from program headers. May be empty string
     StringView program_interpreter() const { return m_program_interpreter; }
+
+    VirtualAddress text_segment_load_addresss() const { return m_text_segment_load_address; }
+
+    void set_tls_offset(size_t offset) { m_tls_offset = offset; };
+    size_t tls_size() const { return m_tls_size; }
+    size_t tls_offset() const { return m_tls_offset; }
+    const ELF::Image& image() const { return m_elf_image; }
+
+    template<typename F>
+    void for_each_needed_library(F) const;
+
+    DynamicObject::SymbolLookupFunction m_global_symbol_lookup_func { nullptr };
+    void set_global_symbol_lookup_function(DynamicObject::SymbolLookupFunction func) { m_global_symbol_lookup_func = func; }
+
+    VirtualAddress text_segment_load_address() const { return m_text_segment_load_address; }
+    bool is_dynamic() const { return m_elf_image.is_dynamic(); }
 
 private:
     class ProgramHeaderRegion {
@@ -91,34 +105,51 @@ private:
         u32 required_load_size() { return ALIGN_ROUND_UP(m_program_header.p_memsz, m_program_header.p_align); }
 
     private:
-        Elf32_Phdr m_program_header; // Explictly a copy of the PHDR in the image
+        Elf32_Phdr m_program_header; // Explicitly a copy of the PHDR in the image
     };
 
+    static void* do_mmap(int fd, size_t size, const String& name);
+    RefPtr<DynamicObject> dynamic_object_from_image() const;
+
     explicit DynamicLoader(const char* filename, int fd, size_t file_size);
-    explicit DynamicLoader(Elf32_Dyn* dynamic_location, Elf32_Addr load_address);
 
     // Stage 1
-    void load_program_headers(const Image& elf_image);
+    void load_program_headers();
 
     // Stage 2
-    void do_relocations();
+    void do_relocations(size_t total_tls_size);
     void setup_plt_trampoline();
     void call_object_init_functions();
+
+    bool validate();
+    size_t calculate_tls_size() const;
+
+    DynamicObject::SymbolLookupResult lookup_symbol(const ELF::DynamicObject::Symbol& symbol) const;
 
     String m_filename;
     String m_program_interpreter;
     size_t m_file_size { 0 };
     int m_image_fd { -1 };
     void* m_file_mapping { MAP_FAILED };
+    ELF::Image m_elf_image;
     bool m_valid { true };
 
-    OwnPtr<DynamicObject> m_dynamic_object;
+    RefPtr<DynamicObject> m_dynamic_object;
 
     VirtualAddress m_text_segment_load_address;
-    size_t m_text_segment_size;
+    size_t m_text_segment_size { 0 };
 
     VirtualAddress m_tls_segment_address;
     VirtualAddress m_dynamic_section_address;
+
+    size_t m_tls_offset { 0 };
+    size_t m_tls_size { 0 };
 };
+
+template<typename F>
+void DynamicLoader::for_each_needed_library(F func) const
+{
+    dynamic_object_from_image()->for_each_needed_library(move(func));
+}
 
 } // end namespace ELF

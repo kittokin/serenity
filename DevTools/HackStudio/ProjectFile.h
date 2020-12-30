@@ -26,11 +26,13 @@
 
 #pragma once
 
+#include "CodeDocument.h"
 #include <AK/ByteBuffer.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/RefCounted.h>
 #include <AK/String.h>
-#include <LibGUI/TextDocument.h>
+
+namespace HackStudio {
 
 class ProjectFile : public RefCounted<ProjectFile> {
 public:
@@ -41,11 +43,20 @@ public:
 
     const String& name() const { return m_name; }
 
-    const GUI::TextDocument& document() const;
+    GUI::TextDocument& document() const;
+
+    int vertical_scroll_value() const;
+    void vertical_scroll_value(int);
+    int horizontal_scroll_value() const;
+    void horizontal_scroll_value(int);
 
 private:
     explicit ProjectFile(const String& name);
 
     String m_name;
-    mutable RefPtr<GUI::TextDocument> m_document;
+    mutable RefPtr<CodeDocument> m_document;
+    int m_vertical_scroll_value { 0 };
+    int m_horizontal_scroll_value { 0 };
 };
+
+}

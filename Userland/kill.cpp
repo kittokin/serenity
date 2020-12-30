@@ -26,9 +26,11 @@
 
 #include <AK/Optional.h>
 #include <AK/String.h>
+#include <ctype.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 static void print_usage_and_exit()
@@ -44,6 +46,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (argc == 2 && !strcmp(argv[1], "-l")) {
+        for (size_t i = 0; i < NSIG; ++i) {
+            if (i && !(i % 5))
+                outln("");
+            out("{:2}) {:10}", i, getsignalname(i));
+        }
+        outln("");
+        return 0;
+    }
+
     if (argc != 2 && argc != 3)
         print_usage_and_exit();
     unsigned signum = SIGTERM;
@@ -52,9 +64,20 @@ int main(int argc, char** argv)
         pid_argi = 2;
         if (argv[1][0] != '-')
             print_usage_and_exit();
-        auto number = StringView(&argv[1][1]).to_uint();
+
+        Optional<unsigned> number;
+
+        if (isalpha(argv[1][1])) {
+            int value = getsignalbyname(&argv[1][1]);
+            if (value >= 0 && value < NSIG)
+                number = value;
+        }
+
+        if (!number.has_value())
+            number = StringView(&argv[1][1]).to_uint();
+
         if (!number.has_value()) {
-            printf("'%s' is not a valid signal number\n", &argv[1][1]);
+            printf("'%s' is not a valid signal name or number\n", &argv[1][1]);
             return 2;
         }
         signum = number.value();

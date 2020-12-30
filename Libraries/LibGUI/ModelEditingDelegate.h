@@ -34,7 +34,7 @@ namespace GUI {
 
 class ModelEditingDelegate {
 public:
-    virtual ~ModelEditingDelegate() {}
+    virtual ~ModelEditingDelegate() { }
 
     void bind(Model& model, const ModelIndex& index)
     {
@@ -49,14 +49,15 @@ public:
     const Widget* widget() const { return m_widget; }
 
     Function<void()> on_commit;
+    Function<void()> on_rollback;
 
     virtual Variant value() const = 0;
     virtual void set_value(const Variant&) = 0;
 
-    virtual void will_begin_editing() {}
+    virtual void will_begin_editing() { }
 
 protected:
-    ModelEditingDelegate() {}
+    ModelEditingDelegate() { }
 
     virtual RefPtr<Widget> create_widget() = 0;
     void commit()
@@ -64,6 +65,13 @@ protected:
         if (on_commit)
             on_commit();
     }
+    void rollback()
+    {
+        if (on_rollback)
+            on_rollback();
+    }
+
+    const ModelIndex& index() const { return m_index; }
 
 private:
     RefPtr<Model> m_model;
@@ -73,8 +81,8 @@ private:
 
 class StringModelEditingDelegate : public ModelEditingDelegate {
 public:
-    StringModelEditingDelegate() {}
-    virtual ~StringModelEditingDelegate() override {}
+    StringModelEditingDelegate() { }
+    virtual ~StringModelEditingDelegate() override { }
 
     virtual RefPtr<Widget> create_widget() override
     {
@@ -82,10 +90,18 @@ public:
         textbox->on_return_pressed = [this] {
             commit();
         };
+        textbox->on_escape_pressed = [this] {
+            rollback();
+        };
         return textbox;
     }
     virtual Variant value() const override { return static_cast<const TextBox*>(widget())->text(); }
-    virtual void set_value(const Variant& value) override { static_cast<TextBox*>(widget())->set_text(value.to_string()); }
+    virtual void set_value(const Variant& value) override
+    {
+        auto& textbox = static_cast<TextBox&>(*widget());
+        textbox.set_text(value.to_string());
+        textbox.select_all();
+    }
 };
 
 }

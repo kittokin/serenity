@@ -35,13 +35,15 @@ class StringPrototype final : public StringObject {
 
 public:
     explicit StringPrototype(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~StringPrototype() override;
 
 private:
     JS_DECLARE_NATIVE_FUNCTION(char_at);
+    JS_DECLARE_NATIVE_FUNCTION(char_code_at);
     JS_DECLARE_NATIVE_FUNCTION(repeat);
     JS_DECLARE_NATIVE_FUNCTION(starts_with);
+    JS_DECLARE_NATIVE_FUNCTION(ends_with);
     JS_DECLARE_NATIVE_FUNCTION(index_of);
     JS_DECLARE_NATIVE_FUNCTION(to_lowercase);
     JS_DECLARE_NATIVE_FUNCTION(to_uppercase);
@@ -49,6 +51,7 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(pad_start);
     JS_DECLARE_NATIVE_FUNCTION(pad_end);
     JS_DECLARE_NATIVE_FUNCTION(substring);
+    JS_DECLARE_NATIVE_FUNCTION(substr);
 
     JS_DECLARE_NATIVE_GETTER(length_getter);
 

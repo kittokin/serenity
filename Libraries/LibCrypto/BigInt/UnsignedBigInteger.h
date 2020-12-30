@@ -28,6 +28,7 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/LogStream.h>
+#include <AK/Span.h>
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
@@ -46,19 +47,19 @@ public:
     {
     }
 
+    explicit UnsignedBigInteger(const u8* ptr, size_t length);
+
     UnsignedBigInteger() { }
 
     static UnsignedBigInteger create_invalid();
 
     static UnsignedBigInteger import_data(const AK::StringView& data) { return import_data((const u8*)data.characters_without_null_termination(), data.length()); }
-    static UnsignedBigInteger import_data(const u8* ptr, size_t length);
-
-    size_t export_data(AK::ByteBuffer& data) const;
-    size_t export_data(const u8* ptr, size_t length) const
+    static UnsignedBigInteger import_data(const u8* ptr, size_t length)
     {
-        auto buffer = ByteBuffer::wrap(ptr, length);
-        return export_data(buffer);
+        return UnsignedBigInteger(ptr, length);
     }
+
+    size_t export_data(Bytes, bool remove_leading_zeros = false) const;
 
     static UnsignedBigInteger from_base10(const String& str);
     String to_base10() const;
@@ -113,6 +114,8 @@ private:
     ALWAYS_INLINE static u32 shift_left_get_one_word(const UnsignedBigInteger& number, size_t num_bits, size_t result_word_index);
 
     static constexpr size_t BITS_IN_WORD = 32;
+    // Little endian
+    // m_word[0] + m_word[1] * 256 + m_word[2] * 65536 + ...
     AK::Vector<u32, STARTING_WORD_SIZE> m_words;
 
     // Used to indicate a negative result, or a result of an invalid operation
@@ -129,7 +132,7 @@ struct UnsignedDivisionResult {
 }
 
 inline const LogStream&
-operator<<(const LogStream& stream, const Crypto::UnsignedBigInteger value)
+operator<<(const LogStream& stream, const Crypto::UnsignedBigInteger& value)
 {
     if (value.is_invalid()) {
         stream << "Invalid BigInt";

@@ -29,6 +29,7 @@
 #include <LibGUI/Painter.h>
 #include <LibGUI/ResizeCorner.h>
 #include <LibGUI/StatusBar.h>
+#include <LibGUI/Window.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/StylePainter.h>
 
@@ -36,8 +37,7 @@ namespace GUI {
 
 StatusBar::StatusBar(int label_count)
 {
-    set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    set_preferred_size(0, 18);
+    set_fixed_height(18);
     set_layout<HorizontalBoxLayout>();
     layout()->set_margins({ 0, 0, 0, 0 });
     layout()->set_spacing(2);
@@ -49,6 +49,8 @@ StatusBar::StatusBar(int label_count)
         m_labels.append(create_label());
 
     m_corner = add<ResizeCorner>();
+
+    REGISTER_STRING_PROPERTY("text", text, set_text);
 }
 
 StatusBar::~StatusBar()
@@ -90,6 +92,14 @@ void StatusBar::paint_event(PaintEvent& event)
     Painter painter(*this);
     painter.add_clip_rect(event.rect());
     painter.fill_rect(rect(), palette().button());
+}
+
+void StatusBar::resize_event(ResizeEvent& event)
+{
+    if (window())
+        m_corner->set_visible(window()->is_maximized() ? false : true);
+
+    Widget::resize_event(event);
 }
 
 }

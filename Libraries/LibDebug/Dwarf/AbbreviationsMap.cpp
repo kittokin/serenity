@@ -27,7 +27,9 @@
 #include "AbbreviationsMap.h"
 #include "DwarfInfo.h"
 
-namespace Dwarf {
+#include <AK/MemoryStream.h>
+
+namespace Debug::Dwarf {
 
 AbbreviationsMap::AbbreviationsMap(const DwarfInfo& dwarf_info, u32 offset)
     : m_dwarf_info(dwarf_info)
@@ -38,14 +40,14 @@ AbbreviationsMap::AbbreviationsMap(const DwarfInfo& dwarf_info, u32 offset)
 
 void AbbreviationsMap::populate_map()
 {
-    BufferStream abbreviation_stream(const_cast<ByteBuffer&>(m_dwarf_info.abbreviation_data()));
-    abbreviation_stream.advance(m_offset);
+    InputMemoryStream abbreviation_stream(m_dwarf_info.abbreviation_data());
+    abbreviation_stream.discard_or_error(m_offset);
 
-    while (!abbreviation_stream.at_end()) {
+    while (!abbreviation_stream.eof()) {
         size_t abbreviation_code = 0;
         abbreviation_stream.read_LEB128_unsigned(abbreviation_code);
-        // An abbrevation code of 0 marks the end of the
-        // abbrevations for a given compilation unit
+        // An abbreviation code of 0 marks the end of the
+        // abbreviations for a given compilation unit
         if (abbreviation_code == 0)
             break;
 
@@ -74,7 +76,7 @@ void AbbreviationsMap::populate_map()
             }
         } while (current_attribute_specification.attribute != Attribute::None || current_attribute_specification.form != AttributeDataForm::None);
 
-        m_entries.set((u32)abbreviation_code, abbrevation_entry);
+        m_entries.set((u32)abbreviation_code, move(abbrevation_entry));
     }
 }
 

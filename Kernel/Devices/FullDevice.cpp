@@ -46,18 +46,19 @@ bool FullDevice::can_read(const FileDescription&, size_t) const
     return true;
 }
 
-ssize_t FullDevice::read(FileDescription&, size_t, u8* buffer, ssize_t size)
+KResultOr<size_t> FullDevice::read(FileDescription&, size_t, UserOrKernelBuffer& buffer, size_t size)
 {
-    ssize_t count = min(static_cast<ssize_t>(PAGE_SIZE), size);
-    memset(buffer, 0, (size_t)count);
+    ssize_t count = min(static_cast<size_t>(PAGE_SIZE), size);
+    if (!buffer.memset(0, count))
+        return KResult(-EFAULT);
     return count;
 }
 
-ssize_t FullDevice::write(FileDescription&, size_t, const u8*, ssize_t size)
+KResultOr<size_t> FullDevice::write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t size)
 {
     if (size == 0)
         return 0;
-    return -ENOSPC;
+    return KResult(-ENOSPC);
 }
 
 }

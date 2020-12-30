@@ -30,10 +30,21 @@
 #include <LibCore/File.h>
 #include <LibMarkdown/Document.h>
 #include <stdio.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 int main(int argc, char* argv[])
 {
+    int view_width = 0;
+    if (isatty(STDOUT_FILENO)) {
+        struct winsize ws;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0)
+            view_width = ws.ws_col;
+    }
+
+    if (view_width == 0)
+        view_width = 80;
+
     if (pledge("stdio rpath", nullptr) < 0) {
         perror("pledge");
         return 1;
@@ -50,6 +61,7 @@ int main(int argc, char* argv[])
     const char* name = nullptr;
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Read manual pages. Try 'man man' to get started.");
     args_parser.add_positional_argument(section, "Section of the man page", "section", Core::ArgsParser::Required::No);
     args_parser.add_positional_argument(name, "Name of the man page", "name");
 
@@ -104,6 +116,6 @@ int main(int argc, char* argv[])
     auto document = Markdown::Document::parse(source);
     ASSERT(document);
 
-    String rendered = document->render_for_terminal();
+    String rendered = document->render_for_terminal(view_width);
     printf("%s", rendered.characters());
 }

@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -42,29 +43,28 @@ String g_boot_mode = "graphical";
 
 static void sigchld_handler(int)
 {
-    int status = 0;
-    pid_t pid = waitpid(-1, &status, WNOHANG);
-    if (!pid)
-        return;
+    for (;;) {
+        int status = 0;
+        pid_t pid = waitpid(-1, &status, WNOHANG);
+        if (pid < 0) {
+            perror("waitpid");
+            break;
+        }
+        if (pid == 0)
+            break;
 
 #ifdef SYSTEMSERVER_DEBUG
-    dbg() << "Reaped child with pid " << pid << ", exit status " << status;
+        dbg() << "Reaped child with pid " << pid << ", exit status " << status;
 #endif
 
-    Service* service = Service::find_by_pid(pid);
-    if (service == nullptr) {
-        // This can happen for multi-instance services.
-        return;
-    }
+        Service* service = Service::find_by_pid(pid);
+        if (service == nullptr) {
+            // This can happen for multi-instance services.
+            continue;
+        }
 
-    // Call service->did_exit(status) some time soon.
-    // We wouldn't want to run the complex logic, such
-    // as possibly spawning the service again, from the
-    // signal handler, so defer it.
-    Core::EventLoop::main().post_event(*service, make<Core::DeferredInvocationEvent>([=](auto&) {
         service->did_exit(status);
-    }));
-    Core::EventLoop::wake();
+    }
 }
 
 static void parse_boot_mode()
@@ -83,6 +83,84 @@ static void parse_boot_mode()
             g_boot_mode = pair[1];
     }
     dbg() << "Booting in " << g_boot_mode << " mode";
+}
+
+static void prepare_devfs()
+{
+    // FIXME: Find a better way to all of this stuff, without hardcoding all of this!
+
+    int rc = mount(-1, "/dev", "dev", 0);
+    if (rc != 0) {
+        ASSERT_NOT_REACHED();
+    }
+
+    rc = mkdir("/dev/pts", 0755);
+    if (rc != 0) {
+        ASSERT_NOT_REACHED();
+    }
+
+    rc = mount(-1, "/dev/pts", "devpts", 0);
+    if (rc != 0) {
+        ASSERT_NOT_REACHED();
+    }
+
+    rc = symlink("/dev/random", "/dev/urandom");
+    if (rc < 0) {
+        ASSERT_NOT_REACHED();
+    }
+
+    // FIXME: Find a better way to chown without hardcoding the gid!
+    rc = chown("/dev/fb0", 0, 3);
+    if (rc < 0) {
+        ASSERT_NOT_REACHED();
+    }
+
+    // FIXME: Find a better way to chown without hardcoding the gid!
+    rc = chown("/dev/keyboard", 0, 3);
+    if (rc < 0) {
+        ASSERT_NOT_REACHED();
+    }
+
+    // FIXME: Find a better way to chown without hardcoding the gid!
+    rc = chown("/dev/mouse", 0, 3);
+    if (rc < 0) {
+        ASSERT_NOT_REACHED();
+    }
+
+    for (size_t index = 0; index < 4; index++) {
+        // FIXME: Find a better way to chown without hardcoding the gid!
+        rc = chown(String::format("/dev/tty%d", index).characters(), 0, 2);
+        if (rc < 0) {
+            ASSERT_NOT_REACHED();
+        }
+    }
+
+    for (size_t index = 0; index < 4; index++) {
+        // FIXME: Find a better way to chown without hardcoding the gid!
+        rc = chown(String::format("/dev/ttyS%d", index).characters(), 0, 2);
+        if (rc < 0) {
+            ASSERT_NOT_REACHED();
+        }
+    }
+
+    // FIXME: Find a better way to chown without hardcoding the gid!
+    rc = chown("/dev/audio", 0, 4);
+    if (rc < 0) {
+        ASSERT_NOT_REACHED();
+    }
+
+    rc = symlink("/proc/self/fd/0", "/dev/stdin");
+    if (rc < 0) {
+        ASSERT_NOT_REACHED();
+    }
+    rc = symlink("/proc/self/fd/1", "/dev/stdout");
+    if (rc < 0) {
+        ASSERT_NOT_REACHED();
+    }
+    rc = symlink("/proc/self/fd/2", "/dev/stderr");
+    if (rc < 0) {
+        ASSERT_NOT_REACHED();
+    }
 }
 
 static void mount_all_filesystems()
@@ -104,6 +182,8 @@ static void mount_all_filesystems()
 
 int main(int, char**)
 {
+    prepare_devfs();
+
     if (pledge("stdio proc exec tty accept unix rpath wpath cpath chown fattr id sigaction", nullptr) < 0) {
         perror("pledge");
         return 1;
@@ -112,14 +192,9 @@ int main(int, char**)
     mount_all_filesystems();
     parse_boot_mode();
 
-    struct sigaction sa = {
-        .sa_handler = sigchld_handler,
-        .sa_mask = 0,
-        .sa_flags = SA_RESTART
-    };
-    sigaction(SIGCHLD, &sa, nullptr);
-
     Core::EventLoop event_loop;
+
+    event_loop.register_signal(SIGCHLD, sigchld_handler);
 
     // Read our config and instantiate services.
     // This takes care of setting up sockets.

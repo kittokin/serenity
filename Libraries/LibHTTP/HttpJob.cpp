@@ -78,7 +78,7 @@ bool HttpJob::can_read_line() const
     return m_socket->can_read_line();
 }
 
-ByteBuffer HttpJob::read_line(size_t size)
+String HttpJob::read_line(size_t size)
 {
     return m_socket->read_line(size);
 }
@@ -98,9 +98,9 @@ bool HttpJob::eof() const
     return m_socket->eof();
 }
 
-bool HttpJob::write(const ByteBuffer& data)
+bool HttpJob::write(ReadonlyBytes bytes)
 {
-    return m_socket->write(data);
+    return m_socket->write(bytes);
 }
 
 }

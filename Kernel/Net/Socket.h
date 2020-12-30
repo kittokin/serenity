@@ -58,9 +58,9 @@ public:
     bool is_shut_down_for_reading() const { return m_shut_down_for_reading; }
 
     enum class SetupState {
-        Unstarted, // we haven't tried to set the socket up yet
+        Unstarted,  // we haven't tried to set the socket up yet
         InProgress, // we're in the process of setting things up - for TCP maybe we've sent a SYN packet
-        Completed, // the setup process is complete, but not necessarily successful
+        Completed,  // the setup process is complete, but not necessarily successful
     };
 
     enum class Role : u8 {
@@ -91,15 +91,15 @@ public:
     virtual Role role(const FileDescription&) const { return m_role; }
 
     bool is_connected() const { return m_connected; }
-    void set_connected(bool connected) { m_connected = connected; }
+    void set_connected(bool);
 
     bool can_accept() const { return !m_pending.is_empty(); }
     RefPtr<Socket> accept();
 
     KResult shutdown(int how);
 
-    virtual KResult bind(const sockaddr*, socklen_t) = 0;
-    virtual KResult connect(FileDescription&, const sockaddr*, socklen_t, ShouldBlock) = 0;
+    virtual KResult bind(Userspace<const sockaddr*>, socklen_t) = 0;
+    virtual KResult connect(FileDescription&, Userspace<const sockaddr*>, socklen_t, ShouldBlock) = 0;
     virtual KResult listen(size_t) = 0;
     virtual void get_local_address(sockaddr*, socklen_t*) = 0;
     virtual void get_peer_address(sockaddr*, socklen_t*) = 0;
@@ -107,11 +107,11 @@ public:
     virtual bool is_ipv4() const { return false; }
     virtual void attach(FileDescription&) = 0;
     virtual void detach(FileDescription&) = 0;
-    virtual ssize_t sendto(FileDescription&, const void*, size_t, int flags, const sockaddr*, socklen_t) = 0;
-    virtual ssize_t recvfrom(FileDescription&, void*, size_t, int flags, sockaddr*, socklen_t*) = 0;
+    virtual KResultOr<size_t> sendto(FileDescription&, const UserOrKernelBuffer&, size_t, int flags, Userspace<const sockaddr*>, socklen_t) = 0;
+    virtual KResultOr<size_t> recvfrom(FileDescription&, UserOrKernelBuffer&, size_t, int flags, Userspace<sockaddr*>, Userspace<socklen_t*>, timeval&) = 0;
 
-    virtual KResult setsockopt(int level, int option, const void*, socklen_t);
-    virtual KResult getsockopt(FileDescription&, int level, int option, void*, socklen_t*);
+    virtual KResult setsockopt(int level, int option, Userspace<const void*>, socklen_t);
+    virtual KResult getsockopt(FileDescription&, int level, int option, Userspace<void*>, Userspace<socklen_t*>);
 
     pid_t origin_pid() const { return m_origin.pid; }
     uid_t origin_uid() const { return m_origin.uid; }
@@ -124,8 +124,9 @@ public:
     Lock& lock() { return m_lock; }
 
     // ^File
-    virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) override final;
-    virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) override final;
+    virtual KResultOr<size_t> read(FileDescription&, size_t, UserOrKernelBuffer&, size_t) override final;
+    virtual KResultOr<size_t> write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t) override final;
+    virtual KResult stat(::stat&) const override;
     virtual String absolute_path(const FileDescription&) const override = 0;
 
     bool has_receive_timeout() const { return m_receive_timeout.tv_sec || m_receive_timeout.tv_usec; }
@@ -133,6 +134,8 @@ public:
 
     bool has_send_timeout() const { return m_send_timeout.tv_sec || m_send_timeout.tv_usec; }
     const timeval& send_timeout() const { return m_send_timeout; }
+
+    bool wants_timestamp() const { return m_timestamp; }
 
 protected:
     Socket(int domain, int type, int protocol);
@@ -144,8 +147,8 @@ protected:
 
     virtual const char* class_name() const override { return "Socket"; }
 
-    virtual void shut_down_for_reading() {}
-    virtual void shut_down_for_writing() {}
+    virtual void shut_down_for_reading() { }
+    virtual void shut_down_for_writing() { }
 
     Role m_role { Role::None };
 
@@ -171,14 +174,15 @@ private:
 
     timeval m_receive_timeout { 0, 0 };
     timeval m_send_timeout { 0, 0 };
+    int m_timestamp { 0 };
 
     NonnullRefPtrVector<Socket> m_pending;
 };
 
-template <typename SocketType>
+template<typename SocketType>
 class SocketHandle {
 public:
-    SocketHandle() {}
+    SocketHandle() { }
 
     SocketHandle(NonnullRefPtr<SocketType>&& socket)
         : m_socket(move(socket))

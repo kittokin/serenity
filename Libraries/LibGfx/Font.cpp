@@ -27,14 +27,15 @@
 #include "Font.h"
 #include "Bitmap.h"
 #include "Emoji.h"
-#include <AK/BufferStream.h>
 #include <AK/MappedFile.h>
 #include <AK/StdLibExtras.h>
+#include <AK/StringBuilder.h>
 #include <AK/Utf32View.h>
 #include <AK/Utf8View.h>
+#include <AK/Vector.h>
 #include <AK/kmalloc.h>
-#include <errno.h>
-#include <fcntl.h>
+#include <LibCore/FileStream.h>
+#include <LibGfx/FontDatabase.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,82 +52,41 @@ struct [[gnu::packed]] FontFileHeader
     u8 type;
     u8 is_variable_width;
     u8 glyph_spacing;
-    u8 unused[5];
-    char name[64];
+    u8 baseline;
+    u8 mean_line;
+    u8 presentation_size;
+    u16 weight;
+    char name[32];
+    char family[32];
 };
-
-Font& Font::default_font()
-{
-    static Font* s_default_font;
-    static const char* default_font_path = "/res/fonts/Katica10.font";
-    if (!s_default_font) {
-        s_default_font = Font::load_from_file(default_font_path).leak_ref();
-        ASSERT(s_default_font);
-    }
-    return *s_default_font;
-}
-
-Font& Font::default_fixed_width_font()
-{
-    static Font* s_default_fixed_width_font;
-    static const char* default_fixed_width_font_path = "/res/fonts/CsillaThin7x10.font";
-    if (!s_default_fixed_width_font) {
-        s_default_fixed_width_font = Font::load_from_file(default_fixed_width_font_path).leak_ref();
-        ASSERT(s_default_fixed_width_font);
-    }
-    return *s_default_fixed_width_font;
-}
-
-Font& Font::default_bold_fixed_width_font()
-{
-    static Font* font;
-    static const char* default_bold_fixed_width_font_path = "/res/fonts/CsillaBold7x10.font";
-    if (!font) {
-        font = Font::load_from_file(default_bold_fixed_width_font_path).leak_ref();
-        ASSERT(font);
-    }
-    return *font;
-}
-
-Font& Font::default_bold_font()
-{
-    static Font* s_default_bold_font;
-    static const char* default_bold_font_path = "/res/fonts/KaticaBold10.font";
-    if (!s_default_bold_font) {
-        s_default_bold_font = Font::load_from_file(default_bold_font_path).leak_ref();
-        ASSERT(s_default_bold_font);
-    }
-    return *s_default_bold_font;
-}
 
 NonnullRefPtr<Font> Font::clone() const
 {
     size_t bytes_per_glyph = sizeof(u32) * glyph_height();
-    // FIXME: This is leaked!
-    auto* new_rows = static_cast<unsigned*>(kmalloc(bytes_per_glyph * m_glyph_count));
+    auto* new_rows = static_cast<unsigned*>(malloc(bytes_per_glyph * m_glyph_count));
     memcpy(new_rows, m_rows, bytes_per_glyph * m_glyph_count);
-    auto* new_widths = static_cast<u8*>(kmalloc(m_glyph_count));
+    auto* new_widths = static_cast<u8*>(malloc(m_glyph_count));
     if (m_glyph_widths)
         memcpy(new_widths, m_glyph_widths, m_glyph_count);
     else
         memset(new_widths, m_glyph_width, m_glyph_count);
-    return adopt(*new Font(m_name, new_rows, new_widths, m_fixed_width, m_glyph_width, m_glyph_height, m_glyph_spacing, m_type));
+    return adopt(*new Font(m_name, m_family, new_rows, new_widths, m_fixed_width, m_glyph_width, m_glyph_height, m_glyph_spacing, m_type, m_baseline, m_mean_line, m_presentation_size, m_weight, true));
 }
 
 NonnullRefPtr<Font> Font::create(u8 glyph_height, u8 glyph_width, bool fixed, FontTypes type)
 {
     size_t bytes_per_glyph = sizeof(u32) * glyph_height;
-    // FIXME: This is leaked!
     size_t count = glyph_count_by_type(type);
     auto* new_rows = static_cast<unsigned*>(malloc(bytes_per_glyph * count));
     memset(new_rows, 0, bytes_per_glyph * count);
     auto* new_widths = static_cast<u8*>(malloc(count));
     memset(new_widths, glyph_width, count);
-    return adopt(*new Font("Untitled", new_rows, new_widths, fixed, glyph_width, glyph_height, 1, type));
+    return adopt(*new Font("Untitled", "Untitled", new_rows, new_widths, fixed, glyph_width, glyph_height, 1, type, 0, 0, 0, 400, true));
 }
 
-Font::Font(const StringView& name, unsigned* rows, u8* widths, bool is_fixed_width, u8 glyph_width, u8 glyph_height, u8 glyph_spacing, FontTypes type)
+Font::Font(String name, String family, unsigned* rows, u8* widths, bool is_fixed_width, u8 glyph_width, u8 glyph_height, u8 glyph_spacing, FontTypes type, u8 baseline, u8 mean_line, u8 presentation_size, u16 weight, bool owns_arrays)
     : m_name(name)
+    , m_family(family)
     , m_type(type)
     , m_rows(rows)
     , m_glyph_widths(widths)
@@ -135,8 +95,15 @@ Font::Font(const StringView& name, unsigned* rows, u8* widths, bool is_fixed_wid
     , m_min_glyph_width(glyph_width)
     , m_max_glyph_width(glyph_width)
     , m_glyph_spacing(glyph_spacing)
+    , m_baseline(baseline)
+    , m_mean_line(mean_line)
+    , m_presentation_size(presentation_size)
+    , m_weight(weight)
     , m_fixed_width(is_fixed_width)
+    , m_owns_arrays(owns_arrays)
 {
+    update_x_height();
+
     m_glyph_count = glyph_count_by_type(m_type);
 
     if (!m_fixed_width) {
@@ -149,10 +116,16 @@ Font::Font(const StringView& name, unsigned* rows, u8* widths, bool is_fixed_wid
         m_min_glyph_width = minimum;
         m_max_glyph_width = maximum;
     }
+
+    set_family_fonts();
 }
 
 Font::~Font()
 {
+    if (m_owns_arrays) {
+        free(m_glyph_widths);
+        free(m_rows);
+    }
 }
 
 RefPtr<Font> Font::load_from_memory(const u8* data)
@@ -162,8 +135,13 @@ RefPtr<Font> Font::load_from_memory(const u8* data)
         dbgprintf("header.magic != '!Fnt', instead it's '%c%c%c%c'\n", header.magic[0], header.magic[1], header.magic[2], header.magic[3]);
         return nullptr;
     }
-    if (header.name[63] != '\0') {
+    if (header.name[sizeof(header.name) - 1] != '\0') {
         dbgprintf("Font name not fully null-terminated\n");
+        return nullptr;
+    }
+
+    if (header.family[sizeof(header.family) - 1] != '\0') {
+        dbgprintf("Font family not fully null-terminated\n");
         return nullptr;
     }
 
@@ -182,7 +160,7 @@ RefPtr<Font> Font::load_from_memory(const u8* data)
     u8* widths = nullptr;
     if (header.is_variable_width)
         widths = (u8*)(rows) + count * bytes_per_glyph;
-    return adopt(*new Font(String(header.name), rows, widths, !header.is_variable_width, header.glyph_width, header.glyph_height, header.glyph_spacing, type));
+    return adopt(*new Font(String(header.name), String(header.family), rows, widths, !header.is_variable_width, header.glyph_width, header.glyph_height, header.glyph_spacing, type, header.baseline, header.mean_line, header.presentation_size, header.weight));
 }
 
 size_t Font::glyph_count_by_type(FontTypes type)
@@ -213,54 +191,54 @@ RefPtr<Font> Font::load_from_file(const StringView& path)
 
 bool Font::write_to_file(const StringView& path)
 {
-    int fd = creat_with_path_length(path.characters_without_null_termination(), path.length(), 0644);
-    if (fd < 0) {
-        perror("open");
-        return false;
-    }
-
     FontFileHeader header;
     memset(&header, 0, sizeof(FontFileHeader));
     memcpy(header.magic, "!Fnt", 4);
     header.glyph_width = m_glyph_width;
     header.glyph_height = m_glyph_height;
     header.type = m_type;
+    header.baseline = m_baseline;
+    header.mean_line = m_mean_line;
     header.is_variable_width = !m_fixed_width;
     header.glyph_spacing = m_glyph_spacing;
-    memcpy(header.name, m_name.characters(), min(m_name.length(), (size_t)63));
+    header.presentation_size = m_presentation_size;
+    header.weight = m_weight;
+    memcpy(header.name, m_name.characters(), min(m_name.length(), sizeof(header.name) - 1));
+    memcpy(header.family, m_family.characters(), min(m_family.length(), sizeof(header.family) - 1));
 
     size_t bytes_per_glyph = sizeof(unsigned) * m_glyph_height;
     size_t count = glyph_count_by_type(m_type);
 
-    auto buffer = ByteBuffer::create_uninitialized(sizeof(FontFileHeader) + (count * bytes_per_glyph) + count);
-    BufferStream stream(buffer);
+    auto stream_result = Core::OutputFileStream::open_buffered(path);
+    if (stream_result.is_error())
+        return false;
+    auto& stream = stream_result.value();
 
-    stream << ByteBuffer::wrap(&header, sizeof(FontFileHeader));
-    stream << ByteBuffer::wrap(m_rows, (count * bytes_per_glyph));
-    stream << ByteBuffer::wrap(m_glyph_widths, count);
+    stream << ReadonlyBytes { &header, sizeof(header) };
+    stream << ReadonlyBytes { m_rows, count * bytes_per_glyph };
+    stream << ReadonlyBytes { m_glyph_widths, count };
 
-    ASSERT(stream.at_end());
-    ssize_t nwritten = write(fd, buffer.data(), buffer.size());
-    ASSERT(nwritten == (ssize_t)buffer.size());
-    int rc = close(fd);
-    ASSERT(rc == 0);
+    stream.flush();
+    if (stream.handle_any_error())
+        return false;
+
     return true;
 }
 
-GlyphBitmap Font::glyph_bitmap(u32 codepoint) const
+GlyphBitmap Font::glyph_bitmap(u32 code_point) const
 {
-    return GlyphBitmap(&m_rows[codepoint * m_glyph_height], { glyph_width(codepoint), m_glyph_height });
+    return GlyphBitmap(&m_rows[code_point * m_glyph_height], { glyph_width(code_point), m_glyph_height });
 }
 
-int Font::glyph_or_emoji_width(u32 codepoint) const
+int Font::glyph_or_emoji_width(u32 code_point) const
 {
-    if (codepoint < m_glyph_count)
-        return glyph_width(codepoint);
+    if (code_point < m_glyph_count)
+        return glyph_width(code_point);
 
     if (m_fixed_width)
         return m_glyph_width;
 
-    auto* emoji = Emoji::emoji_for_codepoint(codepoint);
+    auto* emoji = Emoji::emoji_for_code_point(code_point);
     if (emoji == nullptr)
         return glyph_width('?');
     return emoji->size().width();
@@ -277,11 +255,11 @@ int Font::width(const Utf8View& utf8) const
     bool first = true;
     int width = 0;
 
-    for (u32 codepoint : utf8) {
+    for (u32 code_point : utf8) {
         if (!first)
             width += glyph_spacing();
         first = false;
-        width += glyph_or_emoji_width(codepoint);
+        width += glyph_or_emoji_width(code_point);
     }
 
     return width;
@@ -293,7 +271,7 @@ int Font::width(const Utf32View& view) const
         return 0;
     int width = (view.length() - 1) * glyph_spacing();
     for (size_t i = 0; i < view.length(); ++i)
-        width += glyph_or_emoji_width(view.codepoints()[i]);
+        width += glyph_or_emoji_width(view.code_points()[i]);
     return width;
 }
 
@@ -330,6 +308,24 @@ void Font::set_type(FontTypes type)
     m_glyph_count = new_glyph_count;
     m_rows = new_rows;
     m_glyph_widths = new_widths;
+}
+
+void Font::set_family_fonts()
+{
+    StringBuilder path;
+
+    if (weight() != 700) {
+        path.appendff("/res/fonts/{}Bold{}.font", family(), presentation_size());
+        auto spath = path.to_string();
+        m_bold_family_font = Font::load_from_file(path.to_string());
+        if (m_bold_family_font)
+            set_boldface(true);
+    }
+}
+
+String Font::qualified_name() const
+{
+    return String::formatted("{} {} {}", family(), presentation_size(), weight());
 }
 
 }

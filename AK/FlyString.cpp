@@ -27,6 +27,7 @@
 #include <AK/FlyString.h>
 #include <AK/HashTable.h>
 #include <AK/Optional.h>
+#include <AK/Singleton.h>
 #include <AK/String.h>
 #include <AK/StringUtils.h>
 #include <AK/StringView.h>
@@ -39,20 +40,15 @@ struct FlyStringImplTraits : public AK::Traits<StringImpl*> {
     {
         ASSERT(a);
         ASSERT(b);
-        if (a == b)
-            return true;
-        if (a->length() != b->length())
-            return false;
-        return !__builtin_memcmp(a->characters(), b->characters(), a->length());
+        return *a == *b;
     }
 };
 
+static AK::Singleton<HashTable<StringImpl*, FlyStringImplTraits>> s_table;
+
 static HashTable<StringImpl*, FlyStringImplTraits>& fly_impls()
 {
-    static HashTable<StringImpl*, FlyStringImplTraits>* table;
-    if (!table)
-        table = new HashTable<StringImpl*, FlyStringImplTraits>;
-    return *table;
+    return *s_table;
 }
 
 void FlyString::did_destroy_impl(Badge<StringImpl>, StringImpl& impl)
@@ -89,14 +85,36 @@ FlyString::FlyString(const char* string)
 {
 }
 
-Optional<int> FlyString::to_int() const
+template<typename T>
+Optional<T> FlyString::to_int() const
 {
-    return StringUtils::convert_to_int(view());
+    return StringUtils::convert_to_int<T>(view());
 }
+
+template Optional<i8> FlyString::to_int() const;
+template Optional<i16> FlyString::to_int() const;
+template Optional<i32> FlyString::to_int() const;
+template Optional<i64> FlyString::to_int() const;
+
+template<typename T>
+Optional<T> FlyString::to_uint() const
+{
+    return StringUtils::convert_to_uint<T>(view());
+}
+
+template Optional<u8> FlyString::to_uint() const;
+template Optional<u16> FlyString::to_uint() const;
+template Optional<u32> FlyString::to_uint() const;
+template Optional<u64> FlyString::to_uint() const;
 
 bool FlyString::equals_ignoring_case(const StringView& other) const
 {
     return StringUtils::equals_ignoring_case(view(), other);
+}
+
+bool FlyString::starts_with(const StringView& str, CaseSensitivity case_sensitivity) const
+{
+    return StringUtils::starts_with(view(), str, case_sensitivity);
 }
 
 bool FlyString::ends_with(const StringView& str, CaseSensitivity case_sensitivity) const

@@ -26,16 +26,17 @@
 
 #include <LibGUI/DisplayLink.h>
 #include <LibGUI/MessageBox.h>
-#include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Function.h>
-#include <LibJS/Runtime/MarkedValueList.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/Event.h>
+#include <LibWeb/DOM/EventDispatcher.h>
 #include <LibWeb/DOM/Timer.h>
 #include <LibWeb/DOM/Window.h>
-#include <LibWeb/Frame/Frame.h>
-#include <LibWeb/PageView.h>
+#include <LibWeb/HighResolutionTime/Performance.h>
+#include <LibWeb/InProcessWebView.h>
+#include <LibWeb/Page/Frame.h>
 
-namespace Web {
+namespace Web::DOM {
 
 NonnullRefPtr<Window> Window::create_with_document(Document& document)
 {
@@ -43,7 +44,9 @@ NonnullRefPtr<Window> Window::create_with_document(Document& document)
 }
 
 Window::Window(Document& document)
-    : m_document(document)
+    : EventTarget(static_cast<Bindings::ScriptExecutionContext&>(document))
+    , m_document(document)
+    , m_performance(make<HighResolutionTime::Performance>(*this))
 {
 }
 
@@ -58,7 +61,8 @@ void Window::set_wrapper(Badge<Bindings::WindowObject>, Bindings::WindowObject& 
 
 void Window::alert(const String& message)
 {
-    GUI::MessageBox::show(nullptr, message, "Alert", GUI::MessageBox::Type::Information);
+    if (auto* page = m_document.page())
+        page->client().page_did_request_alert(message);
 }
 
 bool Window::confirm(const String& message)
@@ -85,6 +89,7 @@ void Window::timer_did_fire(Badge<Timer>, Timer& timer)
 {
     // We should not be here if there's no JS wrapper for the Window object.
     ASSERT(wrapper());
+    auto& vm = wrapper()->vm();
 
     // NOTE: This protector pointer keeps the timer alive until the end of this function no matter what.
     NonnullRefPtr protector(timer);
@@ -93,13 +98,19 @@ void Window::timer_did_fire(Badge<Timer>, Timer& timer)
         m_timers.remove(timer.id());
     }
 
-    auto& interpreter = wrapper()->interpreter();
-    interpreter.call(timer.callback(), wrapper());
+    [[maybe_unused]] auto rc = vm.call(timer.callback(), wrapper());
+    if (vm.exception())
+        vm.clear_exception();
 }
 
 i32 Window::allocate_timer_id(Badge<Timer>)
 {
     return m_timer_id_allocator.allocate();
+}
+
+void Window::deallocate_timer_id(Badge<Timer>, i32 id)
+{
+    m_timer_id_allocator.deallocate(id);
 }
 
 void Window::clear_timeout(i32 timer_id)
@@ -119,11 +130,11 @@ i32 Window::request_animation_frame(JS::Function& callback)
 
     i32 link_id = GUI::DisplayLink::register_callback([handle = make_handle(&callback)](i32 link_id) {
         auto& function = const_cast<JS::Function&>(static_cast<const JS::Function&>(*handle.cell()));
-        auto& interpreter = function.interpreter();
-        JS::MarkedValueList arguments(interpreter.heap());
-        arguments.append(JS::Value(fake_timestamp));
+        auto& vm = function.vm();
         fake_timestamp += 10;
-        interpreter.call(function, {}, move(arguments));
+        [[maybe_unused]] auto rc = vm.call(function, {}, JS::Value(fake_timestamp));
+        if (vm.exception())
+            vm.clear_exception();
         GUI::DisplayLink::unregister_callback(link_id);
     });
 
@@ -137,7 +148,7 @@ void Window::cancel_animation_frame(i32 id)
     GUI::DisplayLink::unregister_callback(id);
 }
 
-void Window::did_set_location_href(Badge<Bindings::LocationObject>, const String& new_href)
+void Window::did_set_location_href(Badge<Bindings::LocationObject>, const URL& new_href)
 {
     auto* frame = document().frame();
     if (!frame)
@@ -151,6 +162,16 @@ void Window::did_call_location_reload(Badge<Bindings::LocationObject>)
     if (!frame)
         return;
     frame->loader().load(document().url(), FrameLoader::Type::Reload);
+}
+
+bool Window::dispatch_event(NonnullRefPtr<Event> event)
+{
+    return EventDispatcher::dispatch(*this, event, true);
+}
+
+Bindings::EventTargetWrapper* Window::create_wrapper(JS::GlobalObject&)
+{
+    ASSERT_NOT_REACHED();
 }
 
 }

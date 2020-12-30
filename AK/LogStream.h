@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <AK/Format.h>
 #include <AK/Forward.h>
 #include <AK/Types.h>
 #include <AK/kmalloc.h>
@@ -115,25 +116,14 @@ class DebugLogStream final : public BufferedLogStream {
 public:
     DebugLogStream() { }
     virtual ~DebugLogStream() override;
-};
 
-#if !defined(KERNEL)
-class StdLogStream final : public LogStream {
-public:
-    StdLogStream(int fd)
-        : m_fd(fd)
-    {
-    }
-    virtual ~StdLogStream() override;
-    virtual void write(const char* characters, int length) const override;
+    // DebugLogStream only checks `enabled` and possibly generates output while the destructor runs.
+    static void set_enabled(bool);
+    static bool is_enabled();
 
 private:
-    int m_fd { -1 };
+    static bool s_enabled;
 };
-
-inline StdLogStream out() { return StdLogStream(STDOUT_FILENO); }
-inline StdLogStream warn() { return StdLogStream(STDERR_FILENO); }
-#endif
 
 #ifdef KERNEL
 class KernelLogStream final : public BufferedLogStream {
@@ -170,6 +160,12 @@ const LogStream& operator<<(const LogStream&, double);
 const LogStream& operator<<(const LogStream&, float);
 #endif
 
+template<typename T>
+const LogStream& operator<<(const LogStream& stream, Span<T> span)
+{
+    return stream << "{ " << span.data() << ", " << span.size() << " }";
+}
+
 const LogStream& operator<<(const LogStream&, const void*);
 
 inline const LogStream& operator<<(const LogStream& stream, char value)
@@ -191,13 +187,10 @@ KernelLogStream klog();
 DebugLogStream klog();
 #endif
 
+void dump_bytes(ReadonlyBytes);
+
 }
 
 using AK::dbg;
 using AK::klog;
 using AK::LogStream;
-
-#if !defined(KERNEL)
-using AK::out;
-using AK::warn;
-#endif

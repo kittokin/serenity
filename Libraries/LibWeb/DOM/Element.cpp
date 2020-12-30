@@ -26,28 +26,30 @@
 
 #include <AK/StringBuilder.h>
 #include <LibWeb/CSS/Length.h>
+#include <LibWeb/CSS/Parser/CSSParser.h>
 #include <LibWeb/CSS/PropertyID.h>
+#include <LibWeb/CSS/StyleInvalidator.h>
 #include <LibWeb/CSS/StyleResolver.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/DocumentFragment.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/Layout/LayoutBlock.h>
-#include <LibWeb/Layout/LayoutInline.h>
-#include <LibWeb/Layout/LayoutListItem.h>
-#include <LibWeb/Layout/LayoutTable.h>
-#include <LibWeb/Layout/LayoutTableCell.h>
-#include <LibWeb/Layout/LayoutTableRow.h>
-#include <LibWeb/Layout/LayoutTableRowGroup.h>
-#include <LibWeb/Layout/LayoutTreeBuilder.h>
-#include <LibWeb/Parser/HTMLDocumentParser.h>
+#include <LibWeb/HTML/Parser/HTMLDocumentParser.h>
+#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/Layout/InlineNode.h>
+#include <LibWeb/Layout/ListItemBox.h>
+#include <LibWeb/Layout/TableBox.h>
+#include <LibWeb/Layout/TableCellBox.h>
+#include <LibWeb/Layout/TableRowBox.h>
+#include <LibWeb/Layout/TableRowGroupBox.h>
+#include <LibWeb/Layout/TreeBuilder.h>
 
-namespace Web {
+namespace Web::DOM {
 
-Element::Element(Document& document, const FlyString& tag_name)
+Element::Element(Document& document, const QualifiedName& qualified_name)
     : ParentNode(document, NodeType::ELEMENT_NODE)
-    , m_tag_name(tag_name)
+    , m_qualified_name(qualified_name)
 {
 }
 
@@ -82,6 +84,8 @@ String Element::attribute(const FlyString& name) const
 
 void Element::set_attribute(const FlyString& name, const String& value)
 {
+    CSS::StyleInvalidator style_invalidator(document());
+
     if (auto* attribute = find_attribute(name))
         attribute->set_value(value);
     else
@@ -90,12 +94,11 @@ void Element::set_attribute(const FlyString& name, const String& value)
     parse_attribute(name, value);
 }
 
-void Element::set_attributes(Vector<Attribute>&& attributes)
+void Element::remove_attribute(const FlyString& name)
 {
-    m_attributes = move(attributes);
+    CSS::StyleInvalidator style_invalidator(document());
 
-    for (auto& attribute : m_attributes)
-        parse_attribute(attribute.name(), attribute.value());
+    m_attributes.remove_first_matching([&](auto& attribute) { return attribute.name() == name; });
 }
 
 bool Element::has_class(const FlyString& class_name) const
@@ -107,7 +110,7 @@ bool Element::has_class(const FlyString& class_name) const
     return false;
 }
 
-RefPtr<LayoutNode> Element::create_layout_node(const StyleProperties* parent_style)
+RefPtr<Layout::Node> Element::create_layout_node(const CSS::StyleProperties* parent_style)
 {
     auto style = document().style_resolver().resolve_style(*this, parent_style);
     const_cast<Element&>(*this).m_resolved_style = style;
@@ -116,30 +119,30 @@ RefPtr<LayoutNode> Element::create_layout_node(const StyleProperties* parent_sty
     if (display == CSS::Display::None)
         return nullptr;
 
-    if (tag_name() == "noscript" && document().is_scripting_enabled())
+    if (local_name() == "noscript" && document().is_scripting_enabled())
         return nullptr;
 
     if (display == CSS::Display::Block)
-        return adopt(*new LayoutBlock(document(), this, move(style)));
+        return adopt(*new Layout::BlockBox(document(), this, move(style)));
 
     if (display == CSS::Display::Inline) {
         if (style->float_().value_or(CSS::Float::None) != CSS::Float::None)
-            return adopt(*new LayoutBlock(document(), this, move(style)));
-        return adopt(*new LayoutInline(document(), *this, move(style)));
+            return adopt(*new Layout::BlockBox(document(), this, move(style)));
+        return adopt(*new Layout::InlineNode(document(), *this, move(style)));
     }
 
     if (display == CSS::Display::ListItem)
-        return adopt(*new LayoutListItem(document(), *this, move(style)));
+        return adopt(*new Layout::ListItemBox(document(), *this, move(style)));
     if (display == CSS::Display::Table)
-        return adopt(*new LayoutTable(document(), *this, move(style)));
+        return adopt(*new Layout::TableBox(document(), *this, move(style)));
     if (display == CSS::Display::TableRow)
-        return adopt(*new LayoutTableRow(document(), *this, move(style)));
+        return adopt(*new Layout::TableRowBox(document(), *this, move(style)));
     if (display == CSS::Display::TableCell)
-        return adopt(*new LayoutTableCell(document(), *this, move(style)));
+        return adopt(*new Layout::TableCellBox(document(), *this, move(style)));
     if (display == CSS::Display::TableRowGroup || display == CSS::Display::TableHeaderGroup || display == CSS::Display::TableFooterGroup)
-        return adopt(*new LayoutTableRowGroup(document(), *this, move(style)));
+        return adopt(*new Layout::TableRowGroupBox(document(), *this, move(style)));
     if (display == CSS::Display::InlineBlock) {
-        auto inline_block = adopt(*new LayoutBlock(document(), this, move(style)));
+        auto inline_block = adopt(*new Layout::BlockBox(document(), this, move(style)));
         inline_block->set_inline(true);
         return inline_block;
     }
@@ -148,13 +151,16 @@ RefPtr<LayoutNode> Element::create_layout_node(const StyleProperties* parent_sty
 
 void Element::parse_attribute(const FlyString& name, const String& value)
 {
-    if (name == "class") {
+    if (name == HTML::AttributeNames::class_) {
         auto new_classes = value.split_view(' ');
         m_classes.clear();
         m_classes.ensure_capacity(new_classes.size());
         for (auto& new_class : new_classes) {
             m_classes.unchecked_append(new_class);
         }
+    } else if (name == HTML::AttributeNames::style) {
+        m_inline_style = parse_css_declaration(CSS::ParsingContext(document()), value);
+        set_needs_style_update(true);
     }
 }
 
@@ -164,7 +170,7 @@ enum class StyleDifference {
     NeedsRelayout,
 };
 
-static StyleDifference compute_style_difference(const StyleProperties& old_style, const StyleProperties& new_style, const Document& document)
+static StyleDifference compute_style_difference(const CSS::StyleProperties& old_style, const CSS::StyleProperties& new_style, const Document& document)
 {
     if (old_style == new_style)
         return StyleDifference::None;
@@ -201,7 +207,7 @@ void Element::recompute_style()
         if (style->display() == CSS::Display::None)
             return;
         // We need a new layout tree here!
-        LayoutTreeBuilder tree_builder;
+        Layout::TreeBuilder tree_builder;
         tree_builder.build(*this);
         return;
     }
@@ -214,6 +220,7 @@ void Element::recompute_style()
     if (diff == StyleDifference::None)
         return;
     layout_node()->set_specified_style(*style);
+    layout_node()->apply_style(*style);
     if (diff == StyleDifference::NeedsRelayout) {
         document().force_layout();
         return;
@@ -223,7 +230,7 @@ void Element::recompute_style()
     }
 }
 
-NonnullRefPtr<StyleProperties> Element::computed_style()
+NonnullRefPtr<CSS::StyleProperties> Element::computed_style()
 {
     auto properties = m_resolved_style->clone();
     if (layout_node() && layout_node()->has_style()) {
@@ -252,42 +259,77 @@ NonnullRefPtr<StyleProperties> Element::computed_style()
 
 void Element::set_inner_html(StringView markup)
 {
-    auto new_children = HTMLDocumentParser::parse_html_fragment(*this, markup);
+    auto new_children = HTML::HTMLDocumentParser::parse_html_fragment(*this, markup);
     remove_all_children();
     while (!new_children.is_empty()) {
         append_child(new_children.take_first());
     }
 
     set_needs_style_update(true);
-    document().schedule_style_update();
     document().invalidate_layout();
 }
 
 String Element::inner_html() const
 {
+    auto escape_string = [](const StringView& string, bool attribute_mode) -> String {
+        // https://html.spec.whatwg.org/multipage/parsing.html#escapingString
+        StringBuilder builder;
+        for (auto& ch : string) {
+            if (ch == '&')
+                builder.append("&amp;");
+            // FIXME: also replace U+00A0 NO-BREAK SPACE with &nbsp;
+            else if (ch == '"' && attribute_mode)
+                builder.append("&quot;");
+            else if (ch == '<' && !attribute_mode)
+                builder.append("&lt;");
+            else if (ch == '>' && !attribute_mode)
+                builder.append("&gt;");
+            else
+                builder.append(ch);
+        }
+        return builder.to_string();
+    };
+
     StringBuilder builder;
 
     Function<void(const Node&)> recurse = [&](auto& node) {
         for (auto* child = node.first_child(); child; child = child->next_sibling()) {
             if (child->is_element()) {
+                auto& element = downcast<Element>(*child);
                 builder.append('<');
-                builder.append(to<Element>(*child).tag_name());
+                builder.append(element.local_name());
+                element.for_each_attribute([&](auto& name, auto& value) {
+                    builder.append(' ');
+                    builder.append(name);
+                    builder.append('=');
+                    builder.append('"');
+                    builder.append(escape_string(value, true));
+                    builder.append('"');
+                });
                 builder.append('>');
 
                 recurse(*child);
 
+                // FIXME: This should be skipped for void elements
                 builder.append("</");
-                builder.append(to<Element>(*child).tag_name());
+                builder.append(element.local_name());
                 builder.append('>');
             }
             if (child->is_text()) {
-                builder.append(to<Text>(*child).data());
+                auto& text = downcast<Text>(*child);
+                builder.append(escape_string(text.data(), false));
             }
+            // FIXME: Also handle Comment, ProcessingInstruction, DocumentType
         }
     };
     recurse(*this);
 
     return builder.to_string();
+}
+
+bool Element::is_focused() const
+{
+    return document().focused_element() == this;
 }
 
 }

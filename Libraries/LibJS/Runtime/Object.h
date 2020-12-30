@@ -51,7 +51,7 @@ struct PropertyDescriptor {
     Function* getter { nullptr };
     Function* setter { nullptr };
 
-    static PropertyDescriptor from_dictionary(Interpreter&, const Object&);
+    static PropertyDescriptor from_dictionary(VM&, const Object&);
 
     bool is_accessor_descriptor() const { return getter || setter; }
     bool is_data_descriptor() const { return !(value.is_empty() && !attributes.has_writable()); }
@@ -60,10 +60,11 @@ struct PropertyDescriptor {
 
 class Object : public Cell {
 public:
-    static Object* create_empty(Interpreter&, GlobalObject&);
+    static Object* create_empty(GlobalObject&);
 
     explicit Object(Object& prototype);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    explicit Object(Shape&);
+    virtual void initialize(GlobalObject&) override;
     virtual ~Object();
 
     virtual bool inherits(const StringView& class_name) const { return class_name == this->class_name(); }
@@ -87,7 +88,7 @@ public:
     Shape& shape() { return *m_shape; }
     const Shape& shape() const { return *m_shape; }
 
-    GlobalObject& global_object() const { return shape().global_object(); }
+    GlobalObject& global_object() const { return *shape().global_object(); }
 
     virtual Value get(const PropertyName&, Value receiver = {}) const;
 
@@ -96,17 +97,18 @@ public:
 
     virtual bool put(const PropertyName&, Value, Value receiver = {});
 
-    Value get_own_property(const Object& this_object, PropertyName, Value receiver) const;
+    Value get_own_property(const PropertyName&, Value receiver) const;
     Value get_own_properties(const Object& this_object, PropertyKind, bool only_enumerable_properties = false, GetOwnPropertyReturnType = GetOwnPropertyReturnType::StringOnly) const;
     virtual Optional<PropertyDescriptor> get_own_property_descriptor(const PropertyName&) const;
     Value get_own_property_descriptor_object(const PropertyName&) const;
 
     virtual bool define_property(const StringOrSymbol& property_name, const Object& descriptor, bool throw_exceptions = true);
     bool define_property(const PropertyName&, Value value, PropertyAttributes attributes = default_attributes, bool throw_exceptions = true);
+    bool define_property_without_transition(const PropertyName&, Value value, PropertyAttributes attributes = default_attributes, bool throw_exceptions = true);
     bool define_accessor(const PropertyName&, Function& getter_or_setter, bool is_getter, PropertyAttributes attributes = default_attributes, bool throw_exceptions = true);
 
-    bool define_native_function(const StringOrSymbol& property_name, AK::Function<Value(Interpreter&, GlobalObject&)>, i32 length = 0, PropertyAttributes attributes = default_attributes);
-    bool define_native_property(const StringOrSymbol& property_name, AK::Function<Value(Interpreter&, GlobalObject&)> getter, AK::Function<void(Interpreter&, GlobalObject&, Value)> setter, PropertyAttributes attributes = default_attributes);
+    bool define_native_function(const StringOrSymbol& property_name, AK::Function<Value(VM&, GlobalObject&)>, i32 length = 0, PropertyAttributes attributes = default_attributes);
+    bool define_native_property(const StringOrSymbol& property_name, AK::Function<Value(VM&, GlobalObject&)> getter, AK::Function<void(VM&, GlobalObject&, Value)> setter, PropertyAttributes attributes = default_attributes);
 
     virtual Value delete_property(const PropertyName&);
 
@@ -115,6 +117,7 @@ public:
     virtual bool is_error() const { return false; }
     virtual bool is_function() const { return false; }
     virtual bool is_native_function() const { return false; }
+    virtual bool is_script_function() const { return false; }
     virtual bool is_bound_function() const { return false; }
     virtual bool is_proxy_object() const { return false; }
     virtual bool is_regexp_object() const { return false; }
@@ -125,9 +128,14 @@ public:
     virtual bool is_bigint_object() const { return false; }
     virtual bool is_string_iterator_object() const { return false; }
     virtual bool is_array_iterator_object() const { return false; }
+    virtual bool is_lexical_environment() const { return false; }
+    virtual bool is_global_object() const { return false; }
+    virtual bool is_typed_array() const { return false; }
+    virtual bool is_array_buffer() const { return false; }
+    virtual bool is_node_wrapper() const { return false; }
 
     virtual const char* class_name() const override { return "Object"; }
-    virtual void visit_children(Cell::Visitor&) override;
+    virtual void visit_edges(Cell::Visitor&) override;
 
     virtual Object* prototype();
     virtual const Object* prototype() const;
@@ -138,8 +146,7 @@ public:
     virtual bool prevent_extensions();
 
     virtual Value value_of() const { return Value(const_cast<Object*>(this)); }
-    virtual Value to_primitive(Value::PreferredType preferred_type = Value::PreferredType::Default) const;
-    virtual Value to_string() const;
+    virtual Value ordinary_to_primitive(Value::PreferredType preferred_type) const;
 
     Value get_direct(size_t index) const { return m_storage[index]; }
 
@@ -149,25 +156,31 @@ public:
 
     Value invoke(const StringOrSymbol& property_name, Optional<MarkedValueList> arguments = {});
 
+    void ensure_shape_is_unique();
+
+    void enable_transitions() { m_transitions_enabled = true; }
+    void disable_transitions() { m_transitions_enabled = false; }
+
 protected:
     enum class GlobalObjectTag { Tag };
     enum class ConstructWithoutPrototypeTag { Tag };
     explicit Object(GlobalObjectTag);
     Object(ConstructWithoutPrototypeTag, GlobalObject&);
 
-private:
     virtual Value get_by_index(u32 property_index) const;
     virtual bool put_by_index(u32 property_index, Value);
+
+private:
     bool put_own_property(Object& this_object, const StringOrSymbol& property_name, Value, PropertyAttributes attributes, PutOwnPropertyMode = PutOwnPropertyMode::Put, bool throw_exceptions = true);
     bool put_own_property_by_index(Object& this_object, u32 property_index, Value, PropertyAttributes attributes, PutOwnPropertyMode = PutOwnPropertyMode::Put, bool throw_exceptions = true);
 
-    Value call_native_property_getter(Object* this_object, Value property) const;
-    void call_native_property_setter(Object* this_object, Value property, Value) const;
+    Value call_native_property_getter(NativeProperty& property, Value this_value) const;
+    void call_native_property_setter(NativeProperty& property, Value this_value, Value) const;
 
     void set_shape(Shape&);
-    void ensure_shape_is_unique();
 
     bool m_is_extensible { true };
+    bool m_transitions_enabled { true };
     Shape* m_shape { nullptr };
     Vector<Value> m_storage;
     IndexedProperties m_indexed_properties;

@@ -26,19 +26,26 @@
 
 #pragma once
 
+#include <AK/NonnullRefPtrVector.h>
 #include <LibWeb/DOM/Node.h>
 
-namespace Web {
+namespace Web::DOM {
 
 class ParentNode : public Node {
 public:
-    template<typename F> void for_each_child(F) const;
-    template<typename F> void for_each_child(F);
+    template<typename F>
+    void for_each_child(F) const;
+    template<typename F>
+    void for_each_child(F);
 
-    void remove_all_children();
+    RefPtr<Element> first_element_child();
+    RefPtr<Element> last_element_child();
+
+    RefPtr<Element> query_selector(const StringView&);
+    NonnullRefPtrVector<Element> query_selector_all(const StringView&);
 
 protected:
-    explicit ParentNode(Document& document, NodeType type)
+    ParentNode(Document& document, NodeType type)
         : Node(document, type)
     {
     }
@@ -59,3 +66,7 @@ inline void ParentNode::for_each_child(Callback callback)
 }
 
 }
+
+AK_BEGIN_TYPE_TRAITS(Web::DOM::ParentNode)
+static bool is_type(const Web::DOM::Node& node) { return node.is_parent_node(); }
+AK_END_TYPE_TRAITS()

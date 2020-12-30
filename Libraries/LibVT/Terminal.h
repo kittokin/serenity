@@ -38,7 +38,7 @@ namespace VT {
 
 class TerminalClient {
 public:
-    virtual ~TerminalClient() {}
+    virtual ~TerminalClient() { }
 
     virtual void beep() = 0;
     virtual void set_window_title(const StringView&) = 0;
@@ -76,14 +76,12 @@ public:
     Line& line(size_t index)
     {
         if (index < m_history.size())
-            return m_history[index];
+            return m_history[(m_history_start + index) % m_history.size()];
         return m_lines[index - m_history.size()];
     }
     const Line& line(size_t index) const
     {
-        if (index < m_history.size())
-            return m_history[index];
-        return m_lines[index - m_history.size()];
+        return const_cast<Terminal*>(this)->line(index);
     }
 
     Line& visible_line(size_t index)
@@ -95,8 +93,32 @@ public:
         return m_lines[index];
     }
 
-    size_t max_history_size() const { return 500; }
-    const NonnullOwnPtrVector<Line>& history() const { return m_history; }
+    size_t max_history_size() const { return m_max_history_lines; }
+    void set_max_history_size(size_t value)
+    {
+        if (value == 0) {
+            m_max_history_lines = 0;
+            m_history_start = 0;
+            m_history.clear();
+            m_client.terminal_history_changed();
+            return;
+        }
+
+        if (m_max_history_lines > value) {
+            NonnullOwnPtrVector<Line> new_history;
+            new_history.ensure_capacity(value);
+            auto existing_line_count = min(m_history.size(), value);
+            for (size_t i = m_history.size() - existing_line_count; i < m_history.size(); ++i) {
+                auto j = (m_history_start + i) % m_history.size();
+                new_history.unchecked_append(move(static_cast<Vector<NonnullOwnPtr<Line>>&>(m_history).at(j)));
+            }
+            m_history = move(new_history);
+            m_history_start = 0;
+            m_client.terminal_history_changed();
+        }
+        m_max_history_lines = value;
+    }
+    size_t history_size() const { return m_history.size(); }
 
     void inject_string(const StringView&);
     void handle_key_press(KeyCode, u32, u8 flags);
@@ -106,7 +128,7 @@ public:
 private:
     typedef Vector<unsigned, 4> ParamVector;
 
-    void on_codepoint(u32);
+    void on_code_point(u32);
 
     void scroll_up();
     void scroll_down();
@@ -154,7 +176,22 @@ private:
 
     TerminalClient& m_client;
 
+    size_t m_history_start = 0;
     NonnullOwnPtrVector<Line> m_history;
+    void add_line_to_history(NonnullOwnPtr<Line>&& line)
+    {
+        if (max_history_size() == 0)
+            return;
+
+        if (m_history.size() < max_history_size()) {
+            ASSERT(m_history_start == 0);
+            m_history.append(move(line));
+            return;
+        }
+        m_history.ptr_at(m_history_start) = move(line);
+        m_history_start = (m_history_start + 1) % m_history.size();
+    }
+
     NonnullOwnPtrVector<Line> m_lines;
 
     size_t m_scroll_region_top { 0 };
@@ -193,13 +230,14 @@ private:
     };
 
     ParserState m_parser_state { Normal };
-    u32 m_parser_codepoint { 0 };
+    u32 m_parser_code_point { 0 };
     Vector<u8> m_parameters;
     Vector<u8> m_intermediates;
     Vector<u8> m_xterm_parameters;
     Vector<bool> m_horizontal_tabs;
     u8 m_final { 0 };
-    u32 m_last_codepoint { 0 };
+    u32 m_last_code_point { 0 };
+    size_t m_max_history_lines { 1024 };
 };
 
 }

@@ -61,9 +61,7 @@ TEST_CASE(load_form)
     widgets.for_each([&](const JsonValue& widget_value) {
         auto& widget_object = widget_value.as_object();
         auto widget_class = widget_object.get("class").as_string();
-        widget_object.for_each_member([&](auto& property_name, const JsonValue& property_value) {
-            (void)property_name;
-            (void)property_value;
+        widget_object.for_each_member([&]([[maybe_unused]] auto& property_name, [[maybe_unused]] const JsonValue& property_value) {
             //dbgprintf("Set property %s.%s to '%s'\n", widget_class.characters(), property_name.characters(), property_value.serialized().characters());
         });
     });
@@ -106,7 +104,7 @@ TEST_CASE(json_string)
     EXPECT_EQ(json.type(), JsonValue::Type::String);
     EXPECT_EQ(json.as_string().is_null(), false);
     EXPECT_EQ(json.as_string().length(), size_t { 1 });
-    EXPECT_EQ(json.as_string() ==  "A", true);
+    EXPECT_EQ(json.as_string() == "A", true);
 }
 
 TEST_CASE(json_utf8_character)
@@ -115,7 +113,7 @@ TEST_CASE(json_utf8_character)
     EXPECT_EQ(json.type(), JsonValue::Type::String);
     EXPECT_EQ(json.as_string().is_null(), false);
     EXPECT_EQ(json.as_string().length(), size_t { 1 });
-    EXPECT_EQ(json.as_string() ==  "A", true);
+    EXPECT_EQ(json.as_string() == "A", true);
 }
 
 TEST_CASE(json_utf8_multibyte)
@@ -124,8 +122,8 @@ TEST_CASE(json_utf8_multibyte)
     EXPECT_EQ(json.type(), JsonValue::Type::String);
     EXPECT_EQ(json.as_string().is_null(), false);
     EXPECT_EQ(json.as_string().length(), size_t { 2 });
-    EXPECT_EQ(json.as_string() ==  "š", true);
-    EXPECT_EQ(json.as_string() ==  "\xc5\xa1", true);
+    EXPECT_EQ(json.as_string() == "š", true);
+    EXPECT_EQ(json.as_string() == "\xc5\xa1", true);
 }
 
 TEST_CASE(json_64_bit_value)
@@ -134,6 +132,15 @@ TEST_CASE(json_64_bit_value)
     JsonValue big_json_value(big_value);
     JsonValue big_json_value_copy = big_json_value;
     EXPECT_EQ(big_json_value.as_u64(), big_json_value_copy.as_u64());
+}
+
+TEST_CASE(json_duplicate_keys)
+{
+    JsonObject json;
+    json.set("test", "foo");
+    json.set("test", "bar");
+    json.set("test", "baz");
+    EXPECT_EQ(json.to_string(), "{\"test\":\"baz\"}");
 }
 
 TEST_MAIN(JSON)

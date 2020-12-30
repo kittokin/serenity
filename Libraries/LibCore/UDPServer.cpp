@@ -30,6 +30,7 @@
 #include <LibCore/UDPServer.h>
 #include <LibCore/UDPSocket.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #ifndef SOCK_NONBLOCK
 #    include <sys/ioctl.h>
@@ -53,6 +54,7 @@ UDPServer::UDPServer(Object* parent)
 
 UDPServer::~UDPServer()
 {
+    ::close(m_fd);
 }
 
 bool UDPServer::bind(const IPv4Address& address, u16 port)
@@ -60,12 +62,15 @@ bool UDPServer::bind(const IPv4Address& address, u16 port)
     if (m_bound)
         return false;
 
-    int rc;
     auto saddr = SocketAddress(address, port);
     auto in = saddr.to_sockaddr_in();
 
-    rc = ::bind(m_fd, (const sockaddr*)&in, sizeof(in));
-    ASSERT(rc == 0);
+    if (::bind(m_fd, (const sockaddr*)&in, sizeof(in)) != 0) {
+        perror("UDPServer::bind");
+        return false;
+    }
+
+    m_bound = true;
 
     m_notifier = Notifier::construct(m_fd, Notifier::Event::Read, this);
     m_notifier->on_ready_to_read = [this] {
@@ -77,13 +82,15 @@ bool UDPServer::bind(const IPv4Address& address, u16 port)
 
 ByteBuffer UDPServer::receive(size_t size, sockaddr_in& in)
 {
-    auto buf = ByteBuffer::create_zeroed(size);
+    auto buf = ByteBuffer::create_uninitialized(size);
     socklen_t in_len = sizeof(in);
     ssize_t rlen = ::recvfrom(m_fd, buf.data(), size, 0, (sockaddr*)&in, &in_len);
     if (rlen < 0) {
         dbg() << "recvfrom: " << strerror(errno);
         return {};
     }
+
+    buf.trim(rlen);
     return buf;
 }
 

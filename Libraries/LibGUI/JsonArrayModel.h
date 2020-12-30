@@ -64,12 +64,12 @@ public:
         return adopt(*new JsonArrayModel(json_path, move(fields)));
     }
 
-    virtual ~JsonArrayModel() override {}
+    virtual ~JsonArrayModel() override { }
 
     virtual int row_count(const ModelIndex& = ModelIndex()) const override { return m_array.size(); }
     virtual int column_count(const ModelIndex& = ModelIndex()) const override { return m_fields.size(); }
     virtual String column_name(int column) const override { return m_fields[column].column_name; }
-    virtual Variant data(const ModelIndex&, Role = Role::Display) const override;
+    virtual Variant data(const ModelIndex&, ModelRole = ModelRole::Display) const override;
     virtual void update() override;
 
     const String& json_path() const { return m_json_path; }

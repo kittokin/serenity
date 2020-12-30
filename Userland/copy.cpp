@@ -39,12 +39,13 @@ struct Options {
     StringView type;
 };
 
-Options parse_options(int argc, char* argv[])
+static Options parse_options(int argc, char* argv[])
 {
     const char* type = "text/plain";
     Vector<const char*> text;
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Copy text from stdin or the command-line to the clipboard.");
     args_parser.add_option(type, "Pick a type", "type", 't', "type");
     args_parser.add_positional_argument(text, "Text to copy", "text", Core::ArgsParser::Required::No);
     args_parser.parse(argc, argv);
@@ -58,7 +59,7 @@ Options parse_options(int argc, char* argv[])
         bool success = c_stdin->open(
             STDIN_FILENO,
             Core::IODevice::OpenMode::ReadOnly,
-            Core::File::ShouldCloseFileDescription::No);
+            Core::File::ShouldCloseFileDescriptor::No);
         ASSERT(success);
         auto buffer = c_stdin->read_all();
         dbg() << "Read size " << buffer.size();
@@ -80,7 +81,7 @@ int main(int argc, char* argv[])
     Options options = parse_options(argc, argv);
 
     auto& clipboard = GUI::Clipboard::the();
-    clipboard.set_data(options.data, options.type);
+    clipboard.set_data(options.data.bytes(), options.type);
 
     return 0;
 }

@@ -28,23 +28,23 @@
 
 #ifdef __serenity__
 
-#include <AK/Assertions.h>
-#include <AK/Types.h>
-#include <AK/Atomic.h>
-#include <unistd.h>
+#    include <AK/Assertions.h>
+#    include <AK/Atomic.h>
+#    include <AK/Types.h>
+#    include <unistd.h>
 
 namespace LibThread {
 
 class Lock {
 public:
-    Lock() {}
-    ~Lock() {}
+    Lock() { }
+    ~Lock() { }
 
     void lock();
     void unlock();
 
 private:
-    Atomic<int> m_holder { 0 };
+    Atomic<pid_t> m_holder { 0 };
     u32 m_level { 0 };
 };
 
@@ -65,7 +65,7 @@ private:
 
 ALWAYS_INLINE void Lock::lock()
 {
-    int tid = gettid();
+    pid_t tid = gettid();
     if (m_holder == tid) {
         ++m_level;
         return;
@@ -73,11 +73,10 @@ ALWAYS_INLINE void Lock::lock()
     for (;;) {
         int expected = 0;
         if (m_holder.compare_exchange_strong(expected, tid, AK::memory_order_acq_rel)) {
-            m_holder = tid;
             m_level = 1;
             return;
         }
-        donate(m_holder);
+        donate(expected);
     }
 }
 
@@ -85,17 +84,25 @@ inline void Lock::unlock()
 {
     ASSERT(m_holder == gettid());
     ASSERT(m_level);
-    --m_level;
-    if (!m_level)
+    if (m_level == 1)
         m_holder.store(0, AK::memory_order_release);
+    else
+        --m_level;
 }
 
-#define LOCKER(lock) LibThread::Locker locker(lock)
+#    define LOCKER(lock) LibThread::Locker locker(lock)
 
 template<typename T>
 class Lockable {
 public:
-    Lockable() {}
+    Lockable() { }
+
+    template<typename... Args>
+    Lockable(Args&&... args)
+        : m_resource(forward(args)...)
+    {
+    }
+
     Lockable(T&& resource)
         : m_resource(move(resource))
     {
@@ -128,6 +135,6 @@ public:
 
 }
 
-#define LOCKER(x)
+#    define LOCKER(x)
 
 #endif

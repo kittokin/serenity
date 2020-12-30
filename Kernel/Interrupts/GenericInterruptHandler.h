@@ -48,9 +48,7 @@ public:
 
     u8 interrupt_number() const { return m_interrupt_number; }
 
-    bool is_enabled() const { return m_enabled; }
-
-    size_t get_invoking_count() const { return m_invoking_count; }
+    size_t get_invoking_count() const { return m_invoking_count.load(AK::MemoryOrder::memory_order_relaxed); }
 
     virtual size_t sharing_devices_count() const = 0;
     virtual bool is_shared_handler() const = 0;
@@ -61,15 +59,19 @@ public:
     virtual const char* controller() const = 0;
 
     virtual bool eoi() = 0;
-    void increment_invoking_counter();
+    ALWAYS_INLINE void increment_invoking_counter()
+    {
+        m_invoking_count.fetch_add(1, AK::MemoryOrder::memory_order_relaxed);
+    }
 
 protected:
     void change_interrupt_number(u8 number);
-    explicit GenericInterruptHandler(u8 interrupt_number, bool disable_remap = false);
+    GenericInterruptHandler(u8 interrupt_number, bool disable_remap = false);
+
+    void disable_remap() { m_disable_remap = true; }
 
 private:
-    size_t m_invoking_count { 0 };
-    bool m_enabled { false };
+    Atomic<u32> m_invoking_count { 0 };
     u8 m_interrupt_number { 0 };
     bool m_disable_remap { false };
 };

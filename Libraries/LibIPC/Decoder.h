@@ -28,6 +28,7 @@
 
 #include <AK/Forward.h>
 #include <AK/NumericLimits.h>
+#include <AK/StdLibExtras.h>
 #include <AK/String.h>
 #include <LibIPC/Forward.h>
 #include <LibIPC/Message.h>
@@ -37,14 +38,15 @@ namespace IPC {
 template<typename T>
 inline bool decode(Decoder&, T&)
 {
+    static_assert(DependentFalse<T>, "Base IPC::decoder() instantiated");
     ASSERT_NOT_REACHED();
-    return false;
 }
 
 class Decoder {
 public:
-    explicit Decoder(BufferStream& stream)
+    Decoder(InputMemoryStream& stream, int sockfd)
         : m_stream(stream)
+        , m_sockfd(sockfd)
     {
     }
 
@@ -59,8 +61,30 @@ public:
     bool decode(i64&);
     bool decode(float&);
     bool decode(String&);
+    bool decode(ByteBuffer&);
     bool decode(URL&);
     bool decode(Dictionary&);
+    bool decode(File&);
+    template<typename K, typename V>
+    bool decode(HashMap<K, V>& hashmap)
+    {
+        u32 size;
+        if (!decode(size) || size > NumericLimits<i32>::max())
+            return false;
+
+        for (size_t i = 0; i < size; ++i) {
+            K key;
+            if (!decode(key))
+                return false;
+
+            V value;
+            if (!decode(value))
+                return false;
+
+            hashmap.set(move(key), move(value));
+        }
+        return true;
+    }
 
     template<typename T>
     bool decode(T& value)
@@ -101,7 +125,8 @@ public:
     }
 
 private:
-    BufferStream& m_stream;
+    InputMemoryStream& m_stream;
+    int m_sockfd { -1 };
 };
 
 }

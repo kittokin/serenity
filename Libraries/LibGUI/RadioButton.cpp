@@ -33,9 +33,11 @@
 
 namespace GUI {
 
-RadioButton::RadioButton(const StringView& text)
-    : AbstractButton(text)
+RadioButton::RadioButton(String text)
+    : AbstractButton(move(text))
 {
+    set_min_width(32);
+    set_fixed_height(22);
 }
 
 RadioButton::~RadioButton()
@@ -66,6 +68,9 @@ void RadioButton::paint_event(PaintEvent& event)
     Gfx::IntRect text_rect { circle_rect.right() + 4, 0, font().width(text()), font().glyph_height() };
     text_rect.center_vertically_within(rect());
     paint_text(painter, text_rect, font(), Gfx::TextAlignment::TopLeft);
+
+    if (is_focused())
+        painter.draw_focus_rect(text_rect.inflated(6, 6), palette().focus_outline());
 }
 
 template<typename Callback>
@@ -74,7 +79,7 @@ void RadioButton::for_each_in_group(Callback callback)
     if (!parent())
         return;
     parent()->for_each_child_of_type<RadioButton>([&](auto& child) {
-        return callback(static_cast<RadioButton&>(child));
+        return callback(downcast<RadioButton>(child));
     });
 }
 

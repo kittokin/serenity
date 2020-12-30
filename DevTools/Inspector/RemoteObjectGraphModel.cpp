@@ -32,6 +32,8 @@
 #include <LibGUI/Application.h>
 #include <stdio.h>
 
+namespace Inspector {
+
 RemoteObjectGraphModel::RemoteObjectGraphModel(RemoteProcess& process)
     : m_process(process)
 {
@@ -96,10 +98,10 @@ int RemoteObjectGraphModel::column_count(const GUI::ModelIndex&) const
     return 1;
 }
 
-GUI::Variant RemoteObjectGraphModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant RemoteObjectGraphModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
     auto* remote_object = static_cast<RemoteObject*>(index.internal_data());
-    if (role == Role::Icon) {
+    if (role == GUI::ModelRole::Icon) {
         if (remote_object->class_name == "Window")
             return m_window_icon;
         if (remote_object->class_name == "Timer")
@@ -108,13 +110,15 @@ GUI::Variant RemoteObjectGraphModel::data(const GUI::ModelIndex& index, Role rol
             return m_layout_icon;
         return m_object_icon;
     }
-    if (role == Role::Display) {
-        return String::format("%s{%p}", remote_object->class_name.characters(), remote_object->address);
-    }
+    if (role == GUI::ModelRole::Display)
+        return String::formatted("{}({:p})", remote_object->class_name, remote_object->address);
+
     return {};
 }
 
 void RemoteObjectGraphModel::update()
 {
     did_update();
+}
+
 }

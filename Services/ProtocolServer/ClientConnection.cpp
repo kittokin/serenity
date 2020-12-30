@@ -36,7 +36,7 @@ namespace ProtocolServer {
 static HashMap<int, RefPtr<ClientConnection>> s_connections;
 
 ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket, int client_id)
-    : IPC::ClientConnection<ProtocolServerEndpoint>(*this, move(socket), client_id)
+    : IPC::ClientConnection<ProtocolClientEndpoint, ProtocolServerEndpoint>(*this, move(socket), client_id)
 {
     s_connections.set(client_id, *this);
 }
@@ -62,16 +62,19 @@ OwnPtr<Messages::ProtocolServer::StartDownloadResponse> ClientConnection::handle
 {
     URL url(message.url());
     if (!url.is_valid())
-        return make<Messages::ProtocolServer::StartDownloadResponse>(-1);
+        return make<Messages::ProtocolServer::StartDownloadResponse>(-1, -1);
     auto* protocol = Protocol::find_by_name(url.protocol());
     if (!protocol)
-        return make<Messages::ProtocolServer::StartDownloadResponse>(-1);
-    auto download = protocol->start_download(*this, url, message.request_headers().entries());
+        return make<Messages::ProtocolServer::StartDownloadResponse>(-1, -1);
+    auto download = protocol->start_download(*this, message.method(), url, message.request_headers().entries(), message.request_body());
     if (!download)
-        return make<Messages::ProtocolServer::StartDownloadResponse>(-1);
+        return make<Messages::ProtocolServer::StartDownloadResponse>(-1, -1);
     auto id = download->id();
+    auto fd = download->download_fd();
     m_downloads.set(id, move(download));
-    return make<Messages::ProtocolServer::StartDownloadResponse>(id);
+    auto response = make<Messages::ProtocolServer::StartDownloadResponse>(id, fd);
+    response->on_destruction = [fd] { close(fd); };
+    return response;
 }
 
 OwnPtr<Messages::ProtocolServer::StopDownloadResponse> ClientConnection::handle(const Messages::ProtocolServer::StopDownload& message)
@@ -86,22 +89,20 @@ OwnPtr<Messages::ProtocolServer::StopDownloadResponse> ClientConnection::handle(
     return make<Messages::ProtocolServer::StopDownloadResponse>(success);
 }
 
-void ClientConnection::did_finish_download(Badge<Download>, Download& download, bool success)
+void ClientConnection::did_receive_headers(Badge<Download>, Download& download)
 {
-    RefPtr<SharedBuffer> buffer;
-    if (success && download.payload().size() > 0 && !download.payload().is_null()) {
-        buffer = SharedBuffer::create_with_size(download.payload().size());
-        memcpy(buffer->data(), download.payload().data(), download.payload().size());
-        buffer->seal();
-        buffer->share_with(client_pid());
-        m_shared_buffers.set(buffer->shbuf_id(), buffer);
-    }
-    ASSERT(download.total_size().has_value());
-
     IPC::Dictionary response_headers;
     for (auto& it : download.response_headers())
         response_headers.add(it.key, it.value);
-    post_message(Messages::ProtocolClient::DownloadFinished(download.id(), success, download.status_code(), download.total_size().value(), buffer ? buffer->shbuf_id() : -1, response_headers));
+
+    post_message(Messages::ProtocolClient::HeadersBecameAvailable(download.id(), move(response_headers), download.status_code()));
+}
+
+void ClientConnection::did_finish_download(Badge<Download>, Download& download, bool success)
+{
+    ASSERT(download.total_size().has_value());
+
+    post_message(Messages::ProtocolClient::DownloadFinished(download.id(), success, download.total_size().value()));
 
     m_downloads.remove(download.id());
 }
@@ -111,15 +112,25 @@ void ClientConnection::did_progress_download(Badge<Download>, Download& download
     post_message(Messages::ProtocolClient::DownloadProgress(download.id(), download.total_size(), download.downloaded_size()));
 }
 
+void ClientConnection::did_request_certificates(Badge<Download>, Download& download)
+{
+    post_message(Messages::ProtocolClient::CertificateRequested(download.id()));
+}
+
 OwnPtr<Messages::ProtocolServer::GreetResponse> ClientConnection::handle(const Messages::ProtocolServer::Greet&)
 {
     return make<Messages::ProtocolServer::GreetResponse>(client_id());
 }
 
-OwnPtr<Messages::ProtocolServer::DisownSharedBufferResponse> ClientConnection::handle(const Messages::ProtocolServer::DisownSharedBuffer& message)
+OwnPtr<Messages::ProtocolServer::SetCertificateResponse> ClientConnection::handle(const Messages::ProtocolServer::SetCertificate& message)
 {
-    m_shared_buffers.remove(message.shbuf_id());
-    return make<Messages::ProtocolServer::DisownSharedBufferResponse>();
+    auto* download = const_cast<Download*>(m_downloads.get(message.download_id()).value_or(nullptr));
+    bool success = false;
+    if (download) {
+        download->set_certificate(message.certificate(), message.key());
+        success = true;
+    }
+    return make<Messages::ProtocolServer::SetCertificateResponse>(success);
 }
 
 }

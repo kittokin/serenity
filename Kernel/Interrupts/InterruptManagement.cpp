@@ -24,9 +24,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/FixedArray.h>
 #include <AK/StringView.h>
 #include <Kernel/ACPI/MultiProcessorParser.h>
+#include <Kernel/API/Syscall.h>
 #include <Kernel/Arch/i386/CPU.h>
 #include <Kernel/CommandLine.h>
 #include <Kernel/IO.h>
@@ -36,7 +36,6 @@
 #include <Kernel/Interrupts/PIC.h>
 #include <Kernel/Interrupts/SpuriousInterruptHandler.h>
 #include <Kernel/Interrupts/UnhandledInterruptHandler.h>
-#include <Kernel/API/Syscall.h>
 #include <Kernel/VM/MemoryManager.h>
 #include <Kernel/VM/TypedMapping.h>
 
@@ -138,6 +137,7 @@ PhysicalAddress InterruptManagement::search_for_madt()
 InterruptManagement::InterruptManagement()
     : m_madt(search_for_madt())
 {
+    m_interrupt_controllers.resize(1);
 }
 
 void InterruptManagement::switch_to_pic_mode()

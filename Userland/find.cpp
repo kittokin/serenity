@@ -24,6 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/LexicalPath.h>
 #include <AK/NonnullOwnPtr.h>
 #include <AK/OwnPtr.h>
 #include <AK/Vector.h>
@@ -40,7 +41,7 @@ bool g_follow_symlinks = false;
 bool g_there_was_an_error = false;
 bool g_have_seen_action_command = false;
 
-[[noreturn]] void fatal_error(const char* format, ...)
+[[noreturn]] static void fatal_error(const char* format, ...)
 {
     fputs("\033[31m", stderr);
 
@@ -143,7 +144,7 @@ public:
             m_uid = passwd->pw_uid;
         } else {
             // Attempt to parse it as decimal UID.
-            auto number =  StringView(arg).to_uint();
+            auto number = StringView(arg).to_uint();
             if (!number.has_value())
                 fatal_error("Invalid user: \033[1m%s", arg);
             m_uid = number.value();
@@ -210,6 +211,25 @@ private:
 
     off_t m_size { 0 };
     bool m_is_bytes { false };
+};
+
+class NameCommand : public Command {
+public:
+    NameCommand(const char* pattern, CaseSensitivity case_sensitivity)
+        : m_pattern(pattern)
+        , m_case_sensitivity(case_sensitivity)
+    {
+    }
+
+private:
+    virtual bool evaluate(const char* file_path) const override
+    {
+        LexicalPath path { file_path };
+        return path.basename().matches(m_pattern, m_case_sensitivity);
+    }
+
+    StringView m_pattern;
+    CaseSensitivity m_case_sensitivity { CaseSensitivity::CaseSensitive };
 };
 
 class PrintCommand final : public Command {
@@ -309,11 +329,11 @@ private:
     NonnullOwnPtr<Command> m_rhs;
 };
 
-OwnPtr<Command> parse_complex_command(char* argv[]);
+static OwnPtr<Command> parse_complex_command(char* argv[]);
 
 // Parse a simple command starting at optind; leave optind at its the last
 // argument. Return nullptr if we reach the end of arguments.
-OwnPtr<Command> parse_simple_command(char* argv[])
+static OwnPtr<Command> parse_simple_command(char* argv[])
 {
     StringView arg = argv[optind];
 
@@ -335,6 +355,10 @@ OwnPtr<Command> parse_simple_command(char* argv[])
         return make<GroupCommand>(argv[++optind]);
     } else if (arg == "-size") {
         return make<SizeCommand>(argv[++optind]);
+    } else if (arg == "-name") {
+        return make<NameCommand>(argv[++optind], CaseSensitivity::CaseSensitive);
+    } else if (arg == "-iname") {
+        return make<NameCommand>(argv[++optind], CaseSensitivity::CaseInsensitive);
     } else if (arg == "-print") {
         g_have_seen_action_command = true;
         return make<PrintCommand>();
@@ -352,14 +376,16 @@ OwnPtr<Command> parse_simple_command(char* argv[])
     }
 }
 
-OwnPtr<Command> parse_complex_command(char* argv[])
+static OwnPtr<Command> parse_complex_command(char* argv[])
 {
     auto command = parse_simple_command(argv);
 
     while (command && argv[optind] && argv[optind + 1]) {
         StringView arg = argv[++optind];
 
-        enum { And, Or } binary_operation = And;
+        enum { And,
+            Or } binary_operation
+            = And;
 
         if (arg == "-a") {
             optind++;
@@ -389,7 +415,7 @@ OwnPtr<Command> parse_complex_command(char* argv[])
     return command;
 }
 
-NonnullOwnPtr<Command> parse_all_commands(char* argv[])
+static NonnullOwnPtr<Command> parse_all_commands(char* argv[])
 {
     auto command = parse_complex_command(argv);
 
@@ -405,7 +431,7 @@ NonnullOwnPtr<Command> parse_all_commands(char* argv[])
     return make<AndCommand>(command.release_nonnull(), make<PrintCommand>());
 }
 
-const char* parse_options(int argc, char* argv[])
+static const char* parse_options(int argc, char* argv[])
 {
     // Sadly, we can't use Core::ArgsParser, because find accepts arguments in
     // an extremely unusual format. We're going to try to use getopt(), though.
@@ -440,7 +466,7 @@ const char* parse_options(int argc, char* argv[])
     }
 }
 
-void walk_tree(const char* root_path, Command& command)
+static void walk_tree(const char* root_path, Command& command)
 {
     command.evaluate(root_path);
 

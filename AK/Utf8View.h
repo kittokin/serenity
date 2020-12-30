@@ -45,7 +45,12 @@ public:
     Utf8CodepointIterator& operator++();
     u32 operator*() const;
 
-    int codepoint_length_in_bytes() const;
+    ssize_t operator-(const Utf8CodepointIterator& other) const
+    {
+        return m_ptr - other.m_ptr;
+    }
+
+    int code_point_length_in_bytes() const;
     bool done() const { return !m_length; }
 
 private:
@@ -56,6 +61,8 @@ private:
 
 class Utf8View {
 public:
+    using Iterator = Utf8CodepointIterator;
+
     Utf8View() { }
     explicit Utf8View(const String&);
     explicit Utf8View(const StringView&);
@@ -69,9 +76,14 @@ public:
 
     const unsigned char* bytes() const { return begin_ptr(); }
     int byte_length() const { return m_string.length(); }
-    int byte_offset_of(const Utf8CodepointIterator&) const;
+    size_t byte_offset_of(const Utf8CodepointIterator&) const;
     Utf8View substring_view(int byte_offset, int byte_length) const;
     bool is_empty() const { return m_string.is_empty(); }
+
+    size_t iterator_offset(const Utf8CodepointIterator& it) const
+    {
+        return byte_offset_of(it);
+    }
 
     bool validate(size_t& valid_bytes) const;
     bool validate() const
@@ -80,13 +92,23 @@ public:
         return validate(valid_bytes);
     }
 
-    size_t length_in_codepoints() const;
+    size_t length() const
+    {
+        if (!m_have_length) {
+            m_length = calculate_length();
+            m_have_length = true;
+        }
+        return m_length;
+    }
 
 private:
     const unsigned char* begin_ptr() const;
     const unsigned char* end_ptr() const;
+    size_t calculate_length() const;
 
     StringView m_string;
+    mutable size_t m_length { 0 };
+    mutable bool m_have_length { false };
 };
 
 }

@@ -52,6 +52,8 @@ void Terminal::clear()
 void Terminal::clear_including_history()
 {
     m_history.clear();
+    m_history_start = 0;
+
     clear();
 
     m_client.terminal_history_changed();
@@ -91,9 +93,9 @@ void Terminal::alter_mode(bool should_set, bool question_param, const ParamVecto
             // Hide cursor command, but doesn't need to be run (for now, because
             // we don't do inverse control codes anyways)
             if (should_set)
-                dbgprintf("Terminal: Hide Cursor escapecode recieved. Not needed: ignored.\n");
+                dbgprintf("Terminal: Hide Cursor escapecode received. Not needed: ignored.\n");
             else
-                dbgprintf("Terminal: Show Cursor escapecode recieved. Not needed: ignored.\n");
+                dbgprintf("Terminal: Show Cursor escapecode received. Not needed: ignored.\n");
             break;
         default:
             break;
@@ -244,7 +246,7 @@ void Terminal::escape$t(const ParamVector& params)
 {
     if (params.size() < 1)
         return;
-    dbgprintf("FIXME: escape$t: Ps: %u (param count: %d)\n", params[0], params.size());
+    dbgprintf("FIXME: escape$t: Ps: %u (param count: %zu)\n", params[0], params.size());
 }
 
 void Terminal::DECSTBM(const ParamVector& params)
@@ -361,7 +363,7 @@ void Terminal::escape$b(const ParamVector& params)
         return;
 
     for (unsigned i = 0; i < params[0]; ++i)
-        put_character_at(m_cursor_row, m_cursor_column++, m_last_codepoint);
+        put_character_at(m_cursor_row, m_cursor_column++, m_last_code_point);
 }
 
 void Terminal::escape$d(const ParamVector& params)
@@ -537,11 +539,11 @@ void Terminal::escape$P(const ParamVector& params)
 
     // Move n characters of line to the left
     for (int i = m_cursor_column; i < line.length() - num; i++)
-        line.set_codepoint(i, line.codepoint(i + num));
+        line.set_code_point(i, line.code_point(i + num));
 
     // Fill remainder of line with blanks
     for (int i = line.length() - num; i < line.length(); i++)
-        line.set_codepoint(i, ' ');
+        line.set_code_point(i, ' ');
 
     line.set_dirty(true);
 }
@@ -574,9 +576,14 @@ void Terminal::execute_xterm_command()
         m_client.set_window_title(params[1]);
         break;
     case 8:
-        m_current_attribute.href = params[2];
-        // FIXME: Respect the provided ID
-        m_current_attribute.href_id = String::format("%u", m_next_href_id++);
+        if (params[2].is_empty()) {
+            m_current_attribute.href = String();
+            m_current_attribute.href_id = String();
+        } else {
+            m_current_attribute.href = params[2];
+            // FIXME: Respect the provided ID
+            m_current_attribute.href_id = String::format("%u", m_next_href_id++);
+        }
         break;
     case 9:
         m_client.set_window_progress(numeric_params[1], numeric_params[2]);
@@ -706,8 +713,12 @@ void Terminal::execute_escape_sequence(u8 final)
     dbgprintf("\n");
     for (auto& line : m_lines) {
         dbgprintf("Terminal: Line: ");
-        for (int i = 0; i < line.m_length; i++) {
-            dbgprintf("%c", line.characters[i]);
+        for (int i = 0; i < line.length(); i++) {
+            u32 codepoint = line.code_point(i);
+            if (codepoint < 128)
+                dbgprintf("%c", (char)codepoint);
+            else
+                dbgprintf("<U+%04x>", codepoint);
         }
         dbgprintf("\n");
     }
@@ -734,9 +745,7 @@ void Terminal::scroll_up()
     invalidate_cursor();
     if (m_scroll_region_top == 0) {
         auto line = move(m_lines.ptr_at(m_scroll_region_top));
-        m_history.append(move(line));
-        while (m_history.size() > max_history_size())
-            m_history.take_first();
+        add_line_to_history(move(line));
         m_client.terminal_history_changed();
     }
     m_lines.remove(m_scroll_region_top);
@@ -768,17 +777,17 @@ void Terminal::set_cursor(unsigned a_row, unsigned a_column)
     invalidate_cursor();
 }
 
-void Terminal::put_character_at(unsigned row, unsigned column, u32 codepoint)
+void Terminal::put_character_at(unsigned row, unsigned column, u32 code_point)
 {
     ASSERT(row < rows());
     ASSERT(column < columns());
     auto& line = m_lines[row];
-    line.set_codepoint(column, codepoint);
+    line.set_code_point(column, code_point);
     line.attributes()[column] = m_current_attribute;
     line.attributes()[column].flags |= Attribute::Touched;
     line.set_dirty(true);
 
-    m_last_codepoint = codepoint;
+    m_last_code_point = code_point;
 }
 
 void Terminal::NEL()
@@ -815,19 +824,19 @@ void Terminal::DSR(const ParamVector& params)
 void Terminal::on_input(u8 ch)
 {
 #ifdef TERMINAL_DEBUG
-    dbgprintf("Terminal::on_char: %b (%c), fg=%u, bg=%u\n", ch, ch, m_current_attribute.foreground_color, m_current_attribute.background_color);
+    dbgln("Terminal::on_input: {:#02x} ({:c}), fg={}, bg={}\n", ch, ch, m_current_attribute.foreground_color, m_current_attribute.background_color);
 #endif
 
     auto fail_utf8_parse = [this] {
         m_parser_state = Normal;
-        on_codepoint('%');
+        on_code_point(U'�');
     };
 
     auto advance_utf8_parse = [this, ch] {
-        m_parser_codepoint <<= 6;
-        m_parser_codepoint |= ch & 0x3f;
+        m_parser_code_point <<= 6;
+        m_parser_code_point |= ch & 0x3f;
         if (m_parser_state == UTF8Needs1Byte) {
-            on_codepoint(m_parser_codepoint);
+            on_code_point(m_parser_code_point);
             m_parser_state = Normal;
         } else {
             m_parser_state = (ParserState)(m_parser_state + 1);
@@ -928,17 +937,17 @@ void Terminal::on_input(u8 ch)
             break;
         if ((ch & 0xe0) == 0xc0) {
             m_parser_state = UTF8Needs1Byte;
-            m_parser_codepoint = ch & 0x1f;
+            m_parser_code_point = ch & 0x1f;
             return;
         }
         if ((ch & 0xf0) == 0xe0) {
             m_parser_state = UTF8Needs2Bytes;
-            m_parser_codepoint = ch & 0x0f;
+            m_parser_code_point = ch & 0x0f;
             return;
         }
         if ((ch & 0xf8) == 0xf0) {
             m_parser_state = UTF8Needs3Bytes;
-            m_parser_codepoint = ch & 0x07;
+            m_parser_code_point = ch & 0x07;
             return;
         }
         fail_utf8_parse();
@@ -978,26 +987,26 @@ void Terminal::on_input(u8 ch)
         return;
     }
 
-    on_codepoint(ch);
+    on_code_point(ch);
 }
 
-void Terminal::on_codepoint(u32 codepoint)
+void Terminal::on_code_point(u32 code_point)
 {
     auto new_column = m_cursor_column + 1;
     if (new_column < columns()) {
-        put_character_at(m_cursor_row, m_cursor_column, codepoint);
+        put_character_at(m_cursor_row, m_cursor_column, code_point);
         set_cursor(m_cursor_row, new_column);
         return;
     }
     if (m_stomp) {
         m_stomp = false;
         newline();
-        put_character_at(m_cursor_row, m_cursor_column, codepoint);
+        put_character_at(m_cursor_row, m_cursor_column, code_point);
         set_cursor(m_cursor_row, 1);
     } else {
         // Curious: We wait once on the right-hand side
         m_stomp = true;
-        put_character_at(m_cursor_row, m_cursor_column, codepoint);
+        put_character_at(m_cursor_row, m_cursor_column, code_point);
     }
 }
 
@@ -1017,37 +1026,51 @@ void Terminal::handle_key_press(KeyCode key, u32 code_point, u8 flags)
     bool ctrl = flags & Mod_Ctrl;
     bool alt = flags & Mod_Alt;
     bool shift = flags & Mod_Shift;
+    unsigned modifier_mask = int(shift) + (int(alt) << 1) + (int(ctrl) << 2);
+
+    auto emit_final_with_modifier = [this, modifier_mask](char final) {
+        if (modifier_mask)
+            emit_string(String::format("\e[1;%d%c", modifier_mask + 1, final));
+        else
+            emit_string(String::format("\e[%c", final));
+    };
+    auto emit_tilde_with_modifier = [this, modifier_mask](unsigned num) {
+        if (modifier_mask)
+            emit_string(String::format("\e[%d;%d~", num, modifier_mask + 1));
+        else
+            emit_string(String::format("\e[%d~", num));
+    };
 
     switch (key) {
     case KeyCode::Key_Up:
-        emit_string(ctrl ? "\033[OA" : "\033[A");
+        emit_final_with_modifier('A');
         return;
     case KeyCode::Key_Down:
-        emit_string(ctrl ? "\033[OB" : "\033[B");
+        emit_final_with_modifier('B');
         return;
     case KeyCode::Key_Right:
-        emit_string(ctrl ? "\033[OC" : "\033[C");
+        emit_final_with_modifier('C');
         return;
     case KeyCode::Key_Left:
-        emit_string(ctrl ? "\033[OD" : "\033[D");
+        emit_final_with_modifier('D');
         return;
     case KeyCode::Key_Insert:
-        emit_string("\033[2~");
+        emit_tilde_with_modifier(2);
         return;
     case KeyCode::Key_Delete:
-        emit_string("\033[3~");
+        emit_tilde_with_modifier(3);
         return;
     case KeyCode::Key_Home:
-        emit_string("\033[H");
+        emit_final_with_modifier('H');
         return;
     case KeyCode::Key_End:
-        emit_string("\033[F");
+        emit_final_with_modifier('F');
         return;
     case KeyCode::Key_PageUp:
-        emit_string("\033[5~");
+        emit_tilde_with_modifier(5);
         return;
     case KeyCode::Key_PageDown:
-        emit_string("\033[6~");
+        emit_tilde_with_modifier(6);
         return;
     default:
         break;
@@ -1078,7 +1101,7 @@ void Terminal::handle_key_press(KeyCode key, u32 code_point, u8 flags)
         emit_string("\033");
 
     StringBuilder sb;
-    sb.append_codepoint(code_point);
+    sb.append_code_point(code_point);
 
     emit_string(sb.to_string());
 }

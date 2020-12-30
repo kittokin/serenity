@@ -38,16 +38,16 @@
 #include <LibCore/File.h>
 #include <LibDebug/DebugSession.h>
 #include <LibELF/Image.h>
-#include <LibM/math.h>
 #include <LibX86/Disassembler.h>
 #include <LibX86/Instruction.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-OwnPtr<DebugSession> g_debug_session;
+static OwnPtr<Debug::DebugSession> g_debug_session;
 static bool g_should_output_color = false;
 
 static void handle_sigint(int)
@@ -58,36 +58,35 @@ static void handle_sigint(int)
     g_debug_session = nullptr;
 }
 
-void print_function_call(String function_name, size_t depth)
+static void print_function_call(String function_name, size_t depth)
 {
     for (size_t i = 0; i < depth; ++i) {
-        printf("  ");
+        out("  ");
     }
-    printf("=> %s\n", function_name.characters());
+    outln("=> {}", function_name);
 }
 
-void print_syscall(PtraceRegisters& regs, size_t depth)
+static void print_syscall(PtraceRegisters& regs, size_t depth)
 {
     for (size_t i = 0; i < depth; ++i) {
         printf("  ");
     }
     const char* begin_color = g_should_output_color ? "\033[34;1m" : "";
     const char* end_color = g_should_output_color ? "\033[0m" : "";
-    printf("=> %sSC_%s(0x%x, 0x%x, 0x%x)%s\n",
+    outln("=> {}SC_{}(0x{:x}, 0x{:x}, 0x{:x}){}",
         begin_color,
-        Syscall::to_string(
-            (Syscall::Function)regs.eax),
+        Syscall::to_string((Syscall::Function)regs.eax),
         regs.edx,
         regs.ecx,
         regs.ebx,
         end_color);
 }
 
-NonnullOwnPtr<HashMap<void*, X86::Instruction>> instrument_code()
+static NonnullOwnPtr<HashMap<void*, X86::Instruction>> instrument_code()
 {
-    (void)demangle("foo"); // Required for linked with __cxa_demangle
+    [[maybe_unused]] auto r = demangle("foo"); // Required for linked with __cxa_demangle
     auto instrumented = make<HashMap<void*, X86::Instruction>>();
-    g_debug_session->elf().image().for_each_section_of_type(SHT_PROGBITS, [&](const ELF::Image::Section& section) {
+    g_debug_session->elf().for_each_section_of_type(SHT_PROGBITS, [&](const ELF::Image::Section& section) {
         if (section.name() != ".text")
             return IterationDecision::Continue;
 
@@ -126,9 +125,9 @@ int main(int argc, char** argv)
         "program", Core::ArgsParser::Required::Yes);
     args_parser.parse(argc, argv);
 
-    auto result = DebugSession::exec_and_attach(command);
+    auto result = Debug::DebugSession::exec_and_attach(command);
     if (!result) {
-        fprintf(stderr, "Failed to start debugging session for: \"%s\"\n", command);
+        warnln("Failed to start debugging session for: \"{}\"", command);
         exit(1);
     }
     g_debug_session = result.release_nonnull();
@@ -143,29 +142,29 @@ int main(int argc, char** argv)
     size_t depth = 0;
     bool new_function = true;
 
-    g_debug_session->run([&](DebugSession::DebugBreakReason reason, Optional<PtraceRegisters> regs) {
-        if (reason == DebugSession::DebugBreakReason::Exited) {
-            printf("Program exited.\n");
-            return DebugSession::DebugDecision::Detach;
+    g_debug_session->run([&](Debug::DebugSession::DebugBreakReason reason, Optional<PtraceRegisters> regs) {
+        if (reason == Debug::DebugSession::DebugBreakReason::Exited) {
+            outln("Program exited.");
+            return Debug::DebugSession::DebugDecision::Detach;
         }
 
-        if (reason == DebugSession::DebugBreakReason::Syscall) {
+        if (reason == Debug::DebugSession::DebugBreakReason::Syscall) {
             print_syscall(regs.value(), depth + 1);
-            return DebugSession::DebugDecision::ContinueBreakAtSyscall;
+            return Debug::DebugSession::DebugDecision::ContinueBreakAtSyscall;
         }
 
         if (new_function) {
             auto function_name = g_debug_session->elf().symbolicate(regs.value().eip);
             print_function_call(function_name, depth);
             new_function = false;
-            return DebugSession::ContinueBreakAtSyscall;
+            return Debug::DebugSession::ContinueBreakAtSyscall;
         }
         auto instruction = instrumented->get((void*)regs.value().eip).value();
 
         if (instruction.mnemonic() == "RET") {
             if (depth != 0)
                 --depth;
-            return DebugSession::ContinueBreakAtSyscall;
+            return Debug::DebugSession::ContinueBreakAtSyscall;
         }
 
         // FIXME: we could miss some leaf functions that were called with a jump
@@ -174,6 +173,6 @@ int main(int argc, char** argv)
         ++depth;
         new_function = true;
 
-        return DebugSession::DebugDecision::SingleStep;
+        return Debug::DebugSession::DebugDecision::SingleStep;
     });
 }

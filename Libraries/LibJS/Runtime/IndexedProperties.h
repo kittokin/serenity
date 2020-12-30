@@ -83,7 +83,7 @@ public:
     virtual void set_array_like_size(size_t new_size) override;
 
     virtual bool is_simple_storage() const override { return true; }
-    Vector<Value> elements() const { return m_packed_elements; }
+    const Vector<Value>& elements() const { return m_packed_elements; }
 
 private:
     friend GenericIndexedPropertyStorage;
@@ -109,8 +109,8 @@ public:
     virtual size_t array_like_size() const override { return m_array_size; }
     virtual void set_array_like_size(size_t new_size) override;
 
-    Vector<ValueAndAttributes> packed_elements() const { return m_packed_elements; }
-    HashMap<u32, ValueAndAttributes> sparse_elements() const { return m_sparse_elements; }
+    const Vector<ValueAndAttributes>& packed_elements() const { return m_packed_elements; }
+    const HashMap<u32, ValueAndAttributes>& sparse_elements() const { return m_sparse_elements; }
 
 private:
     size_t m_array_size { 0 };
@@ -130,6 +130,8 @@ public:
     ValueAndAttributes value_and_attributes(Object* this_object, bool evaluate_accessors = true);
 
 private:
+    void skip_empty_indices();
+
     const IndexedProperties& m_indexed_properties;
     u32 m_index;
     bool m_skip_empty;
@@ -159,12 +161,25 @@ public:
     IndexedPropertyIterator begin(bool skip_empty = true) const { return IndexedPropertyIterator(*this, 0, skip_empty); };
     IndexedPropertyIterator end() const { return IndexedPropertyIterator(*this, array_like_size(), false); };
 
-    size_t size() const { return m_storage->size(); }
-    bool is_empty() const { return size() == 0; }
+    bool is_empty() const { return array_like_size() == 0; }
     size_t array_like_size() const { return m_storage->array_like_size(); }
-    void set_array_like_size(size_t new_size) { m_storage->set_array_like_size(new_size); };
+    void set_array_like_size(size_t);
 
-    Vector<ValueAndAttributes> values_unordered() const;
+    Vector<u32> indices() const;
+
+    template<typename Callback>
+    void for_each_value(Callback callback)
+    {
+        if (m_storage->is_simple_storage()) {
+            for (auto& value : static_cast<SimpleIndexedPropertyStorage&>(*m_storage).elements())
+                callback(value);
+        } else {
+            for (auto& element : static_cast<const GenericIndexedPropertyStorage&>(*m_storage).packed_elements())
+                callback(element.value);
+            for (auto& element : static_cast<const GenericIndexedPropertyStorage&>(*m_storage).sparse_elements())
+                callback(element.value.value);
+        }
+    }
 
 private:
     void switch_to_generic_storage();

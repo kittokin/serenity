@@ -32,6 +32,8 @@
 #include <LibGUI/TreeView.h>
 #include <sys/arch/i386/regs.h>
 
+namespace HackStudio {
+
 class VariablesModel final : public GUI::Model {
 public:
     static RefPtr<VariablesModel> create(const PtraceRegisters& regs);
@@ -40,20 +42,22 @@ public:
 
     virtual int row_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override;
     virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return 1; }
-    virtual GUI::Variant data(const GUI::ModelIndex& index, Role role = Role::Display) const override;
+    virtual GUI::Variant data(const GUI::ModelIndex& index, GUI::ModelRole role) const override;
     virtual void update() override;
     virtual GUI::ModelIndex parent_index(const GUI::ModelIndex&) const override;
     virtual GUI::ModelIndex index(int row, int column = 0, const GUI::ModelIndex& = GUI::ModelIndex()) const override;
 
 private:
-    explicit VariablesModel(NonnullOwnPtrVector<DebugInfo::VariableInfo>&& variables, const PtraceRegisters& regs)
+    explicit VariablesModel(NonnullOwnPtrVector<Debug::DebugInfo::VariableInfo>&& variables, const PtraceRegisters& regs)
         : m_variables(move(variables))
         , m_regs(regs)
     {
         m_variable_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/inspector-object.png"));
     }
-    NonnullOwnPtrVector<DebugInfo::VariableInfo> m_variables;
+    NonnullOwnPtrVector<Debug::DebugInfo::VariableInfo> m_variables;
     PtraceRegisters m_regs;
 
     GUI::Icon m_variable_icon;
 };
+
+}

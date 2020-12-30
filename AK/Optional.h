@@ -30,13 +30,15 @@
 #include <AK/Platform.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Types.h>
+#include <AK/kmalloc.h>
 
 namespace AK {
 
 template<typename T>
-class alignas(T) Optional {
+class alignas(T) [[nodiscard]] Optional
+{
 public:
-    Optional() {}
+    Optional() { }
 
     Optional(const T& value)
         : m_has_value(true)
@@ -51,13 +53,13 @@ public:
         new (&m_storage) T(value);
     }
 
-    Optional(T&& value)
+    Optional(T && value)
         : m_has_value(true)
     {
         new (&m_storage) T(move(value));
     }
 
-    Optional(Optional&& other)
+    Optional(Optional && other)
         : m_has_value(other.m_has_value)
     {
         if (other.has_value()) {
@@ -97,6 +99,12 @@ public:
         return *this;
     }
 
+    template<typename O>
+    bool operator==(const Optional<O>& other) const
+    {
+        return has_value() == other.has_value() && (!has_value() || value() == other.value());
+    }
+
     ALWAYS_INLINE ~Optional()
     {
         clear();
@@ -108,6 +116,14 @@ public:
             value().~T();
             m_has_value = false;
         }
+    }
+
+    template<typename... Parameters>
+    ALWAYS_INLINE void emplace(Parameters && ... parameters)
+    {
+        clear();
+        m_has_value = true;
+        new (&m_storage) T(forward<Parameters>(parameters)...);
     }
 
     ALWAYS_INLINE bool has_value() const { return m_has_value; }

@@ -38,7 +38,7 @@ String Heading::render_to_html() const
     return builder.build();
 }
 
-String Heading::render_for_terminal() const
+String Heading::render_for_terminal(size_t) const
 {
     StringBuilder builder;
 
@@ -67,11 +67,12 @@ OwnPtr<Heading> Heading::parse(Vector<StringView>::ConstIterator& lines)
     const StringView& line = *lines;
     size_t level;
 
-    for (level = 0; level < line.length(); level++)
+    for (level = 0; level < line.length(); level++) {
         if (line[level] != '#')
             break;
+    }
 
-    if (level >= line.length() || line[level] != ' ')
+    if (!level || level >= line.length() || line[level] != ' ')
         return nullptr;
 
     StringView title_view = line.substring_view(level + 1, line.length() - level - 1);

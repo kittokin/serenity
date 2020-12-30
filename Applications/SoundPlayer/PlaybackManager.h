@@ -27,11 +27,12 @@
 #pragma once
 
 #include <AK/Vector.h>
+#include <LibAudio/Buffer.h>
 #include <LibAudio/ClientConnection.h>
-#include <LibAudio/WavLoader.h>
+#include <LibAudio/Loader.h>
 #include <LibCore/Timer.h>
 
-#define PLAYBACK_MANAGER_BUFFER_SIZE 64 * KB
+#define PLAYBACK_MANAGER_BUFFER_SIZE 64 * KiB
 #define PLAYBACK_MANAGER_RATE 44100
 
 class PlaybackManager final {
@@ -43,8 +44,9 @@ public:
     void stop();
     void pause();
     void seek(const int position);
+    void loop(bool);
     bool toggle_pause();
-    void set_loader(OwnPtr<Audio::WavLoader>&&);
+    void set_loader(NonnullRefPtr<Audio::Loader>&&);
 
     int last_seek() const { return m_last_seek; }
     bool is_paused() const { return m_paused; }
@@ -62,10 +64,11 @@ private:
     void remove_dead_buffers();
 
     bool m_paused { true };
+    bool m_loop = { false };
     size_t m_next_ptr { 0 };
     size_t m_last_seek { 0 };
     float m_total_length { 0 };
-    OwnPtr<Audio::WavLoader> m_loader { nullptr };
+    RefPtr<Audio::Loader> m_loader { nullptr };
     NonnullRefPtr<Audio::ClientConnection> m_connection;
     RefPtr<Audio::Buffer> m_next_buffer;
     RefPtr<Audio::Buffer> m_current_buffer;

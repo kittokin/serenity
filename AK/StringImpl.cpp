@@ -37,11 +37,12 @@
 unsigned g_stringimpl_count;
 static HashTable<StringImpl*>* g_all_live_stringimpls;
 
+void dump_all_stringimpls();
 void dump_all_stringimpls()
 {
     unsigned i = 0;
     for (auto& it : *g_all_live_stringimpls) {
-        dbgprsize_tf("%u: \"%s\"\n", i, (*it).characters());
+        dbgln("{}: \"{}\"", i, *it);
         ++i;
     }
 }
@@ -102,9 +103,6 @@ RefPtr<StringImpl> StringImpl::create(const char* cstring, size_t length, Should
     if (!cstring)
         return nullptr;
 
-    if (!length || !*cstring)
-        return the_empty_stringimpl();
-
     if (should_chomp) {
         while (length) {
             char last_ch = cstring[length - 1];
@@ -131,6 +129,11 @@ RefPtr<StringImpl> StringImpl::create(const char* cstring, ShouldChomp shouldCho
         return nullptr;
 
     return create(cstring, strlen(cstring), shouldChomp);
+}
+
+RefPtr<StringImpl> StringImpl::create(ReadonlyBytes bytes, ShouldChomp shouldChomp)
+{
+    return StringImpl::create(reinterpret_cast<const char*>(bytes.data()), bytes.size(), shouldChomp);
 }
 
 static inline bool is_ascii_lowercase(char c)

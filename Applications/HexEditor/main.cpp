@@ -25,6 +25,7 @@
  */
 
 #include "HexEditorWidget.h"
+#include <LibGUI/Icon.h>
 #include <LibGfx/Bitmap.h>
 #include <stdio.h>
 
@@ -42,9 +43,11 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    auto app_icon = GUI::Icon::default_icon("app-hexeditor");
+
     auto window = GUI::Window::construct();
     window->set_title("Hex Editor");
-    window->set_rect(20, 200, 640, 400);
+    window->resize(640, 400);
 
     auto& hex_editor_widget = window->set_main_widget<HexEditorWidget>();
 
@@ -55,7 +58,7 @@ int main(int argc, char** argv)
     };
 
     window->show();
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-hexeditor.png"));
+    window->set_icon(app_icon.bitmap_for_size(16));
 
     if (argc >= 2)
         hex_editor_widget.open_file(argv[1]);

@@ -25,26 +25,27 @@
  */
 
 #include <LibJS/Heap/Heap.h>
-#include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/GlobalObject.h>
-#include <LibJS/Runtime/Shape.h>
 #include <LibWeb/Bindings/WindowObject.h>
 #include <LibWeb/Bindings/XMLHttpRequestConstructor.h>
+#include <LibWeb/Bindings/XMLHttpRequestPrototype.h>
 #include <LibWeb/Bindings/XMLHttpRequestWrapper.h>
 #include <LibWeb/DOM/XMLHttpRequest.h>
 
-namespace Web {
-namespace Bindings {
+namespace Web::Bindings {
 
 XMLHttpRequestConstructor::XMLHttpRequestConstructor(JS::GlobalObject& global_object)
     : NativeFunction(*global_object.function_prototype())
 {
 }
 
-void XMLHttpRequestConstructor::initialize(JS::Interpreter& interpreter, JS::GlobalObject& global_object)
+void XMLHttpRequestConstructor::initialize(JS::GlobalObject& global_object)
 {
-    NativeFunction::initialize(interpreter, global_object);
-    define_property("length", JS::Value(1), JS::Attribute::Configurable);
+    auto& vm = this->vm();
+    NativeFunction::initialize(global_object);
+    auto& window = static_cast<WindowObject&>(global_object);
+    define_property(vm.names.prototype, window.xhr_prototype(), 0);
+    define_property(vm.names.length, JS::Value(1), JS::Attribute::Configurable);
 
     define_property("UNSENT", JS::Value((i32)XMLHttpRequest::ReadyState::Unsent), JS::Attribute::Enumerable);
     define_property("OPENED", JS::Value((i32)XMLHttpRequest::ReadyState::Opened), JS::Attribute::Enumerable);
@@ -57,16 +58,16 @@ XMLHttpRequestConstructor::~XMLHttpRequestConstructor()
 {
 }
 
-JS::Value XMLHttpRequestConstructor::call(JS::Interpreter& interpreter)
+JS::Value XMLHttpRequestConstructor::call()
 {
-    return construct(interpreter, *this);
+    vm().throw_exception<JS::TypeError>(global_object(), JS::ErrorType::ConstructorWithoutNew, "XMLHttpRequest");
+    return {};
 }
 
-JS::Value XMLHttpRequestConstructor::construct(JS::Interpreter& interpreter, Function&)
+JS::Value XMLHttpRequestConstructor::construct(Function&)
 {
     auto& window = static_cast<WindowObject&>(global_object());
-    return interpreter.heap().allocate<XMLHttpRequestWrapper>(window, window, XMLHttpRequest::create(window.impl()));
+    return heap().allocate<XMLHttpRequestWrapper>(window, window, XMLHttpRequest::create(window.impl()));
 }
 
-}
 }

@@ -41,17 +41,20 @@ public:
 
     unsigned index() const { return m_index; }
     String pts_name() const;
-    ssize_t on_slave_write(const u8*, ssize_t);
+    ssize_t on_slave_write(const UserOrKernelBuffer&, ssize_t);
     bool can_write_from_slave() const;
     void notify_slave_closed(Badge<SlavePTY>);
     bool is_closed() const { return m_closed; }
 
     virtual String absolute_path(const FileDescription&) const override;
 
+    // ^Device
+    virtual mode_t required_mode() const override { return 0640; }
+
 private:
     // ^CharacterDevice
-    virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) override;
-    virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) override;
+    virtual KResultOr<size_t> read(FileDescription&, size_t, UserOrKernelBuffer&, size_t) override;
+    virtual KResultOr<size_t> write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t) override;
     virtual bool can_read(const FileDescription&, size_t) const override;
     virtual bool can_write(const FileDescription&, size_t) const override;
     virtual KResult close() override;

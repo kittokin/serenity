@@ -41,16 +41,14 @@ public:
     };
 
     virtual ~Function();
-    virtual void initialize(Interpreter&, GlobalObject&) override { }
+    virtual void initialize(GlobalObject&) override { }
 
-    virtual Value call(Interpreter&) = 0;
-    virtual Value construct(Interpreter&, Function& new_target) = 0;
+    virtual Value call() = 0;
+    virtual Value construct(Function& new_target) = 0;
     virtual const FlyString& name() const = 0;
     virtual LexicalEnvironment* create_environment() = 0;
 
-    virtual void visit_children(Visitor&) override;
-
-    virtual bool is_script_function() const { return false; }
+    virtual void visit_edges(Visitor&) override;
 
     BoundFunction* bind(Value bound_this_value, Vector<Value> arguments);
 
@@ -63,6 +61,8 @@ public:
 
     ConstructorKind constructor_kind() const { return m_constructor_kind; };
     void set_constructor_kind(ConstructorKind constructor_kind) { m_constructor_kind = constructor_kind; }
+
+    virtual bool is_strict_mode() const { return false; }
 
 protected:
     explicit Function(Object& prototype);

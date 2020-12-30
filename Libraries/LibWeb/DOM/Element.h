@@ -29,31 +29,42 @@
 #include <AK/FlyString.h>
 #include <AK/String.h>
 #include <LibWeb/DOM/Attribute.h>
-#include <LibWeb/DOM/AttributeNames.h>
+#include <LibWeb/DOM/NonDocumentTypeChildNode.h>
 #include <LibWeb/DOM/ParentNode.h>
-#include <LibWeb/DOM/TagNames.h>
-#include <LibWeb/Layout/LayoutNode.h>
+#include <LibWeb/HTML/AttributeNames.h>
+#include <LibWeb/HTML/TagNames.h>
+#include <LibWeb/Layout/Node.h>
+#include <LibWeb/QualifiedName.h>
 
-namespace Web {
+namespace Web::DOM {
 
-class LayoutNodeWithStyle;
+class Element
+    : public ParentNode
+    , public NonDocumentTypeChildNode<Element> {
 
-class Element : public ParentNode {
 public:
     using WrapperType = Bindings::ElementWrapper;
 
-    Element(Document&, const FlyString& tag_name);
+    Element(Document&, const QualifiedName& qualified_name);
     virtual ~Element() override;
 
-    virtual FlyString node_name() const final { return m_tag_name; }
-    const FlyString& tag_name() const { return m_tag_name; }
+    virtual FlyString node_name() const final { return m_qualified_name.local_name(); }
+    const FlyString& local_name() const { return m_qualified_name.local_name(); }
+
+    // NOTE: This is for the JS bindings
+    const FlyString& tag_name() const { return local_name(); }
+
+    const FlyString& namespace_() const { return m_qualified_name.namespace_(); }
+
+    // NOTE: This is for the JS bindings
+    const FlyString& namespace_uri() const { return namespace_(); }
 
     bool has_attribute(const FlyString& name) const { return !attribute(name).is_null(); }
+    bool has_attributes() const { return !m_attributes.is_empty(); }
     String attribute(const FlyString& name) const;
     String get_attribute(const FlyString& name) const { return attribute(name); }
     void set_attribute(const FlyString& name, const String& value);
-
-    void set_attributes(Vector<Attribute>&&);
+    void remove_attribute(const FlyString& name);
 
     template<typename Callback>
     void for_each_attribute(Callback callback) const
@@ -65,47 +76,47 @@ public:
     bool has_class(const FlyString&) const;
     const Vector<FlyString>& class_names() const { return m_classes; }
 
-    virtual void apply_presentational_hints(StyleProperties&) const { }
+    virtual void apply_presentational_hints(CSS::StyleProperties&) const { }
     virtual void parse_attribute(const FlyString& name, const String& value);
 
     void recompute_style();
 
-    LayoutNodeWithStyle* layout_node() { return static_cast<LayoutNodeWithStyle*>(Node::layout_node()); }
-    const LayoutNodeWithStyle* layout_node() const { return static_cast<const LayoutNodeWithStyle*>(Node::layout_node()); }
+    Layout::NodeWithStyle* layout_node() { return static_cast<Layout::NodeWithStyle*>(Node::layout_node()); }
+    const Layout::NodeWithStyle* layout_node() const { return static_cast<const Layout::NodeWithStyle*>(Node::layout_node()); }
 
     String name() const { return attribute(HTML::AttributeNames::name); }
 
-    const StyleProperties* resolved_style() const { return m_resolved_style.ptr(); }
-    NonnullRefPtr<StyleProperties> computed_style();
+    const CSS::StyleProperties* resolved_style() const { return m_resolved_style.ptr(); }
+    NonnullRefPtr<CSS::StyleProperties> computed_style();
 
+    const CSS::StyleDeclaration* inline_style() const { return m_inline_style; }
+
+    // FIXME: innerHTML also appears on shadow roots. https://w3c.github.io/DOM-Parsing/#dom-innerhtml
     String inner_html() const;
     void set_inner_html(StringView);
 
-    String id() const { return attribute(HTML::AttributeNames::id); }
-    void set_id(const String& value) { set_attribute(HTML::AttributeNames::id, value); }
-
-    String class_name() const { return attribute(HTML::AttributeNames::class_); }
-    void set_class_name(const String& value) { set_attribute(HTML::AttributeNames::class_, value); }
+    bool is_focused() const;
+    virtual bool is_focusable() const { return false; }
 
 protected:
-    RefPtr<LayoutNode> create_layout_node(const StyleProperties* parent_style) override;
+    RefPtr<Layout::Node> create_layout_node(const CSS::StyleProperties* parent_style) override;
 
 private:
     Attribute* find_attribute(const FlyString& name);
     const Attribute* find_attribute(const FlyString& name) const;
 
-    FlyString m_tag_name;
+    QualifiedName m_qualified_name;
     Vector<Attribute> m_attributes;
 
-    RefPtr<StyleProperties> m_resolved_style;
+    RefPtr<CSS::StyleDeclaration> m_inline_style;
+
+    RefPtr<CSS::StyleProperties> m_resolved_style;
 
     Vector<FlyString> m_classes;
 };
 
-template<>
-inline bool is<Element>(const Node& node)
-{
-    return node.is_element();
 }
 
-}
+AK_BEGIN_TYPE_TRAITS(Web::DOM::Element)
+static bool is_type(const Web::DOM::Node& node) { return node.is_element(); }
+AK_END_TYPE_TRAITS()

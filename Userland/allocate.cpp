@@ -31,20 +31,22 @@
 #include <string.h>
 #include <unistd.h>
 
-void usage(void)
+static void usage()
 {
-    printf("usage: allocate [number [unit (B/KB/MB)]]\n");
+    printf("usage: allocate [number [unit (B/KiB/MiB)]]\n");
     exit(1);
 }
 
-enum Unit { Bytes,
-    KiloBytes,
-    MegaBytes };
+enum class Unit {
+    Bytes,
+    KiB,
+    MiB,
+};
 
 int main(int argc, char** argv)
 {
     int count = 50;
-    Unit unit = MegaBytes;
+    auto unit = Unit::MiB;
 
     if (argc >= 2) {
         auto number = String(argv[1]).to_uint();
@@ -56,23 +58,23 @@ int main(int argc, char** argv)
 
     if (argc >= 3) {
         if (strcmp(argv[2], "B") == 0)
-            unit = Bytes;
-        else if (strcmp(argv[2], "KB") == 0)
-            unit = KiloBytes;
-        else if (strcmp(argv[2], "MB") == 0)
-            unit = MegaBytes;
+            unit = Unit::Bytes;
+        else if (strcmp(argv[2], "KiB") == 0)
+            unit = Unit::KiB;
+        else if (strcmp(argv[2], "MiB") == 0)
+            unit = Unit::MiB;
         else
             usage();
     }
 
     switch (unit) {
-    case Bytes:
+    case Unit::Bytes:
         break;
-    case KiloBytes:
-        count *= 1024;
+    case Unit::KiB:
+        count *= KiB;
         break;
-    case MegaBytes:
-        count *= 1024 * 1024;
+    case Unit::MiB:
+        count *= MiB;
         break;
     }
 
@@ -87,7 +89,7 @@ int main(int argc, char** argv)
     }
     printf("done in %dms\n", timer.elapsed());
 
-    auto pages = count / 4096;
+    auto pages = count / PAGE_SIZE;
     auto step = pages / 10;
 
     Core::ElapsedTimer timer2;
@@ -96,16 +98,16 @@ int main(int argc, char** argv)
     timer.start();
     timer2.start();
     for (int i = 0; i < pages; ++i) {
-        ptr[i * 4096] = 1;
+        ptr[i * PAGE_SIZE] = 1;
 
         if (i != 0 && (i % step) == 0) {
             auto ms = timer2.elapsed();
             if (ms == 0)
                 ms = 1;
 
-            auto bps = double(step * 4096) / (double(ms) / 1000);
+            auto bps = double(step * PAGE_SIZE) / (double(ms) / 1000);
 
-            printf("step took %dms (%fMB/s)\n", ms, bps / 1024 / 1024);
+            printf("step took %dms (%fMiB/s)\n", ms, bps / MiB);
 
             timer2.start();
         }

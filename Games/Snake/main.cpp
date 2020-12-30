@@ -25,11 +25,13 @@
  */
 
 #include "SnakeGame.h"
+#include <LibCore/ConfigFile.h>
 #include <LibGUI/AboutDialog.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/MenuBar.h>
 #include <LibGUI/Window.h>
@@ -49,11 +51,30 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    auto config = Core::ConfigFile::get_for_app("Snake");
+
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(config->file_name().characters(), "crw") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(nullptr, nullptr) < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    auto app_icon = GUI::Icon::default_icon("app-snake");
+
     auto window = GUI::Window::construct();
 
     window->set_double_buffering_enabled(false);
     window->set_title("Snake");
-    window->set_rect(100, 100, 320, 320);
+    window->resize(320, 320);
 
     auto& game = window->set_main_widget<SnakeGame>();
 
@@ -64,20 +85,21 @@ int main(int argc, char** argv)
     app_menu.add_action(GUI::Action::create("New game", { Mod_None, Key_F2 }, [&](auto&) {
         game.reset();
     }));
+    app_menu.add_separator();
     app_menu.add_action(GUI::CommonActions::make_quit_action([](auto&) {
         GUI::Application::the()->quit();
     }));
 
     auto& help_menu = menubar->add_menu("Help");
     help_menu.add_action(GUI::Action::create("About", [&](auto&) {
-        GUI::AboutDialog::show("Snake", Gfx::Bitmap::load_from_file("/res/icons/32x32/app-snake.png"), window);
+        GUI::AboutDialog::show("Snake", app_icon.bitmap_for_size(32), window);
     }));
 
     app->set_menubar(move(menubar));
 
     window->show();
 
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-snake.png"));
+    window->set_icon(app_icon.bitmap_for_size(16));
 
     return app->exec();
 }

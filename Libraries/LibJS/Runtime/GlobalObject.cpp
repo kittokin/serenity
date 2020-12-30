@@ -25,8 +25,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/LogStream.h>
-#include <LibJS/Interpreter.h>
+#include <AK/Utf8View.h>
+#include <LibJS/Console.h>
+#include <LibJS/Heap/DeferGC.h>
+#include <LibJS/Runtime/ArrayBufferConstructor.h>
+#include <LibJS/Runtime/ArrayBufferPrototype.h>
 #include <LibJS/Runtime/ArrayConstructor.h>
 #include <LibJS/Runtime/ArrayIteratorPrototype.h>
 #include <LibJS/Runtime/ArrayPrototype.h>
@@ -52,7 +55,6 @@
 #include <LibJS/Runtime/ObjectConstructor.h>
 #include <LibJS/Runtime/ObjectPrototype.h>
 #include <LibJS/Runtime/ProxyConstructor.h>
-#include <LibJS/Runtime/ProxyPrototype.h>
 #include <LibJS/Runtime/ReflectObject.h>
 #include <LibJS/Runtime/RegExpConstructor.h>
 #include <LibJS/Runtime/RegExpPrototype.h>
@@ -62,70 +64,92 @@
 #include <LibJS/Runtime/StringPrototype.h>
 #include <LibJS/Runtime/SymbolConstructor.h>
 #include <LibJS/Runtime/SymbolPrototype.h>
+#include <LibJS/Runtime/TypedArray.h>
+#include <LibJS/Runtime/TypedArrayConstructor.h>
+#include <LibJS/Runtime/TypedArrayPrototype.h>
 #include <LibJS/Runtime/Value.h>
+#include <ctype.h>
 
 namespace JS {
 
 GlobalObject::GlobalObject()
-    : Object(GlobalObjectTag::Tag)
+    : ScopeObject(GlobalObjectTag::Tag)
+    , m_console(make<Console>(*this))
 {
 }
 
 void GlobalObject::initialize()
 {
+    auto& vm = this->vm();
+
+    ensure_shape_is_unique();
+
     // These are done first since other prototypes depend on their presence.
-    m_empty_object_shape = heap().allocate<Shape>(*this, *this);
+    m_empty_object_shape = heap().allocate_without_global_object<Shape>(*this);
     m_object_prototype = heap().allocate_without_global_object<ObjectPrototype>(*this);
     m_function_prototype = heap().allocate_without_global_object<FunctionPrototype>(*this);
 
-    static_cast<FunctionPrototype*>(m_function_prototype)->initialize(heap().interpreter(), *this);
-    static_cast<ObjectPrototype*>(m_object_prototype)->initialize(heap().interpreter(), *this);
+    m_new_object_shape = vm.heap().allocate_without_global_object<Shape>(*this);
+    m_new_object_shape->set_prototype_without_transition(m_object_prototype);
 
-#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName) \
-    if (!m_##snake_name##_prototype)                                          \
+    m_new_script_function_prototype_object_shape = vm.heap().allocate_without_global_object<Shape>(*this);
+    m_new_script_function_prototype_object_shape->set_prototype_without_transition(m_object_prototype);
+    m_new_script_function_prototype_object_shape->add_property_without_transition(vm.names.constructor, Attribute::Writable | Attribute::Configurable);
+
+    static_cast<FunctionPrototype*>(m_function_prototype)->initialize(*this);
+    static_cast<ObjectPrototype*>(m_object_prototype)->initialize(*this);
+
+    set_prototype(m_object_prototype);
+
+#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \
+    if (!m_##snake_name##_prototype)                                                     \
         m_##snake_name##_prototype = heap().allocate<PrototypeName>(*this, *this);
     JS_ENUMERATE_BUILTIN_TYPES
 #undef __JS_ENUMERATE
 
-#define __JS_ENUMERATE(ClassName, snake_name)                                    \
-    if (!m_##snake_name##_prototype)                                             \
+#define __JS_ENUMERATE(ClassName, snake_name) \
+    if (!m_##snake_name##_prototype)          \
         m_##snake_name##_prototype = heap().allocate<ClassName##Prototype>(*this, *this);
     JS_ENUMERATE_ITERATOR_PROTOTYPES
 #undef __JS_ENUMERATE
 
-
     u8 attr = Attribute::Writable | Attribute::Configurable;
-    define_native_function("gc", gc, 0, attr);
-    define_native_function("isNaN", is_nan, 1, attr);
-    define_native_function("isFinite", is_finite, 1, attr);
-    define_native_function("parseFloat", parse_float, 1, attr);
+    define_native_function(vm.names.gc, gc, 0, attr);
+    define_native_function(vm.names.isNaN, is_nan, 1, attr);
+    define_native_function(vm.names.isFinite, is_finite, 1, attr);
+    define_native_function(vm.names.parseFloat, parse_float, 1, attr);
+    define_native_function(vm.names.parseInt, parse_int, 1, attr);
 
-    define_property("NaN", js_nan(), 0);
-    define_property("Infinity", js_infinity(), 0);
-    define_property("undefined", js_undefined(), 0);
+    define_property(vm.names.NaN, js_nan(), 0);
+    define_property(vm.names.Infinity, js_infinity(), 0);
+    define_property(vm.names.undefined, js_undefined(), 0);
 
-    define_property("globalThis", this, attr);
-    define_property("console", heap().allocate<ConsoleObject>(*this, *this), attr);
-    define_property("Math", heap().allocate<MathObject>(*this, *this), attr);
-    define_property("JSON", heap().allocate<JSONObject>(*this, *this), attr);
-    define_property("Reflect", heap().allocate<ReflectObject>(*this, *this), attr);
+    define_property(vm.names.globalThis, this, attr);
+    define_property(vm.names.console, heap().allocate<ConsoleObject>(*this, *this), attr);
+    define_property(vm.names.Math, heap().allocate<MathObject>(*this, *this), attr);
+    define_property(vm.names.JSON, heap().allocate<JSONObject>(*this, *this), attr);
+    define_property(vm.names.Reflect, heap().allocate<ReflectObject>(*this, *this), attr);
 
-    add_constructor("Array", m_array_constructor, *m_array_prototype);
-    add_constructor("BigInt", m_bigint_constructor, *m_bigint_prototype);
-    add_constructor("Boolean", m_boolean_constructor, *m_boolean_prototype);
-    add_constructor("Date", m_date_constructor, *m_date_prototype);
-    add_constructor("Error", m_error_constructor, *m_error_prototype);
-    add_constructor("Function", m_function_constructor, *m_function_prototype);
-    add_constructor("Number", m_number_constructor, *m_number_prototype);
-    add_constructor("Object", m_object_constructor, *m_object_prototype);
-    add_constructor("Proxy", m_proxy_constructor, *m_proxy_prototype);
-    add_constructor("RegExp", m_regexp_constructor, *m_regexp_prototype);
-    add_constructor("String", m_string_constructor, *m_string_prototype);
-    add_constructor("Symbol", m_symbol_constructor, *m_symbol_prototype);
+    add_constructor(vm.names.Array, m_array_constructor, m_array_prototype);
+    add_constructor(vm.names.ArrayBuffer, m_array_buffer_constructor, m_array_buffer_prototype);
+    add_constructor(vm.names.BigInt, m_bigint_constructor, m_bigint_prototype);
+    add_constructor(vm.names.Boolean, m_boolean_constructor, m_boolean_prototype);
+    add_constructor(vm.names.Date, m_date_constructor, m_date_prototype);
+    add_constructor(vm.names.Error, m_error_constructor, m_error_prototype);
+    add_constructor(vm.names.Function, m_function_constructor, m_function_prototype);
+    add_constructor(vm.names.Number, m_number_constructor, m_number_prototype);
+    add_constructor(vm.names.Object, m_object_constructor, m_object_prototype);
+    add_constructor(vm.names.Proxy, m_proxy_constructor, nullptr);
+    add_constructor(vm.names.RegExp, m_regexp_constructor, m_regexp_prototype);
+    add_constructor(vm.names.String, m_string_constructor, m_string_prototype);
+    add_constructor(vm.names.Symbol, m_symbol_constructor, m_symbol_prototype);
 
-#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName) \
-    add_constructor(#ClassName, m_##snake_name##_constructor, *m_##snake_name##_prototype);
+    initialize_constructor(vm.names.TypedArray, m_typed_array_constructor, m_typed_array_prototype);
+
+#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \
+    add_constructor(vm.names.ClassName, m_##snake_name##_constructor, m_##snake_name##_prototype);
     JS_ENUMERATE_ERROR_SUBCLASSES
+    JS_ENUMERATE_TYPED_ARRAYS
 #undef __JS_ENUMERATE
 }
 
@@ -133,55 +157,154 @@ GlobalObject::~GlobalObject()
 {
 }
 
-void GlobalObject::visit_children(Visitor& visitor)
+void GlobalObject::visit_edges(Visitor& visitor)
 {
-    Object::visit_children(visitor);
+    Base::visit_edges(visitor);
 
     visitor.visit(m_empty_object_shape);
+    visitor.visit(m_new_object_shape);
+    visitor.visit(m_new_script_function_prototype_object_shape);
+    visitor.visit(m_proxy_constructor);
 
-#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName) \
+#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \
     visitor.visit(m_##snake_name##_constructor);
     JS_ENUMERATE_ERROR_SUBCLASSES
+#undef __JS_ENUMERATE
+
+#define __JS_ENUMERATE(ClassName, snake_name) \
+    visitor.visit(m_##snake_name##_prototype);
+    JS_ENUMERATE_ITERATOR_PROTOTYPES
 #undef __JS_ENUMERATE
 }
 
 JS_DEFINE_NATIVE_FUNCTION(GlobalObject::gc)
 {
-    dbg() << "Forced garbage collection requested!";
-    interpreter.heap().collect_garbage();
+    dbgln("Forced garbage collection requested!");
+    vm.heap().collect_garbage();
     return js_undefined();
 }
 
 JS_DEFINE_NATIVE_FUNCTION(GlobalObject::is_nan)
 {
-    auto number = interpreter.argument(0).to_number(interpreter);
-    if (interpreter.exception())
+    auto number = vm.argument(0).to_number(global_object);
+    if (vm.exception())
         return {};
     return Value(number.is_nan());
 }
 
 JS_DEFINE_NATIVE_FUNCTION(GlobalObject::is_finite)
 {
-    auto number = interpreter.argument(0).to_number(interpreter);
-    if (interpreter.exception())
+    auto number = vm.argument(0).to_number(global_object);
+    if (vm.exception())
         return {};
     return Value(number.is_finite_number());
 }
 
 JS_DEFINE_NATIVE_FUNCTION(GlobalObject::parse_float)
 {
-    if (interpreter.argument(0).is_number())
-        return interpreter.argument(0);
-    auto string = interpreter.argument(0).to_string(interpreter);
-    if (interpreter.exception())
+    if (vm.argument(0).is_number())
+        return vm.argument(0);
+    auto string = vm.argument(0).to_string(global_object);
+    if (vm.exception())
         return {};
     for (size_t length = string.length(); length > 0; --length) {
         // This can't throw, so no exception check is fine.
-        auto number = Value(js_string(interpreter, string.substring(0, length))).to_number(interpreter);
+        auto number = Value(js_string(vm, string.substring(0, length))).to_number(global_object);
         if (!number.is_nan())
             return number;
     }
     return js_nan();
+}
+
+JS_DEFINE_NATIVE_FUNCTION(GlobalObject::parse_int)
+{
+    // 18.2.5 parseInt ( string, radix )
+    auto input_string = vm.argument(0).to_string(global_object);
+    if (vm.exception())
+        return {};
+
+    // FIXME: There's a bunch of unnecessary string copying here.
+    double sign = 1;
+    auto s = input_string.trim_whitespace(TrimMode::Left);
+    if (!s.is_empty() && s[0] == '-')
+        sign = -1;
+    if (!s.is_empty() && (s[0] == '+' || s[0] == '-'))
+        s = s.substring(1, s.length() - 1);
+
+    auto radix = vm.argument(1).to_i32(global_object);
+    if (vm.exception())
+        return {};
+
+    bool strip_prefix = true;
+    if (radix != 0) {
+        if (radix < 2 || radix > 36)
+            return js_nan();
+        if (radix != 16)
+            strip_prefix = false;
+    } else {
+        radix = 10;
+    }
+
+    if (strip_prefix) {
+        if (s.length() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+            s = s.substring(2, s.length() - 2);
+            radix = 16;
+        }
+    }
+
+    auto parse_digit = [&](u32 codepoint, i32 radix) -> Optional<i32> {
+        i32 digit = -1;
+
+        if (isdigit(codepoint))
+            digit = codepoint - '0';
+        else if (islower(codepoint))
+            digit = 10 + (codepoint - 'a');
+        else if (isupper(codepoint))
+            digit = 10 + (codepoint - 'A');
+
+        if (digit == -1 || digit >= radix)
+            return {};
+        return digit;
+    };
+
+    bool had_digits = false;
+    double number = 0;
+    for (auto codepoint : Utf8View(s)) {
+        auto digit = parse_digit(codepoint, radix);
+        if (!digit.has_value())
+            break;
+        had_digits = true;
+        number *= radix;
+        number += digit.value();
+    }
+
+    if (!had_digits)
+        return js_nan();
+
+    return Value(sign * number);
+}
+
+Optional<Variable> GlobalObject::get_from_scope(const FlyString& name) const
+{
+    auto value = get(name);
+    if (value.is_empty())
+        return {};
+    return Variable { value, DeclarationKind::Var };
+}
+
+void GlobalObject::put_to_scope(const FlyString& name, Variable variable)
+{
+    put(name, variable.value);
+}
+
+bool GlobalObject::has_this_binding() const
+{
+    return true;
+}
+
+Value GlobalObject::get_this_binding(GlobalObject&) const
+{
+    return Value(this);
 }
 
 }

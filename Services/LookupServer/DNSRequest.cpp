@@ -26,13 +26,13 @@
 
 #include "DNSRequest.h"
 #include "DNSPacket.h"
-#include <AK/BufferStream.h>
+#include <AK/MemoryStream.h>
 #include <AK/StringBuilder.h>
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <stdlib.h>
 
-#define C_IN 1
+const u16 C_IN = 1;
 
 DNSRequest::DNSRequest()
     : m_id(arc4random_uniform(UINT16_MAX))
@@ -77,22 +77,20 @@ ByteBuffer DNSRequest::to_byte_buffer() const
     request_header.set_recursion_desired(true);
     request_header.set_question_count(m_questions.size());
 
-    auto buffer = ByteBuffer::create_uninitialized(m_questions.size() * 4096);
-    BufferStream stream(buffer);
+    DuplexMemoryStream stream;
 
-    stream << ByteBuffer::wrap(&request_header, sizeof(request_header));
+    stream << ReadonlyBytes { &request_header, sizeof(request_header) };
 
     for (auto& question : m_questions) {
         auto parts = question.name().split('.');
         for (auto& part : parts) {
             stream << (u8)part.length();
-            stream << part;
+            stream << part.bytes();
         }
         stream << '\0';
         stream << htons(question.record_type());
         stream << htons(question.class_code());
     }
-    stream.snip();
 
-    return buffer;
+    return stream.copy_into_contiguous_buffer();
 }

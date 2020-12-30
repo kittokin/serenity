@@ -39,8 +39,8 @@ public:
     ProxyObject(Object& target, Object& handler, Object& prototype);
     virtual ~ProxyObject() override;
 
-    virtual Value call(Interpreter&) override;
-    virtual Value construct(Interpreter&, Function& new_target) override;
+    virtual Value call() override;
+    virtual Value construct(Function& new_target) override;
     virtual const FlyString& name() const override;
     virtual LexicalEnvironment* create_environment() override;
 
@@ -62,7 +62,7 @@ public:
     void revoke() { m_is_revoked = true; }
 
 private:
-    virtual void visit_children(Visitor&) override;
+    virtual void visit_edges(Visitor&) override;
     virtual bool is_proxy_object() const override { return true; }
 
     virtual bool is_function() const override { return m_target.is_function(); }

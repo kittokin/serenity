@@ -24,6 +24,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/ByteBuffer.h>
+#include <AK/Checked.h>
 #include <AK/Memory.h>
 #include <AK/PrintfImplementation.h>
 #include <AK/StdLibExtras.h>
@@ -36,13 +38,26 @@ namespace AK {
 
 inline void StringBuilder::will_append(size_t size)
 {
-    if ((m_length + size) > m_buffer.size())
-        m_buffer.grow(max(static_cast<size_t>(16), m_buffer.size() * 2 + size));
+    Checked<size_t> needed_capacity = m_length;
+    needed_capacity += size;
+    ASSERT(!needed_capacity.has_overflow());
+    if (needed_capacity < inline_capacity)
+        return;
+    Checked<size_t> expanded_capacity = needed_capacity;
+    expanded_capacity *= 2;
+    ASSERT(!expanded_capacity.has_overflow());
+    if (m_buffer.is_null()) {
+        m_buffer.grow(expanded_capacity.value());
+        memcpy(m_buffer.data(), m_inline_buffer, m_length);
+    } else if (needed_capacity.value() > m_buffer.size()) {
+        m_buffer.grow(expanded_capacity.value());
+    }
 }
 
 StringBuilder::StringBuilder(size_t initial_capacity)
 {
-    m_buffer.grow((int)initial_capacity);
+    if (initial_capacity > inline_capacity)
+        m_buffer.grow(initial_capacity);
 }
 
 void StringBuilder::append(const StringView& str)
@@ -50,7 +65,7 @@ void StringBuilder::append(const StringView& str)
     if (str.is_empty())
         return;
     will_append(str.length());
-    memcpy(m_buffer.data() + m_length, str.characters_without_null_termination(), str.length());
+    memcpy(data() + m_length, str.characters_without_null_termination(), str.length());
     m_length += str.length();
 }
 
@@ -62,7 +77,7 @@ void StringBuilder::append(const char* characters, size_t length)
 void StringBuilder::append(char ch)
 {
     will_append(1);
-    m_buffer.data()[m_length] = ch;
+    data()[m_length] = ch;
     m_length += 1;
 }
 
@@ -85,16 +100,14 @@ void StringBuilder::appendf(const char* fmt, ...)
 
 ByteBuffer StringBuilder::to_byte_buffer() const
 {
-    ByteBuffer buffer_copy = m_buffer.isolated_copy();
-    buffer_copy.trim(m_length);
-    return buffer_copy;
+    return ByteBuffer::copy(data(), length());
 }
 
 String StringBuilder::to_string() const
 {
     if (is_empty())
         return String::empty();
-    return String((const char*)m_buffer.data(), m_length);
+    return String((const char*)data(), length());
 }
 
 String StringBuilder::build() const
@@ -104,31 +117,32 @@ String StringBuilder::build() const
 
 StringView StringBuilder::string_view() const
 {
-    return StringView { (const char*)m_buffer.data(), m_length };
+    return StringView { data(), m_length };
 }
 
 void StringBuilder::clear()
 {
     m_buffer.clear();
+    m_inline_buffer[0] = '\0';
     m_length = 0;
 }
 
-void StringBuilder::append_codepoint(u32 codepoint)
+void StringBuilder::append_code_point(u32 code_point)
 {
-    if (codepoint <= 0x7f) {
-        append((char)codepoint);
-    } else if (codepoint <= 0x07ff) {
-        append((char)(((codepoint >> 6) & 0x1f) | 0xc0));
-        append((char)(((codepoint >> 0) & 0x3f) | 0x80));
-    } else if (codepoint <= 0xffff) {
-        append((char)(((codepoint >> 12) & 0x0f) | 0xe0));
-        append((char)(((codepoint >> 6) & 0x3f) | 0x80));
-        append((char)(((codepoint >> 0) & 0x3f) | 0x80));
-    } else if (codepoint <= 0x10ffff) {
-        append((char)(((codepoint >> 18) & 0x07) | 0xf0));
-        append((char)(((codepoint >> 12) & 0x3f) | 0x80));
-        append((char)(((codepoint >> 6) & 0x3f) | 0x80));
-        append((char)(((codepoint >> 0) & 0x3f) | 0x80));
+    if (code_point <= 0x7f) {
+        append((char)code_point);
+    } else if (code_point <= 0x07ff) {
+        append((char)(((code_point >> 6) & 0x1f) | 0xc0));
+        append((char)(((code_point >> 0) & 0x3f) | 0x80));
+    } else if (code_point <= 0xffff) {
+        append((char)(((code_point >> 12) & 0x0f) | 0xe0));
+        append((char)(((code_point >> 6) & 0x3f) | 0x80));
+        append((char)(((code_point >> 0) & 0x3f) | 0x80));
+    } else if (code_point <= 0x10ffff) {
+        append((char)(((code_point >> 18) & 0x07) | 0xf0));
+        append((char)(((code_point >> 12) & 0x3f) | 0x80));
+        append((char)(((code_point >> 6) & 0x3f) | 0x80));
+        append((char)(((code_point >> 0) & 0x3f) | 0x80));
     } else {
         append(0xef);
         append(0xbf);
@@ -139,8 +153,36 @@ void StringBuilder::append_codepoint(u32 codepoint)
 void StringBuilder::append(const Utf32View& utf32_view)
 {
     for (size_t i = 0; i < utf32_view.length(); ++i) {
-        auto codepoint = utf32_view.codepoints()[i];
-        append_codepoint(codepoint);
+        auto code_point = utf32_view.code_points()[i];
+        append_code_point(code_point);
+    }
+}
+
+void StringBuilder::append_escaped_for_json(const StringView& string)
+{
+    for (auto ch : string) {
+        switch (ch) {
+        case '\e':
+            append("\\u001B");
+            break;
+        case '\b':
+            append("\\b");
+            break;
+        case '\n':
+            append("\\n");
+            break;
+        case '\t':
+            append("\\t");
+            break;
+        case '\"':
+            append("\\\"");
+            break;
+        case '\\':
+            append("\\\\");
+            break;
+        default:
+            append(ch);
+        }
     }
 }
 

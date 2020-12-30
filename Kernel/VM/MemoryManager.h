@@ -70,6 +70,9 @@ class SynthFSInode;
 struct MemoryManagerData {
     SpinLock<u8> m_quickmap_in_use;
     u32 m_quickmap_prev_flags;
+
+    PhysicalAddress m_last_quickmap_pd;
+    PhysicalAddress m_last_quickmap_pt;
 };
 
 extern RecursiveSpinLock s_mm_lock;
@@ -81,14 +84,15 @@ class MemoryManager {
     friend class PhysicalRegion;
     friend class Region;
     friend class VMObject;
-    friend Optional<KBuffer> procfs$mm(InodeIdentifier);
-    friend Optional<KBuffer> procfs$memstat(InodeIdentifier);
+    friend OwnPtr<KBuffer> procfs$mm(InodeIdentifier);
+    friend OwnPtr<KBuffer> procfs$memstat(InodeIdentifier);
 
 public:
     static MemoryManager& the();
+    static bool is_initialized();
 
     static void initialize(u32 cpu);
-    
+
     static inline MemoryManagerData& get_data()
     {
         return Processor::current().get_mm_data();
@@ -99,23 +103,17 @@ public:
     void enter_process_paging_scope(Process&);
 
     bool validate_user_stack(const Process&, VirtualAddress) const;
-    bool validate_user_read(const Process&, VirtualAddress, size_t) const;
-    bool validate_user_write(const Process&, VirtualAddress, size_t) const;
-
-    bool validate_kernel_read(const Process&, VirtualAddress, size_t) const;
-
-    bool can_read_without_faulting(const Process&, VirtualAddress, size_t) const;
 
     enum class ShouldZeroFill {
         No,
         Yes
     };
 
-    RefPtr<PhysicalPage> allocate_user_physical_page(ShouldZeroFill = ShouldZeroFill::Yes);
+    RefPtr<PhysicalPage> allocate_user_physical_page(ShouldZeroFill = ShouldZeroFill::Yes, bool* did_purge = nullptr);
     RefPtr<PhysicalPage> allocate_supervisor_physical_page();
     NonnullRefPtrVector<PhysicalPage> allocate_contiguous_supervisor_physical_pages(size_t size);
-    void deallocate_user_physical_page(PhysicalPage&&);
-    void deallocate_supervisor_physical_page(PhysicalPage&&);
+    void deallocate_user_physical_page(const PhysicalPage&);
+    void deallocate_supervisor_physical_page(const PhysicalPage&);
 
     OwnPtr<Region> allocate_contiguous_kernel_region(size_t, const StringView& name, u8 access, bool user_accessible = false, bool cacheable = true);
     OwnPtr<Region> allocate_kernel_region(size_t, const StringView& name, u8 access, bool user_accessible = false, bool should_commit = true, bool cacheable = true);
@@ -150,8 +148,8 @@ public:
         }
     }
 
-    static Region* region_from_vaddr(Process&, VirtualAddress);
-    static const Region* region_from_vaddr(const Process&, VirtualAddress);
+    static Region* find_region_from_vaddr(Process&, VirtualAddress);
+    static const Region* find_region_from_vaddr(const Process&, VirtualAddress);
 
     void dump_kernel_regions();
 
@@ -184,7 +182,7 @@ private:
     static Region* user_region_from_vaddr(Process&, VirtualAddress);
     static Region* kernel_region_from_vaddr(VirtualAddress);
 
-    static Region* region_from_vaddr(VirtualAddress);
+    static Region* find_region_from_vaddr(VirtualAddress);
 
     RefPtr<PhysicalPage> find_free_user_physical_page();
     u8* quickmap_page(PhysicalPage&);
@@ -193,8 +191,9 @@ private:
     PageDirectoryEntry* quickmap_pd(PageDirectory&, size_t pdpt_index);
     PageTableEntry* quickmap_pt(PhysicalAddress);
 
-    const PageTableEntry* pte(const PageDirectory&, VirtualAddress);
-    PageTableEntry& ensure_pte(PageDirectory&, VirtualAddress);
+    PageTableEntry* pte(PageDirectory&, VirtualAddress);
+    PageTableEntry* ensure_pte(PageDirectory&, VirtualAddress);
+    void release_pte(PageDirectory&, VirtualAddress, bool);
 
     RefPtr<PageDirectory> m_kernel_page_directory;
     RefPtr<PhysicalPage> m_low_page_table;
@@ -220,6 +219,7 @@ private:
 template<typename Callback>
 void VMObject::for_each_region(Callback callback)
 {
+    ScopedSpinLock lock(s_mm_lock);
     // FIXME: Figure out a better data structure so we don't have to walk every single region every time an inode changes.
     //        Perhaps VMObject could have a Vector<Region*> with all of his mappers?
     for (auto& region : MM.m_user_regions) {

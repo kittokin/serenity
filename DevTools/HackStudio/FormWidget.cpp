@@ -29,8 +29,11 @@
 #include "Tool.h"
 #include <LibGUI/Painter.h>
 
+namespace HackStudio {
+
 FormWidget::FormWidget()
 {
+    set_focus_policy(GUI::FocusPolicy::StrongFocus);
     set_fill_with_background_color(true);
     set_relative_rect(5, 5, 400, 300);
 
@@ -98,4 +101,6 @@ void FormWidget::mousemove_event(GUI::MouseEvent& event)
 void FormWidget::keydown_event(GUI::KeyEvent& event)
 {
     editor().tool().on_keydown(event);
+}
+
 }

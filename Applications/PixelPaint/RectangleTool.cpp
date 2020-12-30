@@ -31,7 +31,7 @@
 #include <LibGUI/Menu.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/Rect.h>
-#include <LibM/math.h>
+#include <math.h>
 
 namespace PixelPaint {
 
@@ -82,6 +82,7 @@ void RectangleTool::on_mouseup(Layer& layer, GUI::MouseEvent& event, GUI::MouseE
         draw_using(painter, rect);
         m_drawing_button = GUI::MouseButton::None;
         layer.did_modify_bitmap(*m_editor->image());
+        m_editor->did_complete_action();
     }
 }
 
@@ -101,7 +102,9 @@ void RectangleTool::on_second_paint(const Layer& layer, GUI::PaintEvent& event)
 
     GUI::Painter painter(*m_editor);
     painter.add_clip_rect(event.rect());
-    auto rect = Gfx::IntRect::from_two_points(m_editor->layer_position_to_editor_position(layer, m_rectangle_start_position).to_int_point(), m_editor->layer_position_to_editor_position(layer, m_rectangle_end_position).to_int_point());
+    auto rect = Gfx::IntRect::from_two_points(
+        m_editor->layer_position_to_editor_position(layer, m_rectangle_start_position).to_type<int>(),
+        m_editor->layer_position_to_editor_position(layer, m_rectangle_end_position).to_type<int>());
     draw_using(painter, rect);
 }
 

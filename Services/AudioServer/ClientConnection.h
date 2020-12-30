@@ -27,6 +27,7 @@
 #pragma once
 
 #include <AK/HashMap.h>
+#include <AudioServer/AudioClientEndpoint.h>
 #include <AudioServer/AudioServerEndpoint.h>
 #include <LibIPC/ClientConnection.h>
 
@@ -39,7 +40,7 @@ namespace AudioServer {
 class BufferQueue;
 class Mixer;
 
-class ClientConnection final : public IPC::ClientConnection<AudioServerEndpoint>
+class ClientConnection final : public IPC::ClientConnection<AudioClientEndpoint, AudioServerEndpoint>
     , public AudioServerEndpoint {
     C_OBJECT(ClientConnection)
 public:
@@ -48,6 +49,7 @@ public:
 
     void did_finish_playing_buffer(Badge<BufferQueue>, int buffer_id);
     void did_change_muted_state(Badge<Mixer>, bool muted);
+    void did_change_main_mix_volume(Badge<Mixer>, int volume);
 
     virtual void die() override;
 

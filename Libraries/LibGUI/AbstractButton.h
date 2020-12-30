@@ -31,13 +31,14 @@
 namespace GUI {
 
 class AbstractButton : public Widget {
-    C_OBJECT_ABSTRACT(AbstractButton)
+    C_OBJECT_ABSTRACT(AbstractButton);
+
 public:
     virtual ~AbstractButton() override;
 
     Function<void(bool)> on_checked;
 
-    void set_text(const StringView&);
+    void set_text(String);
     const String& text() const { return m_text; }
 
     bool is_exclusive() const { return m_exclusive; }
@@ -53,14 +54,13 @@ public:
     bool is_being_pressed() const { return m_being_pressed; }
 
     virtual void click(unsigned modifiers = 0) = 0;
-    virtual bool accepts_focus() const override { return true; }
     virtual bool is_uncheckable() const { return true; }
 
     int auto_repeat_interval() const { return m_auto_repeat_interval; }
     void set_auto_repeat_interval(int interval) { m_auto_repeat_interval = interval; }
 
 protected:
-    explicit AbstractButton(const StringView& = {});
+    explicit AbstractButton(String = {});
 
     virtual void mousedown_event(MouseEvent&) override;
     virtual void mousemove_event(MouseEvent&) override;
@@ -69,9 +69,6 @@ protected:
     virtual void enter_event(Core::Event&) override;
     virtual void leave_event(Core::Event&) override;
     virtual void change_event(Event&) override;
-
-    virtual void save_to(JsonObject&) override;
-    virtual bool set_property(const StringView& name, const JsonValue& value) override;
 
     void paint_text(Painter&, const Gfx::IntRect&, const Gfx::Font&, Gfx::TextAlignment);
 
@@ -91,10 +88,6 @@ private:
 
 }
 
-template<>
-inline bool Core::is<GUI::AbstractButton>(const Core::Object& object)
-{
-    if (!is<GUI::Widget>(object))
-        return false;
-    return to<GUI::Widget>(object).is_abstract_button();
-}
+AK_BEGIN_TYPE_TRAITS(GUI::AbstractButton)
+static bool is_type(const Core::Object& object) { return is<GUI::Widget>(object) && downcast<GUI::Widget>(object).is_abstract_button(); }
+AK_END_TYPE_TRAITS()

@@ -44,12 +44,14 @@ void RangeAllocator::initialize_with_range(VirtualAddress base, size_t size)
     m_total_range = { base, size };
     m_available_ranges.append({ base, size });
 #ifdef VRA_DEBUG
+    ScopedSpinLock lock(m_lock);
     dump();
 #endif
 }
 
 void RangeAllocator::initialize_from_parent(const RangeAllocator& parent_allocator)
 {
+    ScopedSpinLock lock(parent_allocator.m_lock);
     m_total_range = parent_allocator.m_total_range;
     m_available_ranges = parent_allocator.m_available_ranges;
 }
@@ -60,6 +62,7 @@ RangeAllocator::~RangeAllocator()
 
 void RangeAllocator::dump() const
 {
+    ASSERT(m_lock.is_locked());
     dbg() << "RangeAllocator{" << this << "}";
     for (auto& range : m_available_ranges) {
         dbg() << "    " << String::format("%x", range.base().get()) << " -> " << String::format("%x", range.end().get() - 1);
@@ -77,7 +80,7 @@ Vector<Range, 2> Range::carve(const Range& taken)
         parts.append({ taken.end(), end().get() - taken.end().get() });
 #ifdef VRA_DEBUG
     dbg() << "VRA: carve: take " << String::format("%x", taken.base().get()) << "-" << String::format("%x", taken.end().get() - 1) << " from " << String::format("%x", base().get()) << "-" << String::format("%x", end().get() - 1);
-    for (int i = 0; i < parts.size(); ++i)
+    for (size_t i = 0; i < parts.size(); ++i)
         dbg() << "        " << String::format("%x", parts[i].base().get()) << "-" << String::format("%x", parts[i].end().get() - 1);
 #endif
     return parts;
@@ -85,6 +88,7 @@ Vector<Range, 2> Range::carve(const Range& taken)
 
 void RangeAllocator::carve_at_index(int index, const Range& range)
 {
+    ASSERT(m_lock.is_locked());
     auto remaining_parts = m_available_ranges[index].carve(range);
     ASSERT(remaining_parts.size() >= 1);
     m_available_ranges[index] = remaining_parts[0];
@@ -106,6 +110,7 @@ Range RangeAllocator::allocate_anywhere(size_t size, size_t alignment)
     size_t offset_from_effective_base = 0;
 #endif
 
+    ScopedSpinLock lock(m_lock);
     for (size_t i = 0; i < m_available_ranges.size(); ++i) {
         auto& available_range = m_available_ranges[i];
         // FIXME: This check is probably excluding some valid candidates when using a large alignment.
@@ -140,6 +145,7 @@ Range RangeAllocator::allocate_specific(VirtualAddress base, size_t size)
         return {};
 
     Range allocated_range(base, size);
+    ScopedSpinLock lock(m_lock);
     for (size_t i = 0; i < m_available_ranges.size(); ++i) {
         auto& available_range = m_available_ranges[i];
         if (!available_range.contains(base, size))
@@ -161,6 +167,7 @@ Range RangeAllocator::allocate_specific(VirtualAddress base, size_t size)
 
 void RangeAllocator::deallocate(Range range)
 {
+    ScopedSpinLock lock(m_lock);
     ASSERT(m_total_range.contains(range));
     ASSERT(range.size());
     ASSERT(range.base() < range.end());
@@ -172,12 +179,12 @@ void RangeAllocator::deallocate(Range range)
 
     ASSERT(!m_available_ranges.is_empty());
 
-    int nearby_index = 0;
+    size_t nearby_index = 0;
     auto* existing_range = binary_search(
-        m_available_ranges.data(), m_available_ranges.size(), range, [](auto& a, auto& b) {
-            return a.base().get() - b.end().get();
-        },
-        &nearby_index);
+        m_available_ranges.span(),
+        range,
+        &nearby_index,
+        [](auto& a, auto& b) { return a.base().get() - b.end().get(); });
 
     size_t inserted_index = 0;
     if (existing_range) {

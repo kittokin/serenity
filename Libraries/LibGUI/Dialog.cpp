@@ -25,7 +25,6 @@
  */
 
 #include <LibCore/EventLoop.h>
-#include <LibGUI/Desktop.h>
 #include <LibGUI/Dialog.h>
 #include <LibGUI/Event.h>
 
@@ -35,6 +34,7 @@ Dialog::Dialog(Window* parent_window)
     : Window(parent_window)
 {
     set_modal(true);
+    set_minimizable(false);
 }
 
 Dialog::~Dialog()
@@ -45,14 +45,16 @@ int Dialog::exec()
 {
     ASSERT(!m_event_loop);
     m_event_loop = make<Core::EventLoop>();
-    auto new_rect = rect();
     if (parent() && parent()->is_window()) {
         auto& parent_window = *static_cast<Window*>(parent());
-        new_rect.center_within(parent_window.rect());
+        if (parent_window.is_visible()) {
+            center_within(parent_window);
+        } else {
+            center_on_screen();
+        }
     } else {
-        new_rect.center_within(Desktop::the().rect());
+        center_on_screen();
     }
-    set_rect(new_rect);
     show();
     auto result = m_event_loop->exec();
     m_event_loop = nullptr;

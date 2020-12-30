@@ -1,16 +1,16 @@
 set(SOURCES
     DevicesModel.cpp
     GraphWidget.cpp
+    InterruptsWidget.cpp
     main.cpp
     MemoryStatsWidget.cpp
     NetworkStatisticsWidget.cpp
     ProcessFileDescriptorMapWidget.cpp
     ProcessMemoryMapWidget.cpp
     ProcessModel.cpp
-    ProcessStacksWidget.cpp
-    ProcessTableView.cpp
     ProcessUnveiledPathsWidget.cpp
+    ThreadStackWidget.cpp
 )
 
-serenity_bin(SystemMonitor)
+serenity_app(SystemMonitor ICON app-system-monitor)
 target_link_libraries(SystemMonitor LibGUI LibPCIDB)

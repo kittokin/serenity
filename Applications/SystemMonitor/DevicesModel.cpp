@@ -73,11 +73,11 @@ String DevicesModel::column_name(int column) const
     }
 }
 
-GUI::Variant DevicesModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant DevicesModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
     ASSERT(is_valid(index));
 
-    if (role == Role::TextAlignment) {
+    if (role == GUI::ModelRole::TextAlignment) {
         switch (index.column()) {
         case Column::Device:
             return Gfx::TextAlignment::CenterLeft;
@@ -93,7 +93,25 @@ GUI::Variant DevicesModel::data(const GUI::ModelIndex& index, Role role) const
         return {};
     }
 
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Sort) {
+        const DeviceInfo& device = m_devices[index.row()];
+        switch (index.column()) {
+        case Column::Device:
+            return device.path;
+        case Column::Major:
+            return device.major;
+        case Column::Minor:
+            return device.minor;
+        case Column::ClassName:
+            return device.class_name;
+        case Column::Type:
+            return device.type;
+        default:
+            ASSERT_NOT_REACHED();
+        }
+    }
+
+    if (role == GUI::ModelRole::Display) {
         const DeviceInfo& device = m_devices[index.row()];
         switch (index.column()) {
         case Column::Device:

@@ -38,11 +38,11 @@
 
 namespace Browser {
 
-void InspectorWidget::set_inspected_node(Web::Node* node)
+void InspectorWidget::set_inspected_node(Web::DOM::Node* node)
 {
     m_document->set_inspected_node(node);
     if (node && node->is_element()) {
-        auto& element = Web::to<Web::Element>(*node);
+        auto& element = downcast<Web::DOM::Element>(*node);
         if (element.resolved_style()) {
             m_style_table_view->set_model(Web::StylePropertiesModel::create(*element.resolved_style()));
             m_computed_style_table_view->set_model(Web::StylePropertiesModel::create(*element.computed_style()));
@@ -62,14 +62,14 @@ InspectorWidget::InspectorWidget()
 
     m_dom_tree_view = top_tab_widget.add_tab<GUI::TreeView>("DOM");
     m_dom_tree_view->on_selection = [this](auto& index) {
-        auto* node = static_cast<Web::Node*>(index.internal_data());
+        auto* node = static_cast<Web::DOM::Node*>(index.internal_data());
         set_inspected_node(node);
     };
 
     m_layout_tree_view = top_tab_widget.add_tab<GUI::TreeView>("Layout");
     m_layout_tree_view->on_selection = [this](auto& index) {
-        auto* node = static_cast<Web::LayoutNode*>(index.internal_data());
-        set_inspected_node(node->node());
+        auto* node = static_cast<Web::Layout::Node*>(index.internal_data());
+        set_inspected_node(node->dom_node());
     };
 
     auto& bottom_tab_widget = splitter.add<GUI::TabWidget>();
@@ -82,7 +82,7 @@ InspectorWidget::~InspectorWidget()
 {
 }
 
-void InspectorWidget::set_document(Web::Document* document)
+void InspectorWidget::set_document(Web::DOM::Document* document)
 {
     if (m_document == document)
         return;

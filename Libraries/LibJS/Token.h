@@ -31,134 +31,159 @@
 
 namespace JS {
 
-#define ENUMERATE_JS_TOKENS                           \
-    __ENUMERATE_JS_TOKEN(Ampersand)                   \
-    __ENUMERATE_JS_TOKEN(AmpersandEquals)             \
-    __ENUMERATE_JS_TOKEN(Arrow)                       \
-    __ENUMERATE_JS_TOKEN(Asterisk)                    \
-    __ENUMERATE_JS_TOKEN(DoubleAsteriskEquals)        \
-    __ENUMERATE_JS_TOKEN(AsteriskEquals)              \
-    __ENUMERATE_JS_TOKEN(Async)                       \
-    __ENUMERATE_JS_TOKEN(Await)                       \
-    __ENUMERATE_JS_TOKEN(BigIntLiteral)               \
-    __ENUMERATE_JS_TOKEN(BoolLiteral)                 \
-    __ENUMERATE_JS_TOKEN(BracketClose)                \
-    __ENUMERATE_JS_TOKEN(BracketOpen)                 \
-    __ENUMERATE_JS_TOKEN(Break)                       \
-    __ENUMERATE_JS_TOKEN(Caret)                       \
-    __ENUMERATE_JS_TOKEN(CaretEquals)                 \
-    __ENUMERATE_JS_TOKEN(Case)                        \
-    __ENUMERATE_JS_TOKEN(Catch)                       \
-    __ENUMERATE_JS_TOKEN(Class)                       \
-    __ENUMERATE_JS_TOKEN(Colon)                       \
-    __ENUMERATE_JS_TOKEN(Comma)                       \
-    __ENUMERATE_JS_TOKEN(Const)                       \
-    __ENUMERATE_JS_TOKEN(Continue)                    \
-    __ENUMERATE_JS_TOKEN(CurlyClose)                  \
-    __ENUMERATE_JS_TOKEN(CurlyOpen)                   \
-    __ENUMERATE_JS_TOKEN(Debugger)                    \
-    __ENUMERATE_JS_TOKEN(Default)                     \
-    __ENUMERATE_JS_TOKEN(Delete)                      \
-    __ENUMERATE_JS_TOKEN(Do)                          \
-    __ENUMERATE_JS_TOKEN(DoubleAmpersand)             \
-    __ENUMERATE_JS_TOKEN(DoubleAsterisk)              \
-    __ENUMERATE_JS_TOKEN(DoublePipe)                  \
-    __ENUMERATE_JS_TOKEN(DoubleQuestionMark)          \
-    __ENUMERATE_JS_TOKEN(Else)                        \
-    __ENUMERATE_JS_TOKEN(Enum)                        \
-    __ENUMERATE_JS_TOKEN(Eof)                         \
-    __ENUMERATE_JS_TOKEN(Equals)                      \
-    __ENUMERATE_JS_TOKEN(EqualsEquals)                \
-    __ENUMERATE_JS_TOKEN(EqualsEqualsEquals)          \
-    __ENUMERATE_JS_TOKEN(ExclamationMark)             \
-    __ENUMERATE_JS_TOKEN(ExclamationMarkEquals)       \
-    __ENUMERATE_JS_TOKEN(ExclamationMarkEqualsEquals) \
-    __ENUMERATE_JS_TOKEN(Export)                      \
-    __ENUMERATE_JS_TOKEN(Extends)                     \
-    __ENUMERATE_JS_TOKEN(Finally)                     \
-    __ENUMERATE_JS_TOKEN(For)                         \
-    __ENUMERATE_JS_TOKEN(Function)                    \
-    __ENUMERATE_JS_TOKEN(GreaterThan)                 \
-    __ENUMERATE_JS_TOKEN(GreaterThanEquals)           \
-    __ENUMERATE_JS_TOKEN(Identifier)                  \
-    __ENUMERATE_JS_TOKEN(If)                          \
-    __ENUMERATE_JS_TOKEN(Implements)                  \
-    __ENUMERATE_JS_TOKEN(Import)                      \
-    __ENUMERATE_JS_TOKEN(In)                          \
-    __ENUMERATE_JS_TOKEN(Instanceof)                  \
-    __ENUMERATE_JS_TOKEN(Interface)                   \
-    __ENUMERATE_JS_TOKEN(Invalid)                     \
-    __ENUMERATE_JS_TOKEN(LessThan)                    \
-    __ENUMERATE_JS_TOKEN(LessThanEquals)              \
-    __ENUMERATE_JS_TOKEN(Let)                         \
-    __ENUMERATE_JS_TOKEN(Minus)                       \
-    __ENUMERATE_JS_TOKEN(MinusEquals)                 \
-    __ENUMERATE_JS_TOKEN(MinusMinus)                  \
-    __ENUMERATE_JS_TOKEN(New)                         \
-    __ENUMERATE_JS_TOKEN(NullLiteral)                 \
-    __ENUMERATE_JS_TOKEN(NumericLiteral)              \
-    __ENUMERATE_JS_TOKEN(Package)                     \
-    __ENUMERATE_JS_TOKEN(ParenClose)                  \
-    __ENUMERATE_JS_TOKEN(ParenOpen)                   \
-    __ENUMERATE_JS_TOKEN(Percent)                     \
-    __ENUMERATE_JS_TOKEN(PercentEquals)               \
-    __ENUMERATE_JS_TOKEN(Period)                      \
-    __ENUMERATE_JS_TOKEN(Pipe)                        \
-    __ENUMERATE_JS_TOKEN(PipeEquals)                  \
-    __ENUMERATE_JS_TOKEN(Plus)                        \
-    __ENUMERATE_JS_TOKEN(PlusEquals)                  \
-    __ENUMERATE_JS_TOKEN(PlusPlus)                    \
-    __ENUMERATE_JS_TOKEN(Private)                     \
-    __ENUMERATE_JS_TOKEN(Protected)                   \
-    __ENUMERATE_JS_TOKEN(Public)                      \
-    __ENUMERATE_JS_TOKEN(QuestionMark)                \
-    __ENUMERATE_JS_TOKEN(QuestionMarkPeriod)          \
-    __ENUMERATE_JS_TOKEN(RegexLiteral)                \
-    __ENUMERATE_JS_TOKEN(RegexFlags)                  \
-    __ENUMERATE_JS_TOKEN(Return)                      \
-    __ENUMERATE_JS_TOKEN(Semicolon)                   \
-    __ENUMERATE_JS_TOKEN(ShiftLeft)                   \
-    __ENUMERATE_JS_TOKEN(ShiftLeftEquals)             \
-    __ENUMERATE_JS_TOKEN(ShiftRight)                  \
-    __ENUMERATE_JS_TOKEN(ShiftRightEquals)            \
-    __ENUMERATE_JS_TOKEN(Slash)                       \
-    __ENUMERATE_JS_TOKEN(SlashEquals)                 \
-    __ENUMERATE_JS_TOKEN(Static)                      \
-    __ENUMERATE_JS_TOKEN(StringLiteral)               \
-    __ENUMERATE_JS_TOKEN(Super)                       \
-    __ENUMERATE_JS_TOKEN(Switch)                      \
-    __ENUMERATE_JS_TOKEN(TemplateLiteralEnd)          \
-    __ENUMERATE_JS_TOKEN(TemplateLiteralExprEnd)      \
-    __ENUMERATE_JS_TOKEN(TemplateLiteralExprStart)    \
-    __ENUMERATE_JS_TOKEN(TemplateLiteralStart)        \
-    __ENUMERATE_JS_TOKEN(TemplateLiteralString)       \
-    __ENUMERATE_JS_TOKEN(This)                        \
-    __ENUMERATE_JS_TOKEN(Throw)                       \
-    __ENUMERATE_JS_TOKEN(Tilde)                       \
-    __ENUMERATE_JS_TOKEN(TripleDot)                   \
-    __ENUMERATE_JS_TOKEN(Try)                         \
-    __ENUMERATE_JS_TOKEN(Typeof)                      \
-    __ENUMERATE_JS_TOKEN(UnsignedShiftRight)          \
-    __ENUMERATE_JS_TOKEN(UnsignedShiftRightEquals)    \
-    __ENUMERATE_JS_TOKEN(UnterminatedRegexLiteral)    \
-    __ENUMERATE_JS_TOKEN(UnterminatedStringLiteral)   \
-    __ENUMERATE_JS_TOKEN(UnterminatedTemplateLiteral) \
-    __ENUMERATE_JS_TOKEN(Var)                         \
-    __ENUMERATE_JS_TOKEN(Void)                        \
-    __ENUMERATE_JS_TOKEN(While)                       \
-    __ENUMERATE_JS_TOKEN(With)                        \
-    __ENUMERATE_JS_TOKEN(Yield)
+// U+2028 LINE SEPARATOR
+constexpr const char line_separator_chars[] { (char)0xe2, (char)0x80, (char)0xa8, 0 };
+constexpr const StringView LINE_SEPARATOR { line_separator_chars };
+
+// U+2029 PARAGRAPH SEPARATOR
+constexpr const char paragraph_separator_chars[] { (char)0xe2, (char)0x80, (char)0xa9, 0 };
+constexpr const StringView PARAGRAPH_SEPARATOR { paragraph_separator_chars };
+
+#define ENUMERATE_JS_TOKENS                                     \
+    __ENUMERATE_JS_TOKEN(Ampersand, Operator)                   \
+    __ENUMERATE_JS_TOKEN(AmpersandEquals, Operator)             \
+    __ENUMERATE_JS_TOKEN(Arrow, Operator)                       \
+    __ENUMERATE_JS_TOKEN(Asterisk, Operator)                    \
+    __ENUMERATE_JS_TOKEN(AsteriskEquals, Operator)              \
+    __ENUMERATE_JS_TOKEN(Async, Keyword)                        \
+    __ENUMERATE_JS_TOKEN(Await, Keyword)                        \
+    __ENUMERATE_JS_TOKEN(BigIntLiteral, Number)                 \
+    __ENUMERATE_JS_TOKEN(BoolLiteral, Keyword)                  \
+    __ENUMERATE_JS_TOKEN(BracketClose, Punctuation)             \
+    __ENUMERATE_JS_TOKEN(BracketOpen, Punctuation)              \
+    __ENUMERATE_JS_TOKEN(Break, Keyword)                        \
+    __ENUMERATE_JS_TOKEN(Caret, Operator)                       \
+    __ENUMERATE_JS_TOKEN(CaretEquals, Operator)                 \
+    __ENUMERATE_JS_TOKEN(Case, ControlKeyword)                  \
+    __ENUMERATE_JS_TOKEN(Catch, ControlKeyword)                 \
+    __ENUMERATE_JS_TOKEN(Class, Keyword)                        \
+    __ENUMERATE_JS_TOKEN(Colon, Punctuation)                    \
+    __ENUMERATE_JS_TOKEN(Comma, Punctuation)                    \
+    __ENUMERATE_JS_TOKEN(Const, Keyword)                        \
+    __ENUMERATE_JS_TOKEN(Continue, ControlKeyword)              \
+    __ENUMERATE_JS_TOKEN(CurlyClose, Punctuation)               \
+    __ENUMERATE_JS_TOKEN(CurlyOpen, Punctuation)                \
+    __ENUMERATE_JS_TOKEN(Debugger, Keyword)                     \
+    __ENUMERATE_JS_TOKEN(Default, ControlKeyword)               \
+    __ENUMERATE_JS_TOKEN(Delete, Keyword)                       \
+    __ENUMERATE_JS_TOKEN(Do, ControlKeyword)                    \
+    __ENUMERATE_JS_TOKEN(DoubleAmpersand, Operator)             \
+    __ENUMERATE_JS_TOKEN(DoubleAmpersandEquals, Operator)       \
+    __ENUMERATE_JS_TOKEN(DoubleAsterisk, Operator)              \
+    __ENUMERATE_JS_TOKEN(DoubleAsteriskEquals, Operator)        \
+    __ENUMERATE_JS_TOKEN(DoublePipe, Operator)                  \
+    __ENUMERATE_JS_TOKEN(DoublePipeEquals, Operator)            \
+    __ENUMERATE_JS_TOKEN(DoubleQuestionMark, Operator)          \
+    __ENUMERATE_JS_TOKEN(DoubleQuestionMarkEquals, Operator)    \
+    __ENUMERATE_JS_TOKEN(Else, ControlKeyword)                  \
+    __ENUMERATE_JS_TOKEN(Enum, Keyword)                         \
+    __ENUMERATE_JS_TOKEN(Eof, Invalid)                          \
+    __ENUMERATE_JS_TOKEN(Equals, Operator)                      \
+    __ENUMERATE_JS_TOKEN(EqualsEquals, Operator)                \
+    __ENUMERATE_JS_TOKEN(EqualsEqualsEquals, Operator)          \
+    __ENUMERATE_JS_TOKEN(ExclamationMark, Operator)             \
+    __ENUMERATE_JS_TOKEN(ExclamationMarkEquals, Operator)       \
+    __ENUMERATE_JS_TOKEN(ExclamationMarkEqualsEquals, Operator) \
+    __ENUMERATE_JS_TOKEN(Export, Keyword)                       \
+    __ENUMERATE_JS_TOKEN(Extends, Keyword)                      \
+    __ENUMERATE_JS_TOKEN(Finally, ControlKeyword)               \
+    __ENUMERATE_JS_TOKEN(For, ControlKeyword)                   \
+    __ENUMERATE_JS_TOKEN(Function, Keyword)                     \
+    __ENUMERATE_JS_TOKEN(GreaterThan, Operator)                 \
+    __ENUMERATE_JS_TOKEN(GreaterThanEquals, Operator)           \
+    __ENUMERATE_JS_TOKEN(Identifier, Identifier)                \
+    __ENUMERATE_JS_TOKEN(If, ControlKeyword)                    \
+    __ENUMERATE_JS_TOKEN(Implements, Keyword)                   \
+    __ENUMERATE_JS_TOKEN(Import, Keyword)                       \
+    __ENUMERATE_JS_TOKEN(In, Keyword)                           \
+    __ENUMERATE_JS_TOKEN(Instanceof, Keyword)                   \
+    __ENUMERATE_JS_TOKEN(Interface, Keyword)                    \
+    __ENUMERATE_JS_TOKEN(Invalid, Invalid)                      \
+    __ENUMERATE_JS_TOKEN(LessThan, Operator)                    \
+    __ENUMERATE_JS_TOKEN(LessThanEquals, Operator)              \
+    __ENUMERATE_JS_TOKEN(Let, Keyword)                          \
+    __ENUMERATE_JS_TOKEN(Minus, Operator)                       \
+    __ENUMERATE_JS_TOKEN(MinusEquals, Operator)                 \
+    __ENUMERATE_JS_TOKEN(MinusMinus, Operator)                  \
+    __ENUMERATE_JS_TOKEN(New, Keyword)                          \
+    __ENUMERATE_JS_TOKEN(NullLiteral, Keyword)                  \
+    __ENUMERATE_JS_TOKEN(NumericLiteral, Number)                \
+    __ENUMERATE_JS_TOKEN(Package, Keyword)                      \
+    __ENUMERATE_JS_TOKEN(ParenClose, Punctuation)               \
+    __ENUMERATE_JS_TOKEN(ParenOpen, Punctuation)                \
+    __ENUMERATE_JS_TOKEN(Percent, Operator)                     \
+    __ENUMERATE_JS_TOKEN(PercentEquals, Operator)               \
+    __ENUMERATE_JS_TOKEN(Period, Operator)                      \
+    __ENUMERATE_JS_TOKEN(Pipe, Operator)                        \
+    __ENUMERATE_JS_TOKEN(PipeEquals, Operator)                  \
+    __ENUMERATE_JS_TOKEN(Plus, Operator)                        \
+    __ENUMERATE_JS_TOKEN(PlusEquals, Operator)                  \
+    __ENUMERATE_JS_TOKEN(PlusPlus, Operator)                    \
+    __ENUMERATE_JS_TOKEN(Private, Keyword)                      \
+    __ENUMERATE_JS_TOKEN(Protected, Keyword)                    \
+    __ENUMERATE_JS_TOKEN(Public, Keyword)                       \
+    __ENUMERATE_JS_TOKEN(QuestionMark, Operator)                \
+    __ENUMERATE_JS_TOKEN(QuestionMarkPeriod, Operator)          \
+    __ENUMERATE_JS_TOKEN(RegexFlags, String)                    \
+    __ENUMERATE_JS_TOKEN(RegexLiteral, String)                  \
+    __ENUMERATE_JS_TOKEN(Return, ControlKeyword)                \
+    __ENUMERATE_JS_TOKEN(Semicolon, Punctuation)                \
+    __ENUMERATE_JS_TOKEN(ShiftLeft, Operator)                   \
+    __ENUMERATE_JS_TOKEN(ShiftLeftEquals, Operator)             \
+    __ENUMERATE_JS_TOKEN(ShiftRight, Operator)                  \
+    __ENUMERATE_JS_TOKEN(ShiftRightEquals, Operator)            \
+    __ENUMERATE_JS_TOKEN(Slash, Operator)                       \
+    __ENUMERATE_JS_TOKEN(SlashEquals, Operator)                 \
+    __ENUMERATE_JS_TOKEN(Static, Keyword)                       \
+    __ENUMERATE_JS_TOKEN(StringLiteral, String)                 \
+    __ENUMERATE_JS_TOKEN(Super, Keyword)                        \
+    __ENUMERATE_JS_TOKEN(Switch, ControlKeyword)                \
+    __ENUMERATE_JS_TOKEN(TemplateLiteralEnd, String)            \
+    __ENUMERATE_JS_TOKEN(TemplateLiteralExprEnd, Punctuation)   \
+    __ENUMERATE_JS_TOKEN(TemplateLiteralExprStart, Punctuation) \
+    __ENUMERATE_JS_TOKEN(TemplateLiteralStart, String)          \
+    __ENUMERATE_JS_TOKEN(TemplateLiteralString, String)         \
+    __ENUMERATE_JS_TOKEN(This, Keyword)                         \
+    __ENUMERATE_JS_TOKEN(Throw, ControlKeyword)                 \
+    __ENUMERATE_JS_TOKEN(Tilde, Operator)                       \
+    __ENUMERATE_JS_TOKEN(TripleDot, Operator)                   \
+    __ENUMERATE_JS_TOKEN(Try, ControlKeyword)                   \
+    __ENUMERATE_JS_TOKEN(Typeof, Keyword)                       \
+    __ENUMERATE_JS_TOKEN(UnsignedShiftRight, Operator)          \
+    __ENUMERATE_JS_TOKEN(UnsignedShiftRightEquals, Operator)    \
+    __ENUMERATE_JS_TOKEN(UnterminatedRegexLiteral, String)      \
+    __ENUMERATE_JS_TOKEN(UnterminatedStringLiteral, String)     \
+    __ENUMERATE_JS_TOKEN(UnterminatedTemplateLiteral, String)   \
+    __ENUMERATE_JS_TOKEN(Var, Keyword)                          \
+    __ENUMERATE_JS_TOKEN(Void, Keyword)                         \
+    __ENUMERATE_JS_TOKEN(While, ControlKeyword)                 \
+    __ENUMERATE_JS_TOKEN(With, ControlKeyword)                  \
+    __ENUMERATE_JS_TOKEN(Yield, ControlKeyword)
 
 enum class TokenType {
-#define __ENUMERATE_JS_TOKEN(x) x,
+#define __ENUMERATE_JS_TOKEN(type, category) type,
     ENUMERATE_JS_TOKENS
 #undef __ENUMERATE_JS_TOKEN
+        _COUNT_OF_TOKENS
+};
+constexpr size_t cs_num_of_js_tokens = static_cast<size_t>(TokenType::_COUNT_OF_TOKENS);
+
+enum class TokenCategory {
+    Invalid,
+    Number,
+    String,
+    Punctuation,
+    Operator,
+    Keyword,
+    ControlKeyword,
+    Identifier
 };
 
 class Token {
 public:
-    Token(TokenType type, StringView trivia, StringView value, size_t line_number, size_t line_column)
+    Token(TokenType type, String message, StringView trivia, StringView value, size_t line_number, size_t line_column)
         : m_type(type)
+        , m_message(message)
         , m_trivia(trivia)
         , m_value(value)
         , m_line_number(line_number)
@@ -167,9 +192,12 @@ public:
     }
 
     TokenType type() const { return m_type; }
+    TokenCategory category() const;
+    static TokenCategory category(TokenType);
     const char* name() const;
     static const char* name(TokenType);
 
+    const String& message() const { return m_message; }
     const StringView& trivia() const { return m_trivia; }
     const StringView& value() const { return m_value; }
     size_t line_number() const { return m_line_number; }
@@ -182,25 +210,20 @@ public:
         MalformedHexEscape,
         MalformedUnicodeEscape,
         UnicodeEscapeOverflow,
+        LegacyOctalEscapeSequence,
     };
     String string_value(StringValueStatus& status) const;
 
     bool is_identifier_name() const;
+    bool trivia_contains_line_terminator() const;
 
 private:
     TokenType m_type;
+    String m_message;
     StringView m_trivia;
     StringView m_value;
     size_t m_line_number;
     size_t m_line_column;
 };
 
-}
-
-namespace AK {
-template<>
-struct Traits<JS::TokenType> : public GenericTraits<JS::TokenType> {
-    static constexpr bool is_trivial() { return true; }
-    static unsigned hash(JS::TokenType t) { return int_hash((int)t); }
-};
 }

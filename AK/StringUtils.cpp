@@ -30,119 +30,162 @@
 #include <AK/String.h>
 #include <AK/StringUtils.h>
 #include <AK/StringView.h>
+#include <AK/Vector.h>
 
 namespace AK {
 
 namespace StringUtils {
 
-bool matches(const StringView& str, const StringView& mask, CaseSensitivity case_sensitivity)
+bool matches(const StringView& str, const StringView& mask, CaseSensitivity case_sensitivity, Vector<MaskSpan>* match_spans)
 {
+    auto record_span = [&match_spans](size_t start, size_t length) {
+        if (match_spans)
+            match_spans->append({ start, length });
+    };
+
     if (str.is_null() || mask.is_null())
         return str.is_null() && mask.is_null();
+
+    if (mask == "*") {
+        record_span(0, str.length());
+        return true;
+    }
 
     if (case_sensitivity == CaseSensitivity::CaseInsensitive) {
         const String str_lower = String(str).to_lowercase();
         const String mask_lower = String(mask).to_lowercase();
-        return matches(str_lower, mask_lower, CaseSensitivity::CaseSensitive);
+        return matches(str_lower, mask_lower, CaseSensitivity::CaseSensitive, match_spans);
     }
 
     const char* string_ptr = str.characters_without_null_termination();
+    const char* string_start = str.characters_without_null_termination();
     const char* string_end = string_ptr + str.length();
     const char* mask_ptr = mask.characters_without_null_termination();
     const char* mask_end = mask_ptr + mask.length();
 
-    // Match string against mask directly unless we hit a *
-    while ((string_ptr < string_end) && (mask_ptr < mask_end) && (*mask_ptr != '*')) {
-        if ((*mask_ptr != *string_ptr) && (*mask_ptr != '?'))
-            return false;
-        mask_ptr++;
-        string_ptr++;
+    auto matches_one = [](char ch, char p) {
+        if (p == '?')
+            return true;
+        return p == ch && ch != 0;
+    };
+    while (string_ptr < string_end && mask_ptr < mask_end) {
+        auto string_start_ptr = string_ptr;
+        switch (*mask_ptr) {
+        case '*':
+            if (mask_ptr[1] == 0) {
+                record_span(string_ptr - string_start, string_end - string_ptr);
+                return true;
+            }
+            while (string_ptr < string_end && !matches(string_ptr, mask_ptr + 1))
+                ++string_ptr;
+            record_span(string_start_ptr - string_start, string_ptr - string_start_ptr);
+            --string_ptr;
+            break;
+        case '?':
+            record_span(string_ptr - string_start, 1);
+            break;
+        default:
+            if (!matches_one(*string_ptr, *mask_ptr))
+                return false;
+            break;
+        }
+        ++string_ptr;
+        ++mask_ptr;
     }
 
-    const char* cp = nullptr;
-    const char* mp = nullptr;
-
-    while (string_ptr < string_end) {
-        if ((mask_ptr < mask_end) && (*mask_ptr == '*')) {
-            // If we have only a * left, there is no way to not match.
-            if (++mask_ptr == mask_end)
-                return true;
-            mp = mask_ptr;
-            cp = string_ptr + 1;
-        } else if ((mask_ptr < mask_end) && ((*mask_ptr == *string_ptr) || (*mask_ptr == '?'))) {
-            mask_ptr++;
-            string_ptr++;
-        } else if ((cp != nullptr) && (mp != nullptr)) {
-            mask_ptr = mp;
-            string_ptr = cp++;
-        } else {
-            break;
+    if (string_ptr == string_end) {
+        // Allow ending '*' to contain nothing.
+        while (mask_ptr != mask_end && *mask_ptr == '*') {
+            record_span(string_ptr - string_start, 0);
+            ++mask_ptr;
         }
     }
 
-    // Handle any trailing mask
-    while ((mask_ptr < mask_end) && (*mask_ptr == '*'))
-        mask_ptr++;
-
-    // If we 'ate' all of the mask and the string then we match.
-    return (mask_ptr == mask_end) && string_ptr == string_end;
+    return string_ptr == string_end && mask_ptr == mask_end;
 }
 
-Optional<int> convert_to_int(const StringView& str)
+template<typename T>
+Optional<T> convert_to_int(const StringView& str)
 {
-    if (str.is_empty())
+    auto str_trimmed = str.trim_whitespace();
+    if (str_trimmed.is_empty())
         return {};
 
-    bool negative = false;
+    T sign = 1;
     size_t i = 0;
-    const auto characters = str.characters_without_null_termination();
+    const auto characters = str_trimmed.characters_without_null_termination();
 
     if (characters[0] == '-' || characters[0] == '+') {
-        if (str.length() == 1)
+        if (str_trimmed.length() == 1)
             return {};
         i++;
-        negative = (characters[0] == '-');
+        if (characters[0] == '-')
+            sign = -1;
     }
 
-    int value = 0;
-    for (; i < str.length(); i++) {
-        if (characters[i] < '0' || characters[i] > '9')
-            return {};
-        value = value * 10;
-        value += characters[i] - '0';
-    }
-    return negative ? -value : value;
-}
-
-Optional<unsigned> convert_to_uint(const StringView& str)
-{
-    if (str.is_empty())
-        return {};
-
-    unsigned value = 0;
-    const auto characters = str.characters_without_null_termination();
-
-    for (size_t i = 0; i < str.length(); i++) {
+    T value = 0;
+    for (; i < str_trimmed.length(); i++) {
         if (characters[i] < '0' || characters[i] > '9')
             return {};
 
-        value = value * 10;
-        value += characters[i] - '0';
+        if (__builtin_mul_overflow(value, 10, &value))
+            return {};
+
+        if (__builtin_add_overflow(value, sign * (characters[i] - '0'), &value))
+            return {};
     }
     return value;
 }
 
-Optional<unsigned> convert_to_uint_from_hex(const StringView& str)
+template Optional<i8> convert_to_int(const StringView& str);
+template Optional<i16> convert_to_int(const StringView& str);
+template Optional<i32> convert_to_int(const StringView& str);
+template Optional<i64> convert_to_int(const StringView& str);
+
+template<typename T>
+Optional<T> convert_to_uint(const StringView& str)
 {
-    if (str.is_empty())
+    auto str_trimmed = str.trim_whitespace();
+    if (str_trimmed.is_empty())
         return {};
 
-    unsigned value = 0;
-    const auto count = str.length();
+    T value = 0;
+    const auto characters = str_trimmed.characters_without_null_termination();
+
+    for (size_t i = 0; i < str_trimmed.length(); i++) {
+        if (characters[i] < '0' || characters[i] > '9')
+            return {};
+
+        if (__builtin_mul_overflow(value, 10, &value))
+            return {};
+
+        if (__builtin_add_overflow(value, characters[i] - '0', &value))
+            return {};
+    }
+    return value;
+}
+
+template Optional<u8> convert_to_uint(const StringView& str);
+template Optional<u16> convert_to_uint(const StringView& str);
+template Optional<u32> convert_to_uint(const StringView& str);
+template Optional<u64> convert_to_uint(const StringView& str);
+
+template<typename T>
+Optional<T> convert_to_uint_from_hex(const StringView& str)
+{
+    auto str_trimmed = str.trim_whitespace();
+    if (str_trimmed.is_empty())
+        return {};
+
+    T value = 0;
+    const auto count = str_trimmed.length();
+    const T upper_bound = AK::NumericLimits<T>::max();
 
     for (size_t i = 0; i < count; i++) {
-        char digit = str[i];
+        char digit = str_trimmed[i];
         u8 digit_val;
+        if (value > (upper_bound >> 4))
+            return {};
 
         if (digit >= '0' && digit <= '9') {
             digit_val = digit - '0';
@@ -158,6 +201,11 @@ Optional<unsigned> convert_to_uint_from_hex(const StringView& str)
     }
     return value;
 }
+
+template Optional<u8> convert_to_uint_from_hex(const StringView& str);
+template Optional<u16> convert_to_uint_from_hex(const StringView& str);
+template Optional<u32> convert_to_uint_from_hex(const StringView& str);
+template Optional<u64> convert_to_uint_from_hex(const StringView& str);
 
 static inline char to_lowercase(char c)
 {
@@ -202,6 +250,95 @@ bool ends_with(const StringView& str, const StringView& end, CaseSensitivity cas
     return true;
 }
 
+bool starts_with(const StringView& str, const StringView& start, CaseSensitivity case_sensitivity)
+{
+    if (start.is_empty())
+        return true;
+    if (str.is_empty())
+        return false;
+    if (start.length() > str.length())
+        return false;
+    if (str.characters_without_null_termination() == start.characters_without_null_termination())
+        return true;
+
+    if (case_sensitivity == CaseSensitivity::CaseSensitive)
+        return !memcmp(str.characters_without_null_termination(), start.characters_without_null_termination(), start.length());
+
+    auto str_chars = str.characters_without_null_termination();
+    auto start_chars = start.characters_without_null_termination();
+
+    size_t si = 0;
+    for (size_t starti = 0; starti < start.length(); ++si, ++starti) {
+        if (to_lowercase(str_chars[si]) != to_lowercase(start_chars[starti]))
+            return false;
+    }
+    return true;
+}
+
+bool contains(const StringView& str, const StringView& needle, CaseSensitivity case_sensitivity)
+{
+    if (str.is_null() || needle.is_null() || str.is_empty() || needle.length() > str.length())
+        return false;
+    if (needle.is_empty())
+        return true;
+    auto str_chars = str.characters_without_null_termination();
+    auto needle_chars = needle.characters_without_null_termination();
+    if (case_sensitivity == CaseSensitivity::CaseSensitive)
+        return memmem(str_chars, str.length(), needle_chars, needle.length()) != nullptr;
+
+    auto needle_first = to_lowercase(needle_chars[0]);
+    for (size_t si = 0; si < str.length(); si++) {
+        if (to_lowercase(str_chars[si]) != needle_first)
+            continue;
+        for (size_t ni = 0; si + ni < str.length(); ni++) {
+            if (to_lowercase(str_chars[si + ni]) != to_lowercase(needle_chars[ni])) {
+                si += ni;
+                break;
+            }
+            if (ni + 1 == needle.length())
+                return true;
+        }
+    }
+    return false;
+}
+
+StringView trim_whitespace(const StringView& str, TrimMode mode)
+{
+    auto is_whitespace_character = [](char ch) -> bool {
+        return ch == '\t'
+            || ch == '\n'
+            || ch == '\v'
+            || ch == '\f'
+            || ch == '\r'
+            || ch == ' ';
+    };
+
+    size_t substring_start = 0;
+    size_t substring_length = str.length();
+
+    if (mode == TrimMode::Left || mode == TrimMode::Both) {
+        for (size_t i = 0; i < str.length(); ++i) {
+            if (substring_length == 0)
+                return "";
+            if (!is_whitespace_character(str[i]))
+                break;
+            ++substring_start;
+            --substring_length;
+        }
+    }
+
+    if (mode == TrimMode::Right || mode == TrimMode::Both) {
+        for (size_t i = str.length() - 1; i > 0; --i) {
+            if (substring_length == 0)
+                return "";
+            if (!is_whitespace_character(str[i]))
+                break;
+            --substring_length;
+        }
+    }
+
+    return str.substring_view(substring_start, substring_length);
+}
 }
 
 }

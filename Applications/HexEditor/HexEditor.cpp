@@ -26,15 +26,15 @@
 
 #include "HexEditor.h"
 #include <AK/StringBuilder.h>
-#include <LibGfx/Palette.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Clipboard.h>
-#include <LibGUI/FontDatabase.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/ScrollBar.h>
 #include <LibGUI/TextEditor.h>
 #include <LibGUI/Window.h>
+#include <LibGfx/FontDatabase.h>
+#include <LibGfx/Palette.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -42,8 +42,9 @@
 
 HexEditor::HexEditor()
 {
+    set_focus_policy(GUI::FocusPolicy::StrongFocus);
     set_scrollbars_enabled(true);
-    set_font(GUI::FontDatabase::the().get_by_name("Csilla Thin"));
+    set_font(Gfx::FontDatabase::default_fixed_width_font());
     set_background_role(ColorRole::Base);
     set_foreground_role(ColorRole::BaseText);
     vertical_scrollbar().set_step(line_height());
@@ -135,11 +136,10 @@ bool HexEditor::copy_selected_hex_to_clipboard()
         return false;
 
     StringBuilder output_string_builder;
-    for (int i = m_selection_start; i <= m_selection_end; i++) {
-        output_string_builder.appendf("%02X ", m_buffer.data()[i]);
-    }
+    for (int i = m_selection_start; i <= m_selection_end; i++)
+        output_string_builder.appendff("{:02X} ", m_buffer.data()[i]);
 
-    GUI::Clipboard::the().set_data(output_string_builder.to_string());
+    GUI::Clipboard::the().set_plain_text(output_string_builder.to_string());
     return true;
 }
 
@@ -149,11 +149,10 @@ bool HexEditor::copy_selected_text_to_clipboard()
         return false;
 
     StringBuilder output_string_builder;
-    for (int i = m_selection_start; i <= m_selection_end; i++) {
-        output_string_builder.appendf("%c", isprint(m_buffer.data()[i]) ? m_buffer[i] : '.');
-    }
+    for (int i = m_selection_start; i <= m_selection_end; i++)
+        output_string_builder.append(isprint(m_buffer.data()[i]) ? m_buffer[i] : '.');
 
-    GUI::Clipboard::the().set_data(output_string_builder.to_string());
+    GUI::Clipboard::the().set_plain_text(output_string_builder.to_string());
     return true;
 }
 
@@ -163,10 +162,10 @@ bool HexEditor::copy_selected_hex_to_clipboard_as_c_code()
         return false;
 
     StringBuilder output_string_builder;
-    output_string_builder.appendf("unsigned char raw_data[%d] = {\n", (m_selection_end - m_selection_start) + 1);
+    output_string_builder.appendff("unsigned char raw_data[{}] = {{\n", (m_selection_end - m_selection_start) + 1);
     output_string_builder.append("    ");
     for (int i = m_selection_start, j = 1; i <= m_selection_end; i++, j++) {
-        output_string_builder.appendf("0x%02X", m_buffer.data()[i]);
+        output_string_builder.appendff("{:#02X}", m_buffer.data()[i]);
         if (i != m_selection_end)
             output_string_builder.append(", ");
         if ((j % 12) == 0) {
@@ -176,7 +175,7 @@ bool HexEditor::copy_selected_hex_to_clipboard_as_c_code()
     }
     output_string_builder.append("\n};\n");
 
-    GUI::Clipboard::the().set_data(output_string_builder.to_string());
+    GUI::Clipboard::the().set_plain_text(output_string_builder.to_string());
     return true;
 }
 
@@ -219,11 +218,11 @@ void HexEditor::mousedown_event(GUI::MouseEvent& event)
         auto byte_y = (absolute_y - hex_start_y) / line_height();
         auto offset = (byte_y * m_bytes_per_row) + byte_x;
 
-        if (offset < 0 || offset > static_cast<int>(m_buffer.size()))
+        if (offset < 0 || offset >= static_cast<int>(m_buffer.size()))
             return;
 
 #ifdef HEX_DEBUG
-        printf("HexEditor::mousedown_event(hex): offset=%d\n", offset);
+        outln("HexEditor::mousedown_event(hex): offset={}", offset);
 #endif
 
         m_edit_mode = EditMode::Hex;
@@ -231,7 +230,7 @@ void HexEditor::mousedown_event(GUI::MouseEvent& event)
         m_position = offset;
         m_in_drag_select = true;
         m_selection_start = offset;
-        m_selection_end = -1;
+        m_selection_end = offset;
         update();
         update_status();
     }
@@ -241,18 +240,18 @@ void HexEditor::mousedown_event(GUI::MouseEvent& event)
         auto byte_y = (absolute_y - text_start_y) / line_height();
         auto offset = (byte_y * m_bytes_per_row) + byte_x;
 
-        if (offset < 0 || offset > static_cast<int>(m_buffer.size()))
+        if (offset < 0 || offset >= static_cast<int>(m_buffer.size()))
             return;
 
 #ifdef HEX_DEBUG
-        printf("HexEditor::mousedown_event(text): offset=%d\n", offset);
+        outln("HexEditor::mousedown_event(text): offset={}", offset);
 #endif
 
         m_position = offset;
         m_byte_position = 0;
         m_in_drag_select = true;
         m_selection_start = offset;
-        m_selection_end = -1;
+        m_selection_end = offset;
         m_edit_mode = EditMode::Text;
         update();
         update_status();
@@ -274,12 +273,13 @@ void HexEditor::mousemove_event(GUI::MouseEvent& event)
     auto text_end_x = text_start_x + (bytes_per_row() * character_width());
     auto text_end_y = text_start_y + 5 + (total_rows() * line_height());
 
-    window()->set_override_cursor(GUI::StandardCursor::None);
     if ((absolute_x >= hex_start_x && absolute_x <= hex_end_x
             && absolute_y >= hex_start_y && absolute_y <= hex_end_y)
         || (absolute_x >= text_start_x && absolute_x <= text_end_x
             && absolute_y >= text_start_y && absolute_y <= text_end_y)) {
-        window()->set_override_cursor(GUI::StandardCursor::IBeam);
+        set_override_cursor(Gfx::StandardCursor::IBeam);
+    } else {
+        set_override_cursor(Gfx::StandardCursor::None);
     }
 
     if (m_in_drag_select) {
@@ -315,10 +315,7 @@ void HexEditor::mouseup_event(GUI::MouseEvent& event)
 {
     if (event.button() == GUI::MouseButton::Left) {
         if (m_in_drag_select) {
-            if (m_selection_end == -1 || m_selection_start == -1) {
-                m_selection_start = -1;
-                m_selection_end = -1;
-            } else if (m_selection_end < m_selection_start) {
+            if (m_selection_end < m_selection_start) {
                 // lets flip these around
                 auto start = m_selection_end;
                 m_selection_end = m_selection_start;
@@ -347,7 +344,7 @@ void HexEditor::scroll_position_into_view(int position)
 void HexEditor::keydown_event(GUI::KeyEvent& event)
 {
 #ifdef HEX_DEBUG
-    printf("HexEditor::keydown_event key=%d\n", event.key());
+    outln("HexEditor::keydown_event key={}", static_cast<u8>(event.key()));
 #endif
 
     if (event.key() == KeyCode::Key_Up) {
@@ -451,8 +448,11 @@ void HexEditor::text_mode_keydown_event(GUI::KeyEvent& event)
     ASSERT(m_position >= 0);
     ASSERT(m_position < static_cast<int>(m_buffer.size()));
 
+    if (event.code_point() == 0) // This is a control key
+        return;
+
     m_tracked_changes.set(m_position, m_buffer.data()[m_position]);
-    m_buffer.data()[m_position] = (u8)event.text().characters()[0]; // save the first 4 bits, OR the new value in the last 4
+    m_buffer.data()[m_position] = event.code_point();
     if (m_position + 1 < static_cast<int>(m_buffer.size()))
         m_position++;
     m_byte_position = 0;
@@ -517,11 +517,11 @@ void HexEditor::paint_event(GUI::PaintEvent& event)
         };
 
         bool is_current_line = (m_position / bytes_per_row()) == i;
-        auto line = String::format("0x%08X", i * bytes_per_row());
+        auto line = String::formatted("{:#08X}", i * bytes_per_row());
         painter.draw_text(
             side_offset_rect,
             line,
-            is_current_line ? Gfx::Font::default_bold_font() : font(),
+            is_current_line ? Gfx::FontDatabase::default_bold_font() : font(),
             Gfx::TextAlignment::TopLeft,
             is_current_line ? palette().ruler_active_text() : palette().ruler_inactive_text());
     }
@@ -561,7 +561,7 @@ void HexEditor::paint_event(GUI::PaintEvent& event)
                 text_color = palette().inactive_selection_text();
             }
 
-            auto line = String::format("%02X", m_buffer[byte_position]);
+            auto line = String::formatted("{:02X}", m_buffer[byte_position]);
             painter.draw_text(hex_display_rect, line, Gfx::TextAlignment::TopLeft, text_color);
 
             Gfx::IntRect text_display_rect {
@@ -577,13 +577,7 @@ void HexEditor::paint_event(GUI::PaintEvent& event)
                 painter.fill_rect(text_display_rect, palette().inactive_selection());
             }
 
-            painter.draw_text(text_display_rect, String::format("%c", isprint(m_buffer[byte_position]) ? m_buffer[byte_position] : '.'), Gfx::TextAlignment::TopLeft, text_color);
+            painter.draw_text(text_display_rect, String::formatted("{:c}", isprint(m_buffer[byte_position]) ? m_buffer[byte_position] : '.'), Gfx::TextAlignment::TopLeft, text_color);
         }
     }
-}
-
-void HexEditor::leave_event(Core::Event&)
-{
-    ASSERT(window());
-    window()->set_override_cursor(GUI::StandardCursor::None);
 }

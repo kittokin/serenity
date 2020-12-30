@@ -27,6 +27,7 @@
 #pragma once
 
 #include <AK/ByteBuffer.h>
+#include <AK/MemoryStream.h>
 #include <AK/SharedBuffer.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
@@ -108,7 +109,8 @@ private:
 // A buffer of audio samples, normalized to 44100hz.
 class Buffer : public RefCounted<Buffer> {
 public:
-    static RefPtr<Buffer> from_pcm_data(ByteBuffer& data, ResampleHelper& resampler, int num_channels, int bits_per_sample);
+    static RefPtr<Buffer> from_pcm_data(ReadonlyBytes data, ResampleHelper& resampler, int num_channels, int bits_per_sample);
+    static RefPtr<Buffer> from_pcm_stream(InputMemoryStream& stream, ResampleHelper& resampler, int num_channels, int bits_per_sample, int num_samples);
     static NonnullRefPtr<Buffer> create_with_samples(Vector<Sample>&& samples)
     {
         return adopt(*new Buffer(move(samples)));
@@ -120,7 +122,7 @@ public:
 
     const Sample* samples() const { return (const Sample*)data(); }
     int sample_count() const { return m_sample_count; }
-    const void* data() const { return m_buffer->data(); }
+    const void* data() const { return m_buffer->data<void>(); }
     int size_in_bytes() const { return m_sample_count * (int)sizeof(Sample); }
     int shbuf_id() const { return m_buffer->shbuf_id(); }
     SharedBuffer& shared_buffer() { return *m_buffer; }
@@ -130,7 +132,7 @@ private:
         : m_buffer(*SharedBuffer::create_with_size(samples.size() * sizeof(Sample)))
         , m_sample_count(samples.size())
     {
-        memcpy(m_buffer->data(), samples.data(), samples.size() * sizeof(Sample));
+        memcpy(m_buffer->data<void>(), samples.data(), samples.size() * sizeof(Sample));
     }
 
     explicit Buffer(NonnullRefPtr<SharedBuffer>&& buffer, int sample_count)

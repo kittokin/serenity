@@ -32,6 +32,8 @@
 #include <LibGUI/Widget.h>
 #include <string.h>
 
+namespace HackStudio {
+
 class Editor;
 
 class EditorWrapper : public GUI::Widget {
@@ -48,15 +50,15 @@ public:
     void set_editor_has_focus(Badge<Editor>, bool);
 
 private:
-    explicit EditorWrapper(BreakpointChangeCallback);
+    EditorWrapper();
 
     RefPtr<GUI::Label> m_filename_label;
     RefPtr<GUI::Label> m_cursor_label;
     RefPtr<Editor> m_editor;
 };
 
-template<>
-inline bool Core::is<EditorWrapper>(const Core::Object& object)
-{
-    return !strcmp(object.class_name(), "EditorWrapper");
 }
+
+AK_BEGIN_TYPE_TRAITS(HackStudio::EditorWrapper)
+static bool is_type(const Core::Object& object) { return !strcmp(object.class_name(), "EditorWrapper"); }
+AK_END_TYPE_TRAITS()

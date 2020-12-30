@@ -104,7 +104,7 @@ struct TypeBoundsChecker<Destination, Source, true, true, false> {
 };
 
 template<typename Destination, typename Source>
-inline constexpr bool is_within_range(Source value)
+constexpr bool is_within_range(Source value)
 {
     return TypeBoundsChecker<Destination, Source>::is_within_range(value);
 }
@@ -112,130 +112,119 @@ inline constexpr bool is_within_range(Source value)
 template<typename T>
 class Checked {
 public:
-    Checked()
-        : m_value(0)
-    {
-    }
+    constexpr Checked() = default;
 
-    Checked(T value)
+    constexpr Checked(T value)
         : m_value(value)
     {
     }
 
     template<typename U>
-    Checked(U value)
+    constexpr Checked(U value)
     {
         m_overflow = !is_within_range<T>(value);
         m_value = value;
     }
 
-    Checked(const Checked& other)
-        : m_value(other.m_value)
-        , m_overflow(other.m_overflow)
-    {
-    }
+    constexpr Checked(const Checked&) = default;
 
-    Checked(Checked&& other)
+    constexpr Checked(Checked&& other)
         : m_value(exchange(other.m_value, 0))
         , m_overflow(exchange(other.m_overflow, false))
     {
     }
 
     template<typename U>
-    Checked& operator=(U value)
+    constexpr Checked& operator=(U value)
     {
         return *this = Checked(value);
     }
 
-    Checked& operator=(const Checked& other)
-    {
-        m_value = other.value();
-        m_overflow = other.m_overflow;
-        return *this;
-    }
+    constexpr Checked& operator=(const Checked& other) = default;
 
-    Checked& operator=(Checked&& other)
+    constexpr Checked& operator=(Checked&& other)
     {
         m_value = exchange(other.m_value, 0);
         m_overflow = exchange(other.m_overflow, false);
         return *this;
     }
 
-    bool has_overflow() const
+    constexpr bool has_overflow() const
     {
         return m_overflow;
     }
 
-    ALWAYS_INLINE bool operator!() const
+    ALWAYS_INLINE constexpr bool operator!() const
     {
         ASSERT(!m_overflow);
         return !m_value;
     }
 
-    ALWAYS_INLINE T value() const
+    ALWAYS_INLINE constexpr T value() const
     {
         ASSERT(!m_overflow);
         return m_value;
     }
 
-    void add(T other)
+    constexpr void add(T other)
     {
         m_overflow |= __builtin_add_overflow(m_value, other, &m_value);
     }
 
-    void sub(T other)
+    constexpr void sub(T other)
     {
         m_overflow |= __builtin_sub_overflow(m_value, other, &m_value);
     }
 
-    void mul(T other)
+    constexpr void mul(T other)
     {
         m_overflow |= __builtin_mul_overflow(m_value, other, &m_value);
     }
 
-    void div(T other)
+    constexpr void div(T other)
     {
         m_value /= other;
     }
 
-    Checked& operator+=(T other)
+    constexpr Checked& operator+=(T other)
     {
         add(other);
         return *this;
     }
 
-    Checked& operator-=(T other)
+    constexpr Checked& operator-=(T other)
     {
         sub(other);
         return *this;
     }
 
-    Checked& operator*=(T other)
+    constexpr Checked& operator*=(T other)
     {
         mul(other);
         return *this;
     }
 
-    Checked& operator/=(T other)
+    constexpr Checked& operator/=(T other)
     {
         div(other);
         return *this;
     }
 
-    Checked& operator++()
+    constexpr Checked& operator++()
     {
         add(1);
         return *this;
     }
 
-    Checked& operator++(int)
+    constexpr Checked operator++(int)
     {
+        Checked old { *this };
         add(1);
-        return *this;
+        return old;
     }
 
     template<typename U, typename V>
-    static bool addition_would_overflow(U u, V v)
+    static constexpr bool addition_would_overflow(U u, V v)
     {
 #ifdef __clang__
         Checked checked;
@@ -248,7 +237,7 @@ public:
     }
 
     template<typename U, typename V>
-    static bool multiplication_would_overflow(U u, V v)
+    static constexpr bool multiplication_would_overflow(U u, V v)
     {
 #ifdef __clang__
         Checked checked;
@@ -261,7 +250,7 @@ public:
     }
 
     template<typename U, typename V, typename X>
-    static bool multiplication_would_overflow(U u, V v, X x)
+    static constexpr bool multiplication_would_overflow(U u, V v, X x)
     {
         Checked checked;
         checked = u;
@@ -271,108 +260,116 @@ public:
     }
 
 private:
-    T m_value;
+    T m_value {};
     bool m_overflow { false };
 };
 
 template<typename T>
-inline Checked<T> operator+(const Checked<T>& a, const Checked<T>& b)
+constexpr Checked<T> operator+(const Checked<T>& a, const Checked<T>& b)
 {
-    return Checked<T>(a).add(b);
+    Checked<T> c { a };
+    c.add(b.value());
+    return c;
 }
 
 template<typename T>
-inline Checked<T> operator-(const Checked<T>& a, const Checked<T>& b)
+constexpr Checked<T> operator-(const Checked<T>& a, const Checked<T>& b)
 {
-    return Checked<T>(a).sub(b);
+    Checked<T> c { a };
+    c.sub(b.value());
+    return c;
 }
 
 template<typename T>
-inline Checked<T> operator*(const Checked<T>& a, const Checked<T>& b)
+constexpr Checked<T> operator*(const Checked<T>& a, const Checked<T>& b)
 {
-    return Checked<T>(a).mul(b);
+    Checked<T> c { a };
+    c.mul(b.value());
+    return c;
 }
 
 template<typename T>
-inline Checked<T> operator/(const Checked<T>& a, const Checked<T>& b)
+constexpr Checked<T> operator/(const Checked<T>& a, const Checked<T>& b)
 {
-    return Checked<T>(a).div(b);
+    Checked<T> c { a };
+    c.div(b.value());
+    return c;
 }
 
 template<typename T>
-inline bool operator<(const Checked<T>& a, T b)
+constexpr bool operator<(const Checked<T>& a, T b)
 {
     return a.value() < b;
 }
 
 template<typename T>
-inline bool operator>(const Checked<T>& a, T b)
+constexpr bool operator>(const Checked<T>& a, T b)
 {
     return a.value() > b;
 }
 
 template<typename T>
-inline bool operator>=(const Checked<T>& a, T b)
+constexpr bool operator>=(const Checked<T>& a, T b)
 {
     return a.value() >= b;
 }
 
 template<typename T>
-inline bool operator<=(const Checked<T>& a, T b)
+constexpr bool operator<=(const Checked<T>& a, T b)
 {
     return a.value() <= b;
 }
 
 template<typename T>
-inline bool operator==(const Checked<T>& a, T b)
+constexpr bool operator==(const Checked<T>& a, T b)
 {
     return a.value() == b;
 }
 
 template<typename T>
-inline bool operator!=(const Checked<T>& a, T b)
+constexpr bool operator!=(const Checked<T>& a, T b)
 {
     return a.value() != b;
 }
 
 template<typename T>
-inline bool operator<(T a, const Checked<T>& b)
+constexpr bool operator<(T a, const Checked<T>& b)
 {
     return a < b.value();
 }
 
 template<typename T>
-inline bool operator>(T a, const Checked<T>& b)
+constexpr bool operator>(T a, const Checked<T>& b)
 {
     return a > b.value();
 }
 
 template<typename T>
-inline bool operator>=(T a, const Checked<T>& b)
+constexpr bool operator>=(T a, const Checked<T>& b)
 {
     return a >= b.value();
 }
 
 template<typename T>
-inline bool operator<=(T a, const Checked<T>& b)
+constexpr bool operator<=(T a, const Checked<T>& b)
 {
     return a <= b.value();
 }
 
 template<typename T>
-inline bool operator==(T a, const Checked<T>& b)
+constexpr bool operator==(T a, const Checked<T>& b)
 {
     return a == b.value();
 }
 
 template<typename T>
-inline bool operator!=(T a, const Checked<T>& b)
+constexpr bool operator!=(T a, const Checked<T>& b)
 {
     return a != b.value();
 }
 
 template<typename T>
-inline Checked<T> make_checked(T value)
+constexpr Checked<T> make_checked(T value)
 {
     return Checked<T>(value);
 }

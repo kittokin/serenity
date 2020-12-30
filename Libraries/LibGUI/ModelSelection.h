@@ -28,6 +28,7 @@
 
 #include <AK/Badge.h>
 #include <AK/HashTable.h>
+#include <AK/Noncopyable.h>
 #include <AK/TemporaryChange.h>
 #include <AK/Vector.h>
 #include <LibGUI/ModelIndex.h>
@@ -35,6 +36,9 @@
 namespace GUI {
 
 class ModelSelection {
+    AK_MAKE_NONCOPYABLE(ModelSelection);
+    AK_MAKE_NONMOVABLE(ModelSelection);
+
 public:
     ModelSelection(AbstractView& view)
         : m_view(view)
@@ -55,6 +59,7 @@ public:
 
     void set(const ModelIndex&);
     void add(const ModelIndex&);
+    void add_all(const Vector<ModelIndex>&);
     void toggle(const ModelIndex&);
     bool remove(const ModelIndex&);
     void clear();

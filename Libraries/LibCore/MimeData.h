@@ -37,7 +37,7 @@ class MimeData : public Object {
     C_OBJECT(MimeData);
 
 public:
-    virtual ~MimeData() {}
+    virtual ~MimeData() { }
 
     ByteBuffer data(const String& mime_type) const { return m_data.get(mime_type).value_or({}); }
     void set_data(const String& mime_type, const ByteBuffer& data) { m_data.set(mime_type, data); }
@@ -55,10 +55,18 @@ public:
     Vector<URL> urls() const;
     void set_urls(const Vector<URL>&);
 
+    const HashMap<String, ByteBuffer>& all_data() const { return m_data; }
+
 private:
-    MimeData() {}
+    MimeData() { }
+    explicit MimeData(const HashMap<String, ByteBuffer>& data)
+        : m_data(data)
+    {
+    }
 
     HashMap<String, ByteBuffer> m_data;
 };
+
+String guess_mime_type_based_on_filename(const StringView&);
 
 }

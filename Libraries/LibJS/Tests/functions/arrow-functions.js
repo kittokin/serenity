@@ -110,7 +110,7 @@ test("arrow functions in objects", () => {
     expect(foobar.x.z()).toBe(foobar.x);
 });
 
-test("strict mode propogation", () => {
+test("strict mode propagation", () => {
     (() => {
         "use strict";
         expect(isStrictMode()).toBeTrue();
@@ -147,4 +147,18 @@ test("cannot be constructed", () => {
     expect(() => {
         new foo();
     }).toThrowWithMessage(TypeError, "foo is not a constructor");
+});
+
+test("syntax errors", () => {
+    expect("a, => {}").not.toEval();
+    expect("(a, => {}").not.toEval();
+    expect("(,) => {}").not.toEval();
+    expect("(,,) => {}").not.toEval();
+    expect("(a,,) => {}").not.toEval();
+    expect("(a,,b) => {}").not.toEval();
+    expect("(a, ...b, ...c) => {}").not.toEval();
+    expect("(a b) => {}").not.toEval();
+    expect("(a ...b) => {}").not.toEval();
+    expect("(a = 1 = 2) => {}").not.toEval();
+    expect("()\n=> {}").not.toEval();
 });

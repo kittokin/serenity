@@ -53,7 +53,7 @@ struct syslog_data {
 
 /*
  * Many of these facilities don't really make sense anymore, but we keep them
- * for compatability purposes.
+ * for compatibility purposes.
  */
 #define LOG_KERN     ( 0 << 3)
 #define LOG_USER     ( 1 << 3)
@@ -61,8 +61,8 @@ struct syslog_data {
 #define LOG_DAEMON   ( 3 << 3)
 #define LOG_AUTH     ( 4 << 3)
 #define LOG_SYSLOG   ( 5 << 3)
-#define LOG_LPR      ( 6 << 3) 
-#define LOG_NEWS     ( 7 << 3) 
+#define LOG_LPR      ( 6 << 3)
+#define LOG_NEWS     ( 7 << 3)
 #define LOG_UUCP     ( 8 << 3)
 #define LOG_CRON     ( 9 << 3)
 #define LOG_AUTHPRIV (10 << 3)

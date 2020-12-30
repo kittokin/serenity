@@ -26,8 +26,10 @@
 
 #pragma once
 
+#include <AK/Format.h>
 #include <AK/Forward.h>
 #include <AK/Noncopyable.h>
+#include <AK/String.h>
 #include <LibJS/Forward.h>
 
 namespace JS {
@@ -37,7 +39,7 @@ class Cell {
     AK_MAKE_NONMOVABLE(Cell);
 
 public:
-    virtual void initialize(Interpreter&, GlobalObject&) { }
+    virtual void initialize(GlobalObject&) { }
     virtual ~Cell() { }
 
     bool is_marked() const { return m_mark; }
@@ -57,11 +59,10 @@ public:
         virtual void visit_impl(Cell*) = 0;
     };
 
-    virtual void visit_children(Visitor&) { }
+    virtual void visit_edges(Visitor&) { }
 
     Heap& heap() const;
-    Interpreter& interpreter();
-    Interpreter& interpreter() const;
+    VM& vm() const;
 
 protected:
     Cell() { }
@@ -71,6 +72,19 @@ private:
     bool m_live { true };
 };
 
-const LogStream& operator<<(const LogStream&, const Cell*);
+}
+
+namespace AK {
+
+template<>
+struct Formatter<JS::Cell> : Formatter<StringView> {
+    void format(FormatBuilder& builder, const JS::Cell* cell)
+    {
+        if (!cell)
+            Formatter<StringView>::format(builder, "Cell{nullptr}");
+        else
+            Formatter<StringView>::format(builder, String::formatted("{}{{{}}}", cell->class_name(), static_cast<const void*>(cell)));
+    }
+};
 
 }

@@ -27,6 +27,7 @@
 #include <AK/FlyString.h>
 #include <AK/LogStream.h>
 #include <AK/String.h>
+#include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 
 #ifdef KERNEL
@@ -60,49 +61,49 @@ const LogStream& operator<<(const LogStream& stream, const StringView& value)
 const LogStream& operator<<(const LogStream& stream, int value)
 {
     char buffer[32];
-    sprintf(buffer, "%d", value);
+    snprintf(buffer, sizeof(buffer), "%d", value);
     return stream << buffer;
 }
 
 const LogStream& operator<<(const LogStream& stream, long value)
 {
     char buffer[32];
-    sprintf(buffer, "%ld", value);
+    snprintf(buffer, sizeof(buffer), "%ld", value);
     return stream << buffer;
 }
 
 const LogStream& operator<<(const LogStream& stream, long long value)
 {
     char buffer[32];
-    sprintf(buffer, "%lld", value);
+    snprintf(buffer, sizeof(buffer), "%lld", value);
     return stream << buffer;
 }
 
 const LogStream& operator<<(const LogStream& stream, unsigned value)
 {
     char buffer[32];
-    sprintf(buffer, "%u", value);
+    snprintf(buffer, sizeof(buffer), "%u", value);
     return stream << buffer;
 }
 
 const LogStream& operator<<(const LogStream& stream, unsigned long long value)
 {
     char buffer[32];
-    sprintf(buffer, "%llu", value);
+    snprintf(buffer, sizeof(buffer), "%llu", value);
     return stream << buffer;
 }
 
 const LogStream& operator<<(const LogStream& stream, unsigned long value)
 {
     char buffer[32];
-    sprintf(buffer, "%lu", value);
+    snprintf(buffer, sizeof(buffer), "%lu", value);
     return stream << buffer;
 }
 
 const LogStream& operator<<(const LogStream& stream, const void* value)
 {
     char buffer[32];
-    sprintf(buffer, "%p", value);
+    snprintf(buffer, sizeof(buffer), "%p", value);
     return stream << buffer;
 }
 
@@ -114,6 +115,8 @@ static char process_name_buffer[256];
 DebugLogStream dbg()
 {
     DebugLogStream stream;
+
+    // FIXME: This logic is redundant with the stuff in Format.cpp.
 #if defined(__serenity__) && !defined(KERNEL)
     if (got_process_name == TriState::Unknown) {
         if (get_process_name(process_name_buffer, sizeof(process_name_buffer)) == 0)
@@ -163,28 +166,26 @@ KernelLogStream::~KernelLogStream()
 
 DebugLogStream::~DebugLogStream()
 {
-    if (!empty()) {
+    if (!empty() && s_enabled) {
         char newline = '\n';
         write(&newline, 1);
         dbgputstr(reinterpret_cast<char*>(data()), size());
     }
 }
 
+void DebugLogStream::set_enabled(bool enabled)
+{
+    s_enabled = enabled;
+}
+
+bool DebugLogStream::is_enabled()
+{
+    return s_enabled;
+}
+
+bool DebugLogStream::s_enabled = true;
+
 #ifndef KERNEL
-StdLogStream::~StdLogStream()
-{
-    char newline = '\n';
-    write(&newline, 1);
-}
-
-void StdLogStream::write(const char* characters, int length) const
-{
-    if (::write(m_fd, characters, length) < 0) {
-        perror("StdLogStream::write");
-        ASSERT_NOT_REACHED();
-    }
-}
-
 const LogStream& operator<<(const LogStream& stream, double value)
 {
     return stream << String::format("%.4f", value);
@@ -194,7 +195,47 @@ const LogStream& operator<<(const LogStream& stream, float value)
 {
     return stream << String::format("%.4f", value);
 }
-
 #endif
+
+void dump_bytes(ReadonlyBytes bytes)
+{
+    StringBuilder builder;
+
+    u8 buffered_byte = 0;
+    size_t nrepeat = 0;
+    const char* prefix = "";
+
+    auto flush = [&]() {
+        if (nrepeat > 0) {
+            if (nrepeat == 1)
+                builder.appendf("%s0x%02x", prefix, static_cast<int>(buffered_byte));
+            else
+                builder.appendf("%s%zu * 0x%02x", prefix, nrepeat, static_cast<int>(buffered_byte));
+
+            nrepeat = 0;
+            prefix = ", ";
+        }
+    };
+
+    builder.append("{ ");
+
+    for (auto byte : bytes) {
+        if (nrepeat > 0) {
+            if (byte != buffered_byte)
+                flush();
+
+            buffered_byte = byte;
+            nrepeat++;
+        } else {
+            buffered_byte = byte;
+            nrepeat = 1;
+        }
+    }
+    flush();
+
+    builder.append(" }");
+
+    dbg() << builder.to_string();
+}
 
 }

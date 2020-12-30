@@ -40,6 +40,23 @@ describe("[[Set]] trap normal behavior", () => {
         expect(p.foo).toBe(20);
         p.foo = 10;
         expect(p.foo).toBe(10);
+        p[Symbol.hasInstance] = "foo";
+        expect(p[Symbol.hasInstance]).toBe("foo");
+    });
+
+    test("custom receiver value", () => {
+        const o = {};
+        const r = {};
+        let p = new Proxy(o, {
+            set(target, property, value, receiver) {
+                receiver[property] = value;
+                return true;
+            },
+        });
+
+        expect(Reflect.set(p, "foo", 42, r)).toBe(true);
+        expect(o.foo).toBeUndefined();
+        expect(r.foo).toBe(42);
     });
 });
 

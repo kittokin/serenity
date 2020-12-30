@@ -24,8 +24,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <Kernel/Net/RTL8139NetworkAdapter.h>
+#include <AK/MACAddress.h>
 #include <Kernel/IO.h>
+#include <Kernel/Net/RTL8139NetworkAdapter.h>
 
 //#define RTL8139_DEBUG
 
@@ -134,7 +135,7 @@ void RTL8139NetworkAdapter::detect()
         if (id != rtl8139_id)
             return;
         u8 irq = PCI::get_interrupt_line(address);
-        (void)adopt(*new RTL8139NetworkAdapter(address, irq)).leak_ref();
+        [[maybe_unused]] auto& unused = adopt(*new RTL8139NetworkAdapter(address, irq)).leak_ref();
     });
 }
 
@@ -284,19 +285,19 @@ void RTL8139NetworkAdapter::reset()
 
 void RTL8139NetworkAdapter::read_mac_address()
 {
-    u8 mac[6];
+    MACAddress mac {};
     for (int i = 0; i < 6; i++)
         mac[i] = in8(REG_MAC + i);
     set_mac_address(mac);
 }
 
-void RTL8139NetworkAdapter::send_raw(const u8* data, size_t length)
+void RTL8139NetworkAdapter::send_raw(ReadonlyBytes payload)
 {
 #ifdef RTL8139_DEBUG
-    klog() << "RTL8139NetworkAdapter::send_raw length=" << length;
+    klog() << "RTL8139NetworkAdapter::send_raw length=" << payload.size();
 #endif
 
-    if (length > PACKET_SIZE_MAX) {
+    if (payload.size() > PACKET_SIZE_MAX) {
         klog() << "RTL8139NetworkAdapter: packet was too big; discarding";
         return;
     }
@@ -317,18 +318,19 @@ void RTL8139NetworkAdapter::send_raw(const u8* data, size_t length)
         return;
     } else {
 #ifdef RTL8139_DEBUG
-        klog() << "RTL8139NetworkAdapter: chose buffer " << hw_buffer << " @ " << PhysicalAddress(m_tx_buffer_addr[hw_buffer]);
+        klog() << "RTL8139NetworkAdapter: chose buffer " << hw_buffer << " @ " << PhysicalAddress(m_tx_buffers[hw_buffer]);
 #endif
         m_tx_next_buffer = (hw_buffer + 1) % 4;
     }
 
-    memcpy(m_tx_buffers[hw_buffer]->vaddr().as_ptr(), data, length);
-    memset(m_tx_buffers[hw_buffer]->vaddr().as_ptr() + length, 0, TX_BUFFER_SIZE - length);
+    memcpy(m_tx_buffers[hw_buffer]->vaddr().as_ptr(), payload.data(), payload.size());
+    memset(m_tx_buffers[hw_buffer]->vaddr().as_ptr() + payload.size(), 0, TX_BUFFER_SIZE - payload.size());
 
     // the rtl8139 will not actually emit packets onto the network if they're
     // smaller than 64 bytes. the rtl8139 adds a checksum to the end of each
     // packet, and that checksum is four bytes long, so we pad the packet to
     // 60 bytes if necessary to make sure the whole thing is large enough.
+    auto length = payload.size();
     if (length < 60) {
 #ifdef RTL8139_DEBUG
         klog() << "RTL8139NetworkAdapter: adjusting payload size from " << length << " to 60";
@@ -358,14 +360,14 @@ void RTL8139NetworkAdapter::receive()
 
     // we never have to worry about the packet wrapping around the buffer,
     // since we set RXCFG_WRAP_INHIBIT, which allows the rtl8139 to write data
-    // past the end of the alloted space.
+    // past the end of the allotted space.
     memcpy(m_packet_buffer->vaddr().as_ptr(), (const u8*)(start_of_packet + 4), length - 4);
     // let the card know that we've read this data
     m_rx_buffer_offset = ((m_rx_buffer_offset + length + 4 + 3) & ~3) % RX_BUFFER_SIZE;
     out16(REG_CAPR, m_rx_buffer_offset - 0x10);
     m_rx_buffer_offset %= RX_BUFFER_SIZE;
 
-    did_receive(m_packet_buffer->vaddr().as_ptr(), length - 4);
+    did_receive({ m_packet_buffer->vaddr().as_ptr(), (size_t)(length - 4) });
 }
 
 void RTL8139NetworkAdapter::out8(u16 address, u8 data)

@@ -29,6 +29,8 @@
 #include <AK/Badge.h>
 #include <LibGUI/Widget.h>
 
+namespace HackStudio {
+
 class CursorTool;
 class FormEditorWidget;
 
@@ -44,8 +46,6 @@ public:
     int grid_size() const { return m_grid_size; }
 
 private:
-    virtual bool accepts_focus() const override { return true; }
-
     virtual void paint_event(GUI::PaintEvent&) override;
     virtual void second_paint_event(GUI::PaintEvent&) override;
     virtual void mousedown_event(GUI::MouseEvent&) override;
@@ -57,3 +57,5 @@ private:
 
     int m_grid_size { 5 };
 };
+
+}

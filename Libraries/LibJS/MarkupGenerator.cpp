@@ -38,24 +38,11 @@ namespace JS {
 String MarkupGenerator::html_from_source(const StringView& source)
 {
     StringBuilder builder;
-    size_t source_cursor = 0;
-
     auto lexer = Lexer(source);
     for (auto token = lexer.next(); token.type() != TokenType::Eof; token = lexer.next()) {
-        auto length = token.value().length();
-        auto start = token.line_column() - 1;
-
-        if (start > source_cursor) {
-            builder.append(source.substring_view(source_cursor, start - source_cursor));
-        }
-
+        builder.append(token.trivia());
         builder.append(wrap_string_in_style(token.value(), style_type_for_token(token)));
-        source_cursor = start + length;
     }
-
-    if (source_cursor < source.length())
-        builder.append(source.substring_view(source_cursor, source.length() - source_cursor));
-
     return builder.to_string();
 }
 
@@ -77,7 +64,7 @@ void MarkupGenerator::value_to_html(Value value, StringBuilder& output_html, Has
         if (seen_objects.contains(&value.as_object())) {
             // FIXME: Maybe we should only do this for circular references,
             //        not for all reoccurring objects.
-            output_html.appendf("&lt;already printed Object %p&gt;", &value.as_object());
+            output_html.appendff("&lt;already printed Object {:p}&gt;", &value.as_object());
             return;
         }
         seen_objects.set(&value.as_object());
@@ -101,12 +88,12 @@ void MarkupGenerator::value_to_html(Value value, StringBuilder& output_html, Has
         output_html.append(open_style_type(StyleType::String));
     else if (value.is_number())
         output_html.append(open_style_type(StyleType::Number));
-    else if (value.is_boolean() || value.is_null() || value.is_undefined())
+    else if (value.is_boolean() || value.is_nullish())
         output_html.append(open_style_type(StyleType::KeywordBold));
 
     if (value.is_string())
         output_html.append('"');
-    output_html.append(value.to_string_without_side_effects());
+    output_html.append(escape_html_entities(value.to_string_without_side_effects()));
     if (value.is_string())
         output_html.append('"');
 
@@ -146,7 +133,7 @@ void MarkupGenerator::object_to_html(const Object& object, StringBuilder& html_o
 
     size_t index = 0;
     for (auto& it : object.shape().property_table_ordered()) {
-        html_output.append(wrap_string_in_style(String::format("\"%s\"", it.key.to_display_string().characters()), StyleType::String));
+        html_output.append(wrap_string_in_style(String::formatted("\"{}\"", escape_html_entities(it.key.to_display_string())), StyleType::String));
         html_output.append(wrap_string_in_style(": ", StyleType::Punctuation));
         value_to_html(object.get_direct(it.value.offset), html_output, seen_objects);
         if (index != object.shape().property_count() - 1)
@@ -159,20 +146,20 @@ void MarkupGenerator::object_to_html(const Object& object, StringBuilder& html_o
 
 void MarkupGenerator::function_to_html(const Object& function, StringBuilder& html_output, HashTable<Object*>&)
 {
-    html_output.appendf("[%s]", function.class_name());
+    html_output.appendff("[{}]", function.class_name());
 }
 
 void MarkupGenerator::date_to_html(const Object& date, StringBuilder& html_output, HashTable<Object*>&)
 {
-    html_output.appendf("Date %s", static_cast<const JS::Date&>(date).string().characters());
+    html_output.appendff("Date {}", static_cast<const JS::Date&>(date).string());
 }
 
 void MarkupGenerator::error_to_html(const Object& object, StringBuilder& html_output, HashTable<Object*>&)
 {
     auto& error = static_cast<const Error&>(object);
-    html_output.append(wrap_string_in_style(String::format("[%s]", error.name().characters()), StyleType::Invalid));
+    html_output.append(wrap_string_in_style(String::formatted("[{}]", error.name()), StyleType::Invalid));
     if (!error.message().is_empty()) {
-        html_output.appendf(": %s", error.message().characters());
+        html_output.appendff(": {}", escape_html_entities(error.message()));
     }
 }
 
@@ -204,145 +191,43 @@ String MarkupGenerator::style_from_style_type(StyleType type)
 
 MarkupGenerator::StyleType MarkupGenerator::style_type_for_token(Token token)
 {
-    switch (token.type()) {
-    case TokenType::Enum:
-    case TokenType::Eof:
-    case TokenType::Implements:
-    case TokenType::Invalid:
-    case TokenType::Package:
-    case TokenType::Private:
-    case TokenType::Protected:
-    case TokenType::Public:
-    case TokenType::Static:
-    case TokenType::UnterminatedTemplateLiteral:
+    switch (token.category()) {
+    case TokenCategory::Invalid:
         return StyleType::Invalid;
-    case TokenType::NumericLiteral:
-    case TokenType::BigIntLiteral:
+    case TokenCategory::Number:
         return StyleType::Number;
-    case TokenType::StringLiteral:
-    case TokenType::TemplateLiteralStart:
-    case TokenType::TemplateLiteralEnd:
-    case TokenType::TemplateLiteralString:
-    case TokenType::RegexLiteral:
-    case TokenType::RegexFlags:
-    case TokenType::UnterminatedStringLiteral:
+    case TokenCategory::String:
         return StyleType::String;
-    case TokenType::BracketClose:
-    case TokenType::BracketOpen:
-    case TokenType::Comma:
-    case TokenType::CurlyClose:
-    case TokenType::CurlyOpen:
-    case TokenType::ParenClose:
-    case TokenType::ParenOpen:
-    case TokenType::Semicolon:
-    case TokenType::Colon:
-    case TokenType::Period:
+    case TokenCategory::Punctuation:
         return StyleType::Punctuation;
-    case TokenType::Ampersand:
-    case TokenType::AmpersandEquals:
-    case TokenType::Arrow:
-    case TokenType::Asterisk:
-    case TokenType::AsteriskEquals:
-    case TokenType::Caret:
-    case TokenType::CaretEquals:
-    case TokenType::DoubleAmpersand:
-    case TokenType::DoubleAsterisk:
-    case TokenType::DoubleAsteriskEquals:
-    case TokenType::DoublePipe:
-    case TokenType::DoubleQuestionMark:
-    case TokenType::Equals:
-    case TokenType::EqualsEquals:
-    case TokenType::EqualsEqualsEquals:
-    case TokenType::ExclamationMark:
-    case TokenType::ExclamationMarkEquals:
-    case TokenType::ExclamationMarkEqualsEquals:
-    case TokenType::GreaterThan:
-    case TokenType::GreaterThanEquals:
-    case TokenType::LessThan:
-    case TokenType::LessThanEquals:
-    case TokenType::Minus:
-    case TokenType::MinusEquals:
-    case TokenType::MinusMinus:
-    case TokenType::Percent:
-    case TokenType::PercentEquals:
-    case TokenType::Pipe:
-    case TokenType::PipeEquals:
-    case TokenType::Plus:
-    case TokenType::PlusEquals:
-    case TokenType::PlusPlus:
-    case TokenType::QuestionMark:
-    case TokenType::QuestionMarkPeriod:
-    case TokenType::ShiftLeft:
-    case TokenType::ShiftLeftEquals:
-    case TokenType::ShiftRight:
-    case TokenType::ShiftRightEquals:
-    case TokenType::Slash:
-    case TokenType::SlashEquals:
-    case TokenType::Tilde:
-    case TokenType::TripleDot:
-    case TokenType::UnsignedShiftRight:
-    case TokenType::UnsignedShiftRightEquals:
+    case TokenCategory::Operator:
         return StyleType::Operator;
-    case TokenType::BoolLiteral:
-    case TokenType::NullLiteral:
-        return StyleType::KeywordBold;
-    case TokenType::Async:
-    case TokenType::Class:
-    case TokenType::Const:
-    case TokenType::Debugger:
-    case TokenType::Delete:
-    case TokenType::Export:
-    case TokenType::Extends:
-    case TokenType::Function:
-    case TokenType::Import:
-    case TokenType::In:
-    case TokenType::Instanceof:
-    case TokenType::Interface:
-    case TokenType::Let:
-    case TokenType::New:
-    case TokenType::Super:
-    case TokenType::TemplateLiteralExprStart:
-    case TokenType::TemplateLiteralExprEnd:
-    case TokenType::This:
-    case TokenType::Throw:
-    case TokenType::Typeof:
-    case TokenType::Var:
-    case TokenType::Void:
-        return StyleType::Keyword;
-    case TokenType::Await:
-    case TokenType::Break:
-    case TokenType::Case:
-    case TokenType::Catch:
-    case TokenType::Continue:
-    case TokenType::Default:
-    case TokenType::Do:
-    case TokenType::Else:
-    case TokenType::Finally:
-    case TokenType::For:
-    case TokenType::If:
-    case TokenType::Return:
-    case TokenType::Switch:
-    case TokenType::Try:
-    case TokenType::While:
-    case TokenType::With:
-    case TokenType::Yield:
+    case TokenCategory::Keyword:
+        switch (token.type()) {
+        case TokenType::BoolLiteral:
+        case TokenType::NullLiteral:
+            return StyleType::KeywordBold;
+        default:
+            return StyleType::Keyword;
+        }
+    case TokenCategory::ControlKeyword:
         return StyleType::ControlKeyword;
-    case TokenType::Identifier:
+    case TokenCategory::Identifier:
         return StyleType::Identifier;
     default:
-        dbg() << "Unknown style type for token" << token.name();
+        dbgln("Unknown style type for token {}", token.name());
         ASSERT_NOT_REACHED();
     }
 }
 
 String MarkupGenerator::open_style_type(StyleType type)
 {
-    return String::format("<span style=\"%s\">", style_from_style_type(type).characters());
+    return String::formatted("<span style=\"{}\">", style_from_style_type(type));
 }
 
 String MarkupGenerator::wrap_string_in_style(String source, StyleType type)
 {
-    return String::format("<span style=\"%s\">%s</span>", style_from_style_type(type).characters(), source.characters());
+    return String::formatted("<span style=\"{}\">{}</span>", style_from_style_type(type), escape_html_entities(source));
 }
 
 }

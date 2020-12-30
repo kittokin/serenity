@@ -35,11 +35,11 @@ class StringConstructor final : public NativeFunction {
 
 public:
     explicit StringConstructor(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~StringConstructor() override;
 
-    virtual Value call(Interpreter&) override;
-    virtual Value construct(Interpreter&, Function& new_target) override;
+    virtual Value call() override;
+    virtual Value construct(Function& new_target) override;
 
 private:
     virtual bool has_constructor() const override { return true; }

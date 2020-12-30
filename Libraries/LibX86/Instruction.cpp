@@ -124,7 +124,6 @@ static void build(InstructionDescriptor* table, u8 op, const char* mnemonic, Ins
     //default:
     case InvalidFormat:
     case MultibyteWithSlash:
-    case MultibyteWithSubopcode:
     case InstructionPrefix:
     case __BeginFormatsWithRMByte:
     case OP_RM16_reg16:
@@ -135,6 +134,14 @@ static void build(InstructionDescriptor* table, u8 op, const char* mnemonic, Ins
     case OP_RM8:
     case OP_RM16:
     case OP_RM32:
+    case OP_FPU:
+    case OP_FPU_reg:
+    case OP_FPU_mem:
+    case OP_FPU_AX16:
+    case OP_FPU_RM16:
+    case OP_FPU_RM32:
+    case OP_FPU_RM64:
+    case OP_FPU_M80:
     case OP_RM8_reg8:
     case OP_RM32_reg32:
     case OP_reg32_RM32:
@@ -188,13 +195,34 @@ static void build(InstructionDescriptor* table, u8 op, const char* mnemonic, Ins
 static void build_slash(InstructionDescriptor* table, u8 op, u8 slash, const char* mnemonic, InstructionFormat format, InstructionHandler handler, IsLockPrefixAllowed lock_prefix_allowed = LockPrefixNotAllowed)
 {
     InstructionDescriptor& d = table[op];
-    d.handler = handler;
+    ASSERT(d.handler == nullptr);
     d.format = MultibyteWithSlash;
     d.has_rm = true;
     if (!d.slashes)
         d.slashes = new InstructionDescriptor[8];
 
     build(d.slashes, slash, mnemonic, format, handler, lock_prefix_allowed);
+}
+
+static void build_slash_rm(InstructionDescriptor* table, u8 op, u8 slash, u8 rm, const char* mnemonic, InstructionFormat format, InstructionHandler handler)
+{
+    ASSERT((rm & 0xc0) == 0xc0);
+    ASSERT(((rm >> 3) & 7) == slash);
+
+    InstructionDescriptor& d0 = table[op];
+    ASSERT(d0.format == MultibyteWithSlash);
+    InstructionDescriptor& d = d0.slashes[slash];
+
+    if (!d.slashes) {
+        // Slash/RM instructions are not always dense, so make them all default to the slash instruction.
+        d.slashes = new InstructionDescriptor[8];
+        for (int i = 0; i < 8; ++i) {
+            d.slashes[i] = d;
+            d.slashes[i].slashes = nullptr;
+        }
+    }
+
+    build(d.slashes, rm & 7, mnemonic, format, handler, LockPrefixNotAllowed);
 }
 
 static void build_0f(u8 op, const char* mnemonic, InstructionFormat format, InstructionHandler impl, IsLockPrefixAllowed lock_prefix_allowed = LockPrefixNotAllowed)
@@ -255,6 +283,18 @@ static void build_0f_slash(u8 op, u8 slash, const char* mnemonic, InstructionFor
 {
     build_slash(s_0f_table16, op, slash, mnemonic, format, impl, lock_prefix_allowed);
     build_slash(s_0f_table32, op, slash, mnemonic, format, impl, lock_prefix_allowed);
+}
+
+static void build_slash_rm(u8 op, u8 slash, u8 rm, const char* mnemonic, InstructionFormat format, InstructionHandler impl)
+{
+    build_slash_rm(s_table16, op, slash, rm, mnemonic, format, impl);
+    build_slash_rm(s_table32, op, slash, rm, mnemonic, format, impl);
+}
+
+static void build_slash_reg(u8 op, u8 slash, const char* mnemonic, InstructionFormat format, InstructionHandler impl)
+{
+    for (int i = 0; i < 8; ++i)
+        build_slash_rm(op, slash, 0xc0 | (slash << 3) | i, mnemonic, format, impl);
 }
 
 [[gnu::constructor]] static void build_opcode_tables()
@@ -434,9 +474,157 @@ static void build_0f_slash(u8 op, u8 slash, const char* mnemonic, InstructionFor
     build(0xD6, "SALC", OP, &Interpreter::SALC);
     build(0xD7, "XLAT", OP, &Interpreter::XLAT);
 
-    // FIXME: D8-DF == FPU
-    for (u8 i = 0; i <= 7; ++i)
-        build(0xD8 + i, "FPU?", OP_RM8, &Interpreter::ESCAPE);
+    // D8-DF == FPU
+    build_slash(0xD8, 0, "FADD", OP_FPU_RM32, &Interpreter::FADD_RM32);
+    build_slash(0xD8, 1, "FMUL", OP_FPU_RM32, &Interpreter::FMUL_RM32);
+    build_slash(0xD8, 2, "FCOM", OP_FPU_RM32, &Interpreter::FCOM_RM32);
+    // FIXME: D8/2 D1 (...but isn't this what D8/2 does naturally, with D1 just being normal R/M?)
+    build_slash(0xD8, 3, "FCOMP", OP_FPU_RM32, &Interpreter::FCOMP_RM32);
+    // FIXME: D8/3 D9 (...but isn't this what D8/3 does naturally, with D9 just being normal R/M?)
+    build_slash(0xD8, 4, "FSUB", OP_FPU_RM32, &Interpreter::FSUB_RM32);
+    build_slash(0xD8, 5, "FSUBR", OP_FPU_RM32, &Interpreter::FSUBR_RM32);
+    build_slash(0xD8, 6, "FDIV", OP_FPU_RM32, &Interpreter::FDIV_RM32);
+    build_slash(0xD8, 7, "FDIVR", OP_FPU_RM32, &Interpreter::FDIVR_RM32);
+
+    build_slash(0xD9, 0, "FLD", OP_FPU_RM32, &Interpreter::FLD_RM32);
+    build_slash(0xD9, 1, "FXCH", OP_FPU_reg, &Interpreter::FXCH);
+    // FIXME: D9/1 C9 (...but isn't this what D9/1 does naturally, with C9 just being normal R/M?)
+    build_slash(0xD9, 2, "FST", OP_FPU_RM32, &Interpreter::FST_RM32);
+    build_slash_rm(0xD9, 2, 0xD0, "FNOP", OP_FPU, &Interpreter::FNOP);
+    build_slash(0xD9, 3, "FSTP", OP_FPU_RM32, &Interpreter::FSTP_RM32);
+    build_slash(0xD9, 4, "FLDENV", OP_FPU_RM32, &Interpreter::FLDENV);
+    build_slash_rm(0xD9, 4, 0xE0, "FCHS", OP_FPU, &Interpreter::FCHS);
+    build_slash_rm(0xD9, 4, 0xE1, "FABS", OP_FPU, &Interpreter::FABS);
+    build_slash_rm(0xD9, 4, 0xE2, "FTST", OP_FPU, &Interpreter::FTST);
+    build_slash_rm(0xD9, 4, 0xE3, "FXAM", OP_FPU, &Interpreter::FXAM);
+    build_slash(0xD9, 5, "FLDCW", OP_FPU_RM16, &Interpreter::FLDCW);
+    build_slash_rm(0xD9, 5, 0xE8, "FLD1", OP_FPU, &Interpreter::FLD1);
+    build_slash_rm(0xD9, 5, 0xE9, "FLDL2T", OP_FPU, &Interpreter::FLDL2T);
+    build_slash_rm(0xD9, 5, 0xEA, "FLDL2E", OP_FPU, &Interpreter::FLDL2E);
+    build_slash_rm(0xD9, 5, 0xEB, "FLDPI", OP_FPU, &Interpreter::FLDPI);
+    build_slash_rm(0xD9, 5, 0xEC, "FLDLG2", OP_FPU, &Interpreter::FLDLG2);
+    build_slash_rm(0xD9, 5, 0xED, "FLDLN2", OP_FPU, &Interpreter::FLDLN2);
+    build_slash_rm(0xD9, 5, 0xEE, "FLDZ", OP_FPU, &Interpreter::FLDZ);
+    build_slash(0xD9, 6, "FNSTENV", OP_FPU_RM32, &Interpreter::FNSTENV);
+    // FIXME: Extraodinary prefix 0x9B + 0xD9/6: FSTENV
+    build_slash_rm(0xD9, 6, 0xF0, "F2XM1", OP_FPU, &Interpreter::F2XM1);
+    build_slash_rm(0xD9, 6, 0xF1, "FYL2X", OP_FPU, &Interpreter::FYL2X);
+    build_slash_rm(0xD9, 6, 0xF2, "FPTAN", OP_FPU, &Interpreter::FPTAN);
+    build_slash_rm(0xD9, 6, 0xF3, "FPATAN", OP_FPU, &Interpreter::FPATAN);
+    build_slash_rm(0xD9, 6, 0xF4, "FXTRACT", OP_FPU, &Interpreter::FXTRACT);
+    build_slash_rm(0xD9, 6, 0xF5, "FPREM1", OP_FPU, &Interpreter::FPREM1);
+    build_slash_rm(0xD9, 6, 0xF6, "FDECSTP", OP_FPU, &Interpreter::FDECSTP);
+    build_slash_rm(0xD9, 6, 0xF7, "FINCSTP", OP_FPU, &Interpreter::FINCSTP);
+    build_slash(0xD9, 7, "FNSTCW", OP_FPU_RM16, &Interpreter::FNSTCW);
+    // FIXME: Extraodinary prefix 0x9B + 0xD9/7: FSTCW
+    build_slash_rm(0xD9, 7, 0xF8, "FPREM", OP_FPU, &Interpreter::FPREM);
+    build_slash_rm(0xD9, 7, 0xF9, "FYL2XP1", OP_FPU, &Interpreter::FYL2XP1);
+    build_slash_rm(0xD9, 7, 0xFA, "FSQRT", OP_FPU, &Interpreter::FSQRT);
+    build_slash_rm(0xD9, 7, 0xFB, "FSINCOS", OP_FPU, &Interpreter::FSINCOS);
+    build_slash_rm(0xD9, 7, 0xFC, "FRNDINT", OP_FPU, &Interpreter::FRNDINT);
+    build_slash_rm(0xD9, 7, 0xFD, "FSCALE", OP_FPU, &Interpreter::FSCALE);
+    build_slash_rm(0xD9, 7, 0xFE, "FSIN", OP_FPU, &Interpreter::FSIN);
+    build_slash_rm(0xD9, 7, 0xFF, "FCOS", OP_FPU, &Interpreter::FCOS);
+
+    build_slash(0xDA, 0, "FIADD", OP_FPU_RM32, &Interpreter::FIADD_RM32);
+    build_slash_reg(0xDA, 0, "FCMOVB", OP_FPU_reg, &Interpreter::FCMOVB);
+    build_slash(0xDA, 1, "FIMUL", OP_FPU_RM32, &Interpreter::FIMUL_RM32);
+    build_slash_reg(0xDA, 1, "FCMOVE", OP_FPU_reg, &Interpreter::FCMOVE);
+    build_slash(0xDA, 2, "FICOM", OP_FPU_RM32, &Interpreter::FICOM_RM32);
+    build_slash_reg(0xDA, 2, "FCMOVBE", OP_FPU_reg, &Interpreter::FCMOVBE);
+    build_slash(0xDA, 3, "FICOMP", OP_FPU_RM32, &Interpreter::FICOMP_RM32);
+    build_slash_reg(0xDA, 3, "FCMOVU", OP_FPU_reg, &Interpreter::FCMOVU);
+    build_slash(0xDA, 4, "FISUB", OP_FPU_RM32, &Interpreter::FISUB_RM32);
+    build_slash(0xDA, 5, "FISUBR", OP_FPU_RM32, &Interpreter::FISUBR_RM32);
+    build_slash_rm(0xDA, 5, 0xE9, "FUCOMPP", OP_FPU, &Interpreter::FUCOMPP);
+    build_slash(0xDA, 6, "FIDIV", OP_FPU_RM32, &Interpreter::FIDIV_RM32);
+    build_slash(0xDA, 7, "FIDIVR", OP_FPU_RM32, &Interpreter::FIDIVR_RM32);
+
+    build_slash(0xDB, 0, "FILD", OP_FPU_RM32, &Interpreter::FILD_RM32);
+    build_slash_reg(0xDB, 0, "FCMOVNB", OP_FPU_reg, &Interpreter::FCMOVNB);
+    build_slash(0xDB, 1, "FISTTP", OP_FPU_RM32, &Interpreter::FISTTP_RM32);
+    build_slash_reg(0xDB, 1, "FCMOVNE", OP_FPU_reg, &Interpreter::FCMOVNE);
+    build_slash(0xDB, 2, "FIST", OP_FPU_RM32, &Interpreter::FIST_RM32);
+    build_slash_reg(0xDB, 2, "FCMOVNBE", OP_FPU_reg, &Interpreter::FCMOVNBE);
+    build_slash(0xDB, 3, "FISTP", OP_FPU_RM32, &Interpreter::FISTP_RM32);
+    build_slash_reg(0xDB, 3, "FCMOVNU", OP_FPU_reg, &Interpreter::FCMOVNU);
+    build_slash(0xDB, 4, "FUNASSIGNED", OP_FPU, &Interpreter::ESCAPE);
+    build_slash_rm(0xDB, 4, 0xE0, "FNENI", OP_FPU_reg, &Interpreter::FNENI);
+    build_slash_rm(0xDB, 4, 0xE1, "FNDISI", OP_FPU_reg, &Interpreter::FNDISI);
+    build_slash_rm(0xDB, 4, 0xE2, "FNCLEX", OP_FPU_reg, &Interpreter::FNCLEX);
+    // FIXME: Extraodinary prefix 0x9B + 0xDB/4: FCLEX
+    build_slash_rm(0xDB, 4, 0xE3, "FNINIT", OP_FPU_reg, &Interpreter::FNINIT);
+    // FIXME: Extraodinary prefix 0x9B + 0xDB/4: FINIT
+    build_slash_rm(0xDB, 4, 0xE4, "FNSETPM", OP_FPU_reg, &Interpreter::FNSETPM);
+    build_slash(0xDB, 5, "FLD", OP_FPU_M80, &Interpreter::FLD_RM80);
+    build_slash_reg(0xDB, 5, "FUCOMI", OP_FPU_reg, &Interpreter::FUCOMI);
+    build_slash(0xDB, 6, "FCOMI", OP_FPU_reg, &Interpreter::FCOMI);
+    build_slash(0xDB, 7, "FSTP", OP_FPU_M80, &Interpreter::FSTP_RM80);
+
+    build_slash(0xDC, 0, "FADD", OP_FPU_RM64, &Interpreter::FADD_RM64);
+    build_slash(0xDC, 1, "FMUL", OP_FPU_RM64, &Interpreter::FMUL_RM64);
+    build_slash(0xDC, 2, "FCOM", OP_FPU_RM64, &Interpreter::FCOM_RM64);
+    build_slash(0xDC, 3, "FCOMP", OP_FPU_RM64, &Interpreter::FCOMP_RM64);
+    build_slash(0xDC, 4, "FSUB", OP_FPU_RM64, &Interpreter::FSUB_RM64);
+    build_slash(0xDC, 5, "FSUBR", OP_FPU_RM64, &Interpreter::FSUBR_RM64);
+    build_slash(0xDC, 6, "FDIV", OP_FPU_RM64, &Interpreter::FDIV_RM64);
+    build_slash(0xDC, 7, "FDIVR", OP_FPU_RM64, &Interpreter::FDIVR_RM64);
+
+    build_slash(0xDD, 0, "FLD", OP_FPU_RM64, &Interpreter::FLD_RM64);
+    build_slash_reg(0xDD, 0, "FFREE", OP_FPU_reg, &Interpreter::FFREE);
+    build_slash(0xDD, 1, "FISTTP", OP_FPU_RM64, &Interpreter::FISTTP_RM64);
+    build_slash_reg(0xDD, 1, "FXCH4", OP_FPU_reg, &Interpreter::FXCH);
+    build_slash(0xDD, 2, "FST", OP_FPU_RM64, &Interpreter::FST_RM64);
+    build_slash(0xDD, 3, "FSTP", OP_FPU_RM64, &Interpreter::FSTP_RM64);
+    build_slash(0xDD, 4, "FRSTOR", OP_FPU_mem, &Interpreter::FRSTOR);
+    build_slash_reg(0xDD, 4, "FUCOM", OP_FPU_reg, &Interpreter::FUCOM);
+    // FIXME: DD/4 E1 (...but isn't this what DD/4 does naturally, with E1 just being normal R/M?)
+    build_slash(0xDD, 5, "FUCOMP", OP_FPU_reg, &Interpreter::FUCOMP);
+    // FIXME: DD/5 E9 (...but isn't this what DD/5 does naturally, with E9 just being normal R/M?)
+    build_slash(0xDD, 6, "FNSAVE", OP_FPU_mem, &Interpreter::FNSAVE);
+    // FIXME: Extraodinary prefix 0x9B + 0xDD/6: FSAVE
+    build_slash(0xDD, 7, "FNSTSW", OP_FPU_RM16, &Interpreter::FNSTSW);
+    // FIXME: Extraodinary prefix 0x9B + 0xDD/7: FSTSW
+
+    build_slash(0xDE, 0, "FIADD", OP_FPU_RM16, &Interpreter::FIADD_RM16);
+    build_slash_reg(0xDE, 0, "FADDP", OP_FPU_reg, &Interpreter::FADDP);
+    // FIXME: DE/0 C1 (...but isn't this what DE/0 does naturally, with C1 just being normal R/M?)
+    build_slash(0xDE, 1, "FIMUL", OP_FPU_RM16, &Interpreter::FIMUL_RM16);
+    build_slash_reg(0xDE, 1, "FMULP", OP_FPU_reg, &Interpreter::FMULP);
+    // FIXME: DE/1 C9 (...but isn't this what DE/1 does naturally, with C9 just being normal R/M?)
+    build_slash(0xDE, 2, "FICOM", OP_FPU_RM16, &Interpreter::FICOM_RM16);
+    build_slash_reg(0xDE, 2, "FCOMP5", OP_FPU_reg, &Interpreter::FCOMP_RM32);
+    build_slash(0xDE, 3, "FICOMP", OP_FPU_RM16, &Interpreter::FICOMP_RM16);
+    build_slash_reg(0xDE, 3, "FCOMPP", OP_FPU_reg, &Interpreter::FCOMPP);
+    build_slash(0xDE, 4, "FISUB", OP_FPU_RM16, &Interpreter::FISUB_RM16);
+    build_slash_reg(0xDE, 4, "FSUBRP", OP_FPU_reg, &Interpreter::FSUBRP);
+    // FIXME: DE/4 E1 (...but isn't this what DE/4 does naturally, with E1 just being normal R/M?)
+    build_slash(0xDE, 5, "FISUBR", OP_FPU_RM16, &Interpreter::FISUBR_RM16);
+    build_slash_reg(0xDE, 5, "FSUBP", OP_FPU_reg, &Interpreter::FSUBP);
+    // FIXME: DE/5 E9 (...but isn't this what DE/5 does naturally, with E9 just being normal R/M?)
+    build_slash(0xDE, 6, "FIDIV", OP_FPU_RM16, &Interpreter::FIDIV_RM16);
+    build_slash_reg(0xDE, 6, "FDIVRP", OP_FPU_reg, &Interpreter::FDIVRP);
+    // FIXME: DE/6 F1 (...but isn't this what DE/6 does naturally, with F1 just being normal R/M?)
+    build_slash(0xDE, 7, "FIDIVR", OP_FPU_RM16, &Interpreter::FIDIVR_RM16);
+    build_slash_reg(0xDE, 7, "FDIVP", OP_FPU_reg, &Interpreter::FDIVP);
+    // FIXME: DE/7 F9 (...but isn't this what DE/7 does naturally, with F9 just being normal R/M?)
+
+    build_slash(0xDF, 0, "FILD", OP_FPU_RM32, &Interpreter::FILD_RM16);
+    build_slash_reg(0xDF, 0, "FFREEP", OP_FPU_reg, &Interpreter::FFREEP);
+    build_slash(0xDF, 1, "FISTTP", OP_FPU_RM32, &Interpreter::FISTTP_RM16);
+    build_slash_reg(0xDF, 1, "FXCH7", OP_FPU_reg, &Interpreter::FXCH);
+    build_slash(0xDF, 2, "FIST", OP_FPU_RM32, &Interpreter::FIST_RM16);
+    build_slash_reg(0xDF, 2, "FSTP8", OP_FPU_reg, &Interpreter::FSTP_RM32);
+    build_slash(0xDF, 3, "FISTP", OP_FPU_RM32, &Interpreter::FISTP_RM16);
+    build_slash_reg(0xDF, 3, "FSTP9", OP_FPU_reg, &Interpreter::FSTP_RM32);
+    build_slash(0xDF, 4, "FBLD", OP_FPU_M80, &Interpreter::FBLD_M80);
+    build_slash_reg(0xDF, 4, "FNSTSW", OP_FPU_AX16, &Interpreter::FNSTSW_AX);
+    // FIXME: Extraodinary prefix 0x9B + 0xDF/e: FSTSW_AX
+    build_slash(0xDF, 5, "FILD", OP_FPU_RM64, &Interpreter::FILD_RM64);
+    build_slash_reg(0xDF, 5, "FUCOMIP", OP_FPU_reg, &Interpreter::FUCOMIP);
+    build_slash(0xDF, 6, "FBSTP", OP_FPU_M80, &Interpreter::FBSTP_M80);
+    build_slash_reg(0xDF, 6, "FCOMIP", OP_FPU_reg, &Interpreter::FCOMIP);
+    build_slash(0xDF, 7, "FISTP", OP_FPU_RM64, &Interpreter::FISTP_RM64);
 
     build(0xE0, "LOOPNZ", OP_imm8, &Interpreter::LOOPNZ_imm8);
     build(0xE1, "LOOPZ", OP_imm8, &Interpreter::LOOPZ_imm8);
@@ -707,6 +895,7 @@ static void build_0f_slash(u8 op, u8 slash, const char* mnemonic, InstructionFor
 static const char* register_name(RegisterIndex8);
 static const char* register_name(RegisterIndex16);
 static const char* register_name(RegisterIndex32);
+static const char* register_name(FpuRegisterIndex);
 static const char* register_name(SegmentRegister);
 static const char* register_name(MMXRegisterIndex);
 
@@ -728,24 +917,68 @@ const char* Instruction::reg32_name() const
 String MemoryOrRegisterReference::to_string_o8(const Instruction& insn) const
 {
     if (is_register())
-        return register_name(static_cast<RegisterIndex8>(m_register_index));
+        return register_name(reg8());
     return String::format("[%s]", to_string(insn).characters());
 }
 
 String MemoryOrRegisterReference::to_string_o16(const Instruction& insn) const
 {
     if (is_register())
-        return register_name(static_cast<RegisterIndex16>(m_register_index));
+        return register_name(reg16());
     return String::format("[%s]", to_string(insn).characters());
 }
 
 String MemoryOrRegisterReference::to_string_o32(const Instruction& insn) const
 {
     if (is_register())
-        return register_name(static_cast<RegisterIndex32>(m_register_index));
+        return register_name(reg32());
     return String::format("[%s]", to_string(insn).characters());
 }
 
+String MemoryOrRegisterReference::to_string_fpu_reg() const
+{
+    ASSERT(is_register());
+    return register_name(reg_fpu());
+}
+
+String MemoryOrRegisterReference::to_string_fpu_mem(const Instruction& insn) const
+{
+    ASSERT(!is_register());
+    return String::format("[%s]", to_string(insn).characters());
+}
+
+String MemoryOrRegisterReference::to_string_fpu_ax16() const
+{
+    ASSERT(is_register());
+    return register_name(reg16());
+}
+
+String MemoryOrRegisterReference::to_string_fpu16(const Instruction& insn) const
+{
+    if (is_register())
+        return register_name(reg_fpu());
+    return String::format("word ptr [%s]", to_string(insn).characters());
+}
+
+String MemoryOrRegisterReference::to_string_fpu32(const Instruction& insn) const
+{
+    if (is_register())
+        return register_name(reg_fpu());
+    return String::format("dword ptr [%s]", to_string(insn).characters());
+}
+
+String MemoryOrRegisterReference::to_string_fpu64(const Instruction& insn) const
+{
+    if (is_register())
+        return register_name(reg_fpu());
+    return String::format("qword ptr [%s]", to_string(insn).characters());
+}
+
+String MemoryOrRegisterReference::to_string_fpu80(const Instruction& insn) const
+{
+    ASSERT(!is_register());
+    return String::format("tbyte ptr [%s]", to_string(insn).characters());
+}
 String MemoryOrRegisterReference::to_string_mm(const Instruction& insn) const
 {
     if (is_register())
@@ -975,50 +1208,37 @@ static String relative_address(u32 origin, bool x32, i32 imm)
 
 String Instruction::to_string(u32 origin, const SymbolProvider* symbol_provider, bool x32) const
 {
-    String segment_prefix;
-    String asize_prefix;
-    String osize_prefix;
-    String rep_prefix;
-    String lock_prefix;
-    if (m_segment_prefix.has_value()) {
-        segment_prefix = String::format("%s: ", register_name(m_segment_prefix.value()));
-    }
-    if (has_address_size_override_prefix()) {
-        asize_prefix = m_a32 ? "a32 " : "a16 ";
-    }
-    if (has_operand_size_override_prefix()) {
-        osize_prefix = m_o32 ? "o32 " : "o16 ";
-    }
-    if (has_lock_prefix()) {
-        lock_prefix = "lock ";
-    }
-    if (has_rep_prefix()) {
-        rep_prefix = m_rep_prefix == Prefix::REPNZ ? "repnz " : "repz ";
-    }
     StringBuilder builder;
-    builder.append(segment_prefix);
-    builder.append(asize_prefix);
-    builder.append(osize_prefix);
-    builder.append(lock_prefix);
-    builder.append(rep_prefix);
-    builder.append(to_string_internal(origin, symbol_provider, x32));
+    if (has_segment_prefix())
+        builder.appendf("%s: ", register_name(segment_prefix().value()));
+    if (has_address_size_override_prefix())
+        builder.append(m_a32 ? "a32 " : "a16 ");
+    if (has_operand_size_override_prefix())
+        builder.append(m_o32 ? "o32 " : "o16 ");
+    if (has_lock_prefix())
+        builder.append("lock ");
+    if (has_rep_prefix())
+        builder.append(m_rep_prefix == Prefix::REPNZ ? "repnz " : "repz ");
+    to_string_internal(builder, origin, symbol_provider, x32);
     return builder.to_string();
 }
 
-String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_provider, bool x32) const
+void Instruction::to_string_internal(StringBuilder& builder, u32 origin, const SymbolProvider* symbol_provider, bool x32) const
 {
-    if (!m_descriptor)
-        return String::format("db %#02x", m_op);
-
-    StringBuilder builder;
+    if (!m_descriptor) {
+        builder.appendf("db %#02x", m_op);
+        return;
+    }
 
     String mnemonic = String(m_descriptor->mnemonic).to_lowercase();
 
-    builder.append(mnemonic);
-    builder.append(' ');
+    auto append_mnemonic = [&] { builder.append(mnemonic); };
+    auto append_mnemonic_space = [&] {
+        builder.append(mnemonic);
+        builder.append(' ');
+    };
 
     auto formatted_address = [&](FlatPtr origin, bool x32, auto offset) {
-        StringBuilder builder;
         builder.append(relative_address(origin, x32, offset));
         if (symbol_provider) {
             u32 symbol_offset = 0;
@@ -1029,12 +1249,18 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
                 builder.appendf("+%u", symbol_offset);
             builder.append('>');
         }
-        return builder.to_string();
     };
 
     auto append_rm8 = [&] { builder.append(m_modrm.to_string_o8(*this)); };
     auto append_rm16 = [&] { builder.append(m_modrm.to_string_o16(*this)); };
     auto append_rm32 = [&] { builder.append(m_modrm.to_string_o32(*this)); };
+    auto append_fpu_reg = [&] { builder.append(m_modrm.to_string_fpu_reg()); };
+    auto append_fpu_mem = [&] { builder.append(m_modrm.to_string_fpu_mem(*this)); };
+    auto append_fpu_ax16 = [&] { builder.append(m_modrm.to_string_fpu_ax16()); };
+    auto append_fpu_rm16 = [&] { builder.append(m_modrm.to_string_fpu16(*this)); };
+    auto append_fpu_rm32 = [&] { builder.append(m_modrm.to_string_fpu32(*this)); };
+    auto append_fpu_rm64 = [&] { builder.append(m_modrm.to_string_fpu64(*this)); };
+    auto append_fpu_rm80 = [&] { builder.append(m_modrm.to_string_fpu80(*this)); };
     auto append_imm8 = [&] { builder.appendf("%#02x", imm8()); };
     auto append_imm8_2 = [&] { builder.appendf("%#02x", imm8_2()); };
     auto append_imm16 = [&] { builder.appendf("%#04x", imm16()); };
@@ -1048,10 +1274,10 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
     auto append_seg = [&] { builder.append(register_name(segment_register())); };
     auto append_creg = [&] { builder.appendf("cr%u", register_index()); };
     auto append_dreg = [&] { builder.appendf("dr%u", register_index()); };
-    auto append_relative_addr = [&] { builder.append(formatted_address(origin + (m_a32 ? 6 : 4), x32, i32(m_a32 ? imm32() : imm16()))); };
-    auto append_relative_imm8 = [&] { builder.append(formatted_address(origin + 2, x32, i8(imm8()))); };
-    auto append_relative_imm16 = [&] { builder.append(formatted_address(origin + 3, x32, i16(imm16()))); };
-    auto append_relative_imm32 = [&] { builder.append(formatted_address(origin + 5, x32, i32(imm32()))); };
+    auto append_relative_addr = [&] { formatted_address(origin + (m_a32 ? 6 : 4), x32, i32(m_a32 ? imm32() : imm16())); };
+    auto append_relative_imm8 = [&] { formatted_address(origin + 2, x32, i8(imm8())); };
+    auto append_relative_imm16 = [&] { formatted_address(origin + 3, x32, i16(imm16())); };
+    auto append_relative_imm32 = [&] { formatted_address(origin + 5, x32, i32(imm32())); };
 
     auto append_mm = [&] { builder.appendf("mm%u", register_index()); };
     auto append_mmrm64 = [&] { builder.append(m_modrm.to_string_mm(*this)); };
@@ -1069,21 +1295,25 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
 
     switch (m_descriptor->format) {
     case OP_RM8_imm8:
+        append_mnemonic_space();
         append_rm8();
         append(", ");
         append_imm8();
         break;
     case OP_RM16_imm8:
+        append_mnemonic_space();
         append_rm16();
         append(", ");
         append_imm8();
         break;
     case OP_RM32_imm8:
+        append_mnemonic_space();
         append_rm32();
         append(", ");
         append_imm8();
         break;
     case OP_reg16_RM16_imm8:
+        append_mnemonic_space();
         append_reg16();
         append(", ");
         append_rm16();
@@ -1091,6 +1321,7 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
         append_imm8();
         break;
     case OP_reg32_RM32_imm8:
+        append_mnemonic_space();
         append_reg32();
         append(", ");
         append_rm32();
@@ -1098,50 +1329,62 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
         append_imm8();
         break;
     case OP_AL_imm8:
+        append_mnemonic_space();
         append("al, ");
         append_imm8();
         break;
     case OP_imm8:
+        append_mnemonic_space();
         append_imm8();
         break;
     case OP_reg8_imm8:
+        append_mnemonic_space();
         append_reg8();
         append(", ");
         append_imm8();
         break;
     case OP_AX_imm8:
+        append_mnemonic_space();
         append("ax, ");
         append_imm8();
         break;
     case OP_EAX_imm8:
+        append_mnemonic_space();
         append("eax, ");
         append_imm8();
         break;
     case OP_imm8_AL:
+        append_mnemonic_space();
         append_imm8();
         append(", al");
         break;
     case OP_imm8_AX:
+        append_mnemonic_space();
         append_imm8();
         append(", ax");
         break;
     case OP_imm8_EAX:
+        append_mnemonic_space();
         append_imm8();
         append(", eax");
         break;
     case OP_AX_imm16:
+        append_mnemonic_space();
         append("ax, ");
         append_imm16();
         break;
     case OP_imm16:
+        append_mnemonic_space();
         append_imm16();
         break;
     case OP_reg16_imm16:
+        append_mnemonic_space();
         append_reg16();
         append(", ");
         append_imm16();
         break;
     case OP_reg16_RM16_imm16:
+        append_mnemonic_space();
         append_reg16();
         append(", ");
         append_rm16();
@@ -1149,6 +1392,7 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
         append_imm16();
         break;
     case OP_reg32_RM32_imm32:
+        append_mnemonic_space();
         append_reg32();
         append(", ");
         append_rm32();
@@ -1156,276 +1400,375 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
         append_imm32();
         break;
     case OP_imm32:
+        append_mnemonic_space();
         append_imm32();
         break;
     case OP_EAX_imm32:
+        append_mnemonic_space();
         append("eax, ");
         append_imm32();
         break;
     case OP_CS:
+        append_mnemonic_space();
         append("cs");
         break;
     case OP_DS:
+        append_mnemonic_space();
         append("ds");
         break;
     case OP_ES:
+        append_mnemonic_space();
         append("es");
         break;
     case OP_SS:
+        append_mnemonic_space();
         append("ss");
         break;
     case OP_FS:
+        append_mnemonic_space();
         append("fs");
         break;
     case OP_GS:
+        append_mnemonic_space();
         append("gs");
         break;
     case OP:
+        append_mnemonic_space();
         break;
     case OP_reg32:
+        append_mnemonic_space();
         append_reg32();
         break;
     case OP_imm16_imm8:
+        append_mnemonic_space();
         append_imm16_1();
         append(", ");
         append_imm8_2();
         break;
     case OP_moff8_AL:
+        append_mnemonic_space();
         append_moff();
         append(", al");
         break;
     case OP_moff16_AX:
+        append_mnemonic_space();
         append_moff();
         append(", ax");
         break;
     case OP_moff32_EAX:
+        append_mnemonic_space();
         append_moff();
         append(", eax");
         break;
     case OP_AL_moff8:
+        append_mnemonic_space();
         append("al, ");
         append_moff();
         break;
     case OP_AX_moff16:
+        append_mnemonic_space();
         append("ax, ");
         append_moff();
         break;
     case OP_EAX_moff32:
+        append_mnemonic_space();
         append("eax, ");
         append_moff();
         break;
     case OP_imm16_imm16:
+        append_mnemonic_space();
         append_imm16_1();
         append(":");
         append_imm16_2();
         break;
     case OP_imm16_imm32:
+        append_mnemonic_space();
         append_imm16_1();
         append(":");
         append_imm32_2();
         break;
     case OP_reg32_imm32:
+        append_mnemonic_space();
         append_reg32();
         append(", ");
         append_imm32();
         break;
     case OP_RM8_1:
+        append_mnemonic_space();
         append_rm8();
         append(", 0x01");
         break;
     case OP_RM16_1:
+        append_mnemonic_space();
         append_rm16();
         append(", 0x01");
         break;
     case OP_RM32_1:
+        append_mnemonic_space();
         append_rm32();
         append(", 0x01");
         break;
     case OP_RM8_CL:
+        append_mnemonic_space();
         append_rm8();
         append(", cl");
         break;
     case OP_RM16_CL:
+        append_mnemonic_space();
         append_rm16();
         append(", cl");
         break;
     case OP_RM32_CL:
+        append_mnemonic_space();
         append_rm32();
         append(", cl");
         break;
     case OP_reg16:
+        append_mnemonic_space();
         append_reg16();
         break;
     case OP_AX_reg16:
+        append_mnemonic_space();
         append("ax, ");
         append_reg16();
         break;
     case OP_EAX_reg32:
+        append_mnemonic_space();
         append("eax, ");
         append_reg32();
         break;
     case OP_3:
+        append_mnemonic_space();
         append("0x03");
         break;
     case OP_AL_DX:
+        append_mnemonic_space();
         append("al, dx");
         break;
     case OP_AX_DX:
+        append_mnemonic_space();
         append("ax, dx");
         break;
     case OP_EAX_DX:
+        append_mnemonic_space();
         append("eax, dx");
         break;
     case OP_DX_AL:
+        append_mnemonic_space();
         append("dx, al");
         break;
     case OP_DX_AX:
+        append_mnemonic_space();
         append("dx, ax");
         break;
     case OP_DX_EAX:
+        append_mnemonic_space();
         append("dx, eax");
         break;
     case OP_reg8_CL:
+        append_mnemonic_space();
         append_reg8();
         append(", cl");
         break;
     case OP_RM8:
+        append_mnemonic_space();
         append_rm8();
         break;
     case OP_RM16:
+        append_mnemonic_space();
         append_rm16();
         break;
     case OP_RM32:
+        append_mnemonic_space();
         append_rm32();
         break;
+    case OP_FPU:
+        append_mnemonic_space();
+        break;
+    case OP_FPU_reg:
+        append_mnemonic_space();
+        append_fpu_reg();
+        break;
+    case OP_FPU_mem:
+        append_mnemonic_space();
+        append_fpu_mem();
+        break;
+    case OP_FPU_AX16:
+        append_mnemonic_space();
+        append_fpu_ax16();
+        break;
+    case OP_FPU_RM16:
+        append_mnemonic_space();
+        append_fpu_rm16();
+        break;
+    case OP_FPU_RM32:
+        append_mnemonic_space();
+        append_fpu_rm32();
+        break;
+    case OP_FPU_RM64:
+        append_mnemonic_space();
+        append_fpu_rm64();
+        break;
+    case OP_FPU_M80:
+        append_mnemonic_space();
+        append_fpu_rm80();
+        break;
     case OP_RM8_reg8:
+        append_mnemonic_space();
         append_rm8();
         append(", ");
         append_reg8();
         break;
     case OP_RM16_reg16:
+        append_mnemonic_space();
         append_rm16();
         append(", ");
         append_reg16();
         break;
     case OP_RM32_reg32:
+        append_mnemonic_space();
         append_rm32();
         append(", ");
         append_reg32();
         break;
     case OP_reg8_RM8:
+        append_mnemonic_space();
         append_reg8();
         append(", ");
         append_rm8();
         break;
     case OP_reg16_RM16:
+        append_mnemonic_space();
         append_reg16();
         append(", ");
         append_rm16();
         break;
     case OP_reg32_RM32:
+        append_mnemonic_space();
         append_reg32();
         append(", ");
         append_rm32();
         break;
     case OP_reg32_RM16:
+        append_mnemonic_space();
         append_reg32();
         append(", ");
         append_rm16();
         break;
     case OP_reg16_RM8:
+        append_mnemonic_space();
         append_reg16();
         append(", ");
         append_rm8();
         break;
     case OP_reg32_RM8:
+        append_mnemonic_space();
         append_reg32();
         append(", ");
         append_rm8();
         break;
     case OP_RM16_imm16:
+        append_mnemonic_space();
         append_rm16();
         append(", ");
         append_imm16();
         break;
     case OP_RM32_imm32:
+        append_mnemonic_space();
         append_rm32();
         append(", ");
         append_imm32();
         break;
     case OP_RM16_seg:
+        append_mnemonic_space();
         append_rm16();
         append(", ");
         append_seg();
         break;
     case OP_RM32_seg:
+        append_mnemonic_space();
         append_rm32();
         append(", ");
         append_seg();
         break;
     case OP_seg_RM16:
+        append_mnemonic_space();
         append_seg();
         append(", ");
         append_rm16();
         break;
     case OP_seg_RM32:
+        append_mnemonic_space();
         append_seg();
         append(", ");
         append_rm32();
         break;
     case OP_reg16_mem16:
+        append_mnemonic_space();
         append_reg16();
         append(", ");
         append_rm16();
         break;
     case OP_reg32_mem32:
+        append_mnemonic_space();
         append_reg32();
         append(", ");
         append_rm32();
         break;
     case OP_FAR_mem16:
+        append_mnemonic_space();
         append("far ");
         append_rm16();
         break;
     case OP_FAR_mem32:
+        append_mnemonic_space();
         append("far ");
         append_rm32();
         break;
     case OP_reg32_CR:
+        append_mnemonic_space();
         builder.append(register_name(static_cast<RegisterIndex32>(rm() & 7)));
         append(", ");
         append_creg();
         break;
     case OP_CR_reg32:
+        append_mnemonic_space();
         append_creg();
         append(", ");
         builder.append(register_name(static_cast<RegisterIndex32>(rm() & 7)));
         break;
     case OP_reg32_DR:
+        append_mnemonic_space();
         builder.append(register_name(static_cast<RegisterIndex32>(rm() & 7)));
         append(", ");
         append_dreg();
         break;
     case OP_DR_reg32:
+        append_mnemonic_space();
         append_dreg();
         append(", ");
         builder.append(register_name(static_cast<RegisterIndex32>(rm() & 7)));
         break;
     case OP_short_imm8:
+        append_mnemonic_space();
         append("short ");
         append_relative_imm8();
         break;
     case OP_relimm16:
+        append_mnemonic_space();
         append_relative_imm16();
         break;
     case OP_relimm32:
+        append_mnemonic_space();
         append_relative_imm32();
         break;
     case OP_NEAR_imm:
+        append_mnemonic_space();
         append("near ");
         append_relative_addr();
         break;
     case OP_RM16_reg16_imm8:
+        append_mnemonic_space();
         append_rm16();
         append(", ");
         append_reg16();
@@ -1433,6 +1776,7 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
         append_imm8();
         break;
     case OP_RM32_reg32_imm8:
+        append_mnemonic_space();
         append_rm32();
         append(", ");
         append_reg32();
@@ -1440,37 +1784,41 @@ String Instruction::to_string_internal(u32 origin, const SymbolProvider* symbol_
         append_imm8();
         break;
     case OP_RM16_reg16_CL:
+        append_mnemonic_space();
         append_rm16();
         append(", ");
         append_reg16();
         append(", cl");
         break;
     case OP_RM32_reg32_CL:
+        append_mnemonic_space();
         append_rm32();
         append(", ");
         append_reg32();
         append(", cl");
         break;
     case OP_mm1_mm2m64:
+        append_mnemonic_space();
         append_mm();
         append(", ");
         append_mmrm64();
         break;
     case OP_mm1m64_mm2:
+        append_mnemonic_space();
         append_mm();
         append(", ");
         append_mmrm64();
         break;
     case InstructionPrefix:
-        return mnemonic;
+        append_mnemonic();
+        break;
     case InvalidFormat:
     case MultibyteWithSlash:
-    case MultibyteWithSubopcode:
     case __BeginFormatsWithRMByte:
     case __EndFormatsWithRMByte:
-        return String::format("(!%s)", mnemonic.characters());
+        builder.append(String::format("(!%s)", mnemonic.characters()));
+        break;
     }
-    return builder.to_string();
 }
 
 String Instruction::mnemonic() const
@@ -1502,6 +1850,12 @@ const char* register_name(RegisterIndex16 register_index)
 const char* register_name(RegisterIndex32 register_index)
 {
     static constexpr const char* names[] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi" };
+    return names[register_index & 7];
+}
+
+const char* register_name(FpuRegisterIndex register_index)
+{
+    static constexpr const char* names[] = { "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7" };
     return names[register_index & 7];
 }
 

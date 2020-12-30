@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include "Certificate.h"
 #include <AK/IPv4Address.h>
 #include <AK/WeakPtr.h>
 #include <LibCore/Notifier.h>
@@ -40,18 +41,21 @@
 
 namespace TLS {
 
-inline void print_buffer(const ByteBuffer& buffer)
+inline void print_buffer(ReadonlyBytes buffer)
 {
     for (size_t i { 0 }; i < buffer.size(); ++i)
         dbgprintf("%02x ", buffer[i]);
     dbgprintf("\n");
 }
 
+inline void print_buffer(const ByteBuffer& buffer)
+{
+    print_buffer(buffer.bytes());
+}
+
 inline void print_buffer(const u8* buffer, size_t size)
 {
-    for (size_t i { 0 }; i < size; ++i)
-        dbgprintf("%02x ", buffer[i]);
-    dbgprintf("\n");
+    print_buffer(ReadonlyBytes { buffer, size });
 }
 
 class Socket;
@@ -190,46 +194,6 @@ enum ClientVerificationStaus {
     VerificationNeeded,
 };
 
-enum class CertificateKeyAlgorithm {
-    Unsupported = 0x00,
-    RSA_RSA = 0x01,
-    RSA_MD5 = 0x04,
-    RSA_SHA1 = 0x05,
-    RSA_SHA256 = 0x0b,
-    RSA_SHA512 = 0x0d,
-};
-
-struct Certificate {
-    u16 version;
-    CertificateKeyAlgorithm algorithm;
-    CertificateKeyAlgorithm key_algorithm;
-    CertificateKeyAlgorithm ec_algorithm;
-    ByteBuffer exponent;
-    Crypto::PK::RSAPublicKey<Crypto::UnsignedBigInteger> public_key;
-    String issuer_country;
-    String issuer_state;
-    String issuer_location;
-    String issuer_entity;
-    String issuer_subject;
-    String not_before;
-    String not_after;
-    String country;
-    String state;
-    String location;
-    String entity;
-    String subject;
-    u8** SAN;
-    u16 SAN_length;
-    u8* ocsp;
-    Crypto::UnsignedBigInteger serial_number;
-    ByteBuffer sign_key;
-    ByteBuffer fingerprint;
-    ByteBuffer der;
-    ByteBuffer data;
-
-    bool is_valid() const;
-};
-
 struct Context {
     String to_string() const;
     bool verify() const;
@@ -257,6 +221,8 @@ struct Context {
         u8 local_mac[32];
         u8 local_iv[16];
         u8 remote_iv[16];
+        u8 local_aead_iv[4];
+        u8 remote_aead_iv[4];
     } crypto;
 
     Crypto::Hash::Manager handshake_hash;
@@ -314,9 +280,18 @@ public:
         m_context.SNI = sni;
     }
 
-    Optional<Certificate> parse_asn1(const ByteBuffer& buffer, bool client_cert = false) const;
-    bool load_certificates(const ByteBuffer& pem_buffer);
-    bool load_private_key(const ByteBuffer& pem_buffer);
+    Optional<Certificate> parse_asn1(ReadonlyBytes, bool client_cert = false) const;
+    bool load_certificates(ReadonlyBytes pem_buffer);
+    bool load_private_key(ReadonlyBytes pem_buffer);
+
+    void set_root_certificates(Vector<Certificate>);
+
+    bool add_client_key(ReadonlyBytes certificate_pem_buffer, ReadonlyBytes key_pem_buffer);
+    bool add_client_key(Certificate certificate)
+    {
+        m_context.client_certificates.append(move(certificate));
+        return true;
+    }
 
     ByteBuffer finish_build();
 
@@ -326,7 +301,11 @@ public:
 
     bool supports_cipher(CipherSuite suite) const
     {
-        return suite == CipherSuite::RSA_WITH_AES_128_CBC_SHA256 || suite == CipherSuite::RSA_WITH_AES_256_CBC_SHA256 || suite == CipherSuite::RSA_WITH_AES_128_CBC_SHA || suite == CipherSuite::RSA_WITH_AES_256_CBC_SHA;
+        return suite == CipherSuite::RSA_WITH_AES_128_CBC_SHA256
+            || suite == CipherSuite::RSA_WITH_AES_256_CBC_SHA256
+            || suite == CipherSuite::RSA_WITH_AES_128_CBC_SHA
+            || suite == CipherSuite::RSA_WITH_AES_256_CBC_SHA
+            || suite == CipherSuite::RSA_WITH_AES_128_GCM_SHA256;
     }
 
     bool supports_version(Version v) const
@@ -337,31 +316,32 @@ public:
     Optional<ByteBuffer> read();
     ByteBuffer read(size_t max_size);
 
-    bool write(const ByteBuffer& buffer);
+    bool write(ReadonlyBytes);
     void alert(AlertLevel, AlertDescription);
 
     bool can_read_line() const { return m_context.application_buffer.size() && memchr(m_context.application_buffer.data(), '\n', m_context.application_buffer.size()); }
     bool can_read() const { return m_context.application_buffer.size() > 0; }
-    ByteBuffer read_line(size_t max_size);
+    String read_line(size_t max_size);
 
     Function<void(TLSv12&)> on_tls_ready_to_read;
     Function<void(TLSv12&)> on_tls_ready_to_write;
     Function<void(AlertDescription)> on_tls_error;
     Function<void()> on_tls_connected;
     Function<void()> on_tls_finished;
+    Function<void(TLSv12&)> on_tls_certificate_request;
 
 private:
     explicit TLSv12(Core::Object* parent, Version version = Version::V12);
 
     virtual bool common_connect(const struct sockaddr*, socklen_t) override;
 
-    void consume(const ByteBuffer& record);
+    void consume(ReadonlyBytes record);
 
-    ByteBuffer hmac_message(const ByteBuffer& buf, const Optional<ByteBuffer> buf2, size_t mac_length, bool local = false);
+    ByteBuffer hmac_message(const ReadonlyBytes& buf, const Optional<ReadonlyBytes> buf2, size_t mac_length, bool local = false);
     void ensure_hmac(size_t digest_size, bool local);
 
     void update_packet(ByteBuffer& packet);
-    void update_hash(const ByteBuffer& in);
+    void update_hash(ReadonlyBytes in);
 
     void write_packet(ByteBuffer& packet);
 
@@ -383,19 +363,19 @@ private:
 
     bool check_connection_state(bool read);
 
-    ssize_t handle_hello(const ByteBuffer& buffer, WritePacketStage&);
-    ssize_t handle_finished(const ByteBuffer& buffer, WritePacketStage&);
-    ssize_t handle_certificate(const ByteBuffer& buffer);
-    ssize_t handle_server_key_exchange(const ByteBuffer& buffer);
-    ssize_t handle_server_hello_done(const ByteBuffer& buffer);
-    ssize_t handle_verify(const ByteBuffer& buffer);
-    ssize_t handle_payload(const ByteBuffer& buffer);
-    ssize_t handle_message(const ByteBuffer& buffer);
-    ssize_t handle_random(const ByteBuffer& buffer);
+    ssize_t handle_hello(ReadonlyBytes, WritePacketStage&);
+    ssize_t handle_finished(ReadonlyBytes, WritePacketStage&);
+    ssize_t handle_certificate(ReadonlyBytes);
+    ssize_t handle_server_key_exchange(ReadonlyBytes);
+    ssize_t handle_server_hello_done(ReadonlyBytes);
+    ssize_t handle_verify(ReadonlyBytes);
+    ssize_t handle_payload(ReadonlyBytes);
+    ssize_t handle_message(ReadonlyBytes);
+    ssize_t handle_random(ReadonlyBytes);
 
-    size_t asn1_length(const ByteBuffer& buffer, size_t* octets);
+    size_t asn1_length(ReadonlyBytes, size_t* octets);
 
-    void pseudorandom_function(ByteBuffer& output, const ByteBuffer& secret, const u8* label, size_t label_length, const ByteBuffer& seed, const ByteBuffer& seed_b);
+    void pseudorandom_function(Bytes output, ReadonlyBytes secret, const u8* label, size_t label_length, ReadonlyBytes seed, ReadonlyBytes seed_b);
 
     size_t key_length() const
     {
@@ -452,13 +432,30 @@ private:
         case CipherSuite::AES_256_GCM_SHA384:
         case CipherSuite::RSA_WITH_AES_128_GCM_SHA256:
         case CipherSuite::RSA_WITH_AES_256_GCM_SHA384:
-            return 12;
+            return 8; // 4 bytes of fixed IV, 8 random (nonce) bytes, 4 bytes for counter
+                      // GCM specifically asks us to transmit only the nonce, the counter is zero
+                      // and the fixed IV is derived from the premaster key.
+        }
+    }
+
+    bool is_aead() const
+    {
+        switch (m_context.cipher) {
+        case CipherSuite::AES_128_GCM_SHA256:
+        case CipherSuite::AES_256_GCM_SHA384:
+        case CipherSuite::RSA_WITH_AES_128_GCM_SHA256:
+        case CipherSuite::RSA_WITH_AES_256_GCM_SHA384:
+            return true;
+        default:
+            return false;
         }
     }
 
     bool expand_key();
 
     bool compute_master_secret(size_t length);
+
+    Optional<size_t> verify_chain_and_get_matching_certificate(const StringView& host) const;
 
     void try_disambiguate_error() const;
 
@@ -467,8 +464,10 @@ private:
     OwnPtr<Crypto::Authentication::HMAC<Crypto::Hash::Manager>> m_hmac_local;
     OwnPtr<Crypto::Authentication::HMAC<Crypto::Hash::Manager>> m_hmac_remote;
 
-    OwnPtr<Crypto::Cipher::AESCipher::CBCMode> m_aes_local;
-    OwnPtr<Crypto::Cipher::AESCipher::CBCMode> m_aes_remote;
+    struct {
+        OwnPtr<Crypto::Cipher::AESCipher::CBCMode> cbc;
+        OwnPtr<Crypto::Cipher::AESCipher::GCMMode> gcm;
+    } m_aes_local, m_aes_remote;
 
     bool m_has_scheduled_write_flush { false };
     i32 m_max_wait_time_for_handshake_in_seconds { 10 };
@@ -494,6 +493,7 @@ constexpr static const u8 state_oid[] { 0x55, 0x04, 0x08, 0x00 };
 constexpr static const u8 location_oid[] { 0x55, 0x04, 0x07, 0x00 };
 constexpr static const u8 entity_oid[] { 0x55, 0x04, 0x0A, 0x00 };
 constexpr static const u8 subject_oid[] { 0x55, 0x04, 0x03, 0x00 };
+constexpr static const u8 unit_oid[] { 0x55, 0x04, 0x0B, 0x00 };
 constexpr static const u8 san_oid[] { 0x55, 0x1D, 0x11, 0x00 };
 constexpr static const u8 ocsp_oid[] { 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x00 };
 
@@ -506,5 +506,4 @@ static constexpr const u8 RSA_SIGN_SHA512_OID[] = { 0x2a, 0x86, 0x48, 0x86, 0xf7
 
 }
 
-using namespace Crypto;
 }

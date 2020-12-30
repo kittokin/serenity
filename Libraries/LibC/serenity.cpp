@@ -30,6 +30,12 @@
 
 extern "C" {
 
+int disown(pid_t pid)
+{
+    int rc = syscall(SC_disown, pid);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
 int module_load(const char* path, size_t path_length)
 {
     int rc = syscall(SC_module_load, path, path_length);
@@ -54,13 +60,13 @@ int profiling_disable(pid_t pid)
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
-int set_thread_boost(int tid, int amount)
+int set_thread_boost(pid_t tid, int amount)
 {
     int rc = syscall(SC_set_thread_boost, tid, amount);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
-int set_process_boost(int tid, int amount)
+int set_process_boost(pid_t tid, int amount)
 {
     int rc = syscall(SC_set_process_boost, tid, amount);
     __RETURN_WITH_ERRNO(rc, rc, -1);
@@ -87,7 +93,7 @@ int perf_event(int type, uintptr_t arg1, FlatPtr arg2)
 
 void* shbuf_get(int shbuf_id, size_t* size)
 {
-    int rc = syscall(SC_shbuf_get, shbuf_id, size);
+    ssize_t rc = syscall(SC_shbuf_get, shbuf_id, size);
     if (rc < 0 && -rc < EMAXERRNO) {
         errno = -rc;
         return (void*)-1;
@@ -130,5 +136,4 @@ int get_stack_bounds(uintptr_t* user_stack_base, size_t* user_stack_size)
     int rc = syscall(SC_get_stack_bounds, user_stack_base, user_stack_size);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
-
 }

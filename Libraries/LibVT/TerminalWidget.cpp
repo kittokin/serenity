@@ -34,17 +34,22 @@
 #include <AK/Utf8View.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/MimeData.h>
+#include <LibDesktop/AppFile.h>
 #include <LibDesktop/Launcher.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Clipboard.h>
 #include <LibGUI/DragOperation.h>
+#include <LibGUI/FileIconProvider.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/ScrollBar.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
+#include <ctype.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -67,13 +72,13 @@ void TerminalWidget::set_pty_master_fd(int fd)
         u8 buffer[BUFSIZ];
         ssize_t nread = read(m_ptm_fd, buffer, sizeof(buffer));
         if (nread < 0) {
-            dbgprintf("Terminal read error: %s\n", strerror(errno));
+            dbgln("Terminal read error: {}", strerror(errno));
             perror("read(ptm)");
             GUI::Application::the()->quit(1);
             return;
         }
         if (nread == 0) {
-            dbgprintf("Terminal: EOF on master pty, firing on_command_exit hook.\n");
+            dbgln("TerminalWidget: EOF on master pty, firing on_command_exit hook.");
             if (on_command_exit)
                 on_command_exit();
             int rc = close(m_ptm_fd);
@@ -94,19 +99,21 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Co
     , m_automatic_size_policy(automatic_size_policy)
     , m_config(move(config))
 {
+    set_override_cursor(Gfx::StandardCursor::IBeam);
+    set_focus_policy(GUI::FocusPolicy::StrongFocus);
     set_accepts_emoji_input(true);
     set_pty_master_fd(ptm_fd);
     m_cursor_blink_timer = add<Core::Timer>();
     m_visual_beep_timer = add<Core::Timer>();
+    m_auto_scroll_timer = add<Core::Timer>();
 
     m_scrollbar = add<GUI::ScrollBar>(Orientation::Vertical);
     m_scrollbar->set_relative_rect(0, 0, 16, 0);
     m_scrollbar->on_change = [this](int) {
         force_repaint();
     };
-    set_scroll_length(m_config->read_num_entry("Window", "ScrollLength", 4));
 
-    dbgprintf("Terminal: Load config file from %s\n", m_config->file_name().characters());
+    dbgln("Load config file from {}", m_config->file_name());
     m_cursor_blink_timer->set_interval(m_config->read_num_entry("Text",
         "CursorBlinkInterval",
         500));
@@ -115,11 +122,20 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Co
         update_cursor();
     };
 
+    m_auto_scroll_timer->set_interval(50);
+    m_auto_scroll_timer->on_timeout = [this] {
+        if (m_auto_scroll_direction != AutoScrollDirection::None) {
+            int scroll_amount = m_auto_scroll_direction == AutoScrollDirection::Up ? -1 : 1;
+            m_scrollbar->set_value(m_scrollbar->value() + scroll_amount);
+        }
+    };
+    m_auto_scroll_timer->start();
+
     auto font_entry = m_config->read_entry("Text", "Font", "default");
     if (font_entry == "default")
-        set_font(Gfx::Font::default_fixed_width_font());
+        set_font(Gfx::FontDatabase::default_fixed_width_font());
     else
-        set_font(Gfx::Font::load_from_file(font_entry));
+        set_font(Gfx::FontDatabase::the().get_by_name(font_entry));
 
     m_line_height = font().glyph_height() + m_line_spacing;
 
@@ -128,10 +144,12 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Co
     m_copy_action = GUI::Action::create("Copy", { Mod_Ctrl | Mod_Shift, Key_C }, Gfx::Bitmap::load_from_file("/res/icons/16x16/edit-copy.png"), [this](auto&) {
         copy();
     });
+    m_copy_action->set_swallow_key_event_when_disabled(true);
 
-    m_paste_action = GUI::Action::create("Paste", { Mod_Ctrl | Mod_Shift, Key_V }, Gfx::Bitmap::load_from_file("/res/icons/paste16.png"), [this](auto&) {
+    m_paste_action = GUI::Action::create("Paste", { Mod_Ctrl | Mod_Shift, Key_V }, Gfx::Bitmap::load_from_file("/res/icons/16x16/paste.png"), [this](auto&) {
         paste();
     });
+    m_paste_action->set_swallow_key_event_when_disabled(true);
 
     m_clear_including_history_action = GUI::Action::create("Clear including history", { Mod_Ctrl | Mod_Shift, Key_K }, [this](auto&) {
         clear_including_history();
@@ -142,6 +160,13 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy, RefPtr<Co
     m_context_menu->add_action(paste_action());
     m_context_menu->add_separator();
     m_context_menu->add_action(clear_including_history_action());
+
+    GUI::Clipboard::the().on_change = [this](const String&) {
+        update_paste_action();
+    };
+
+    update_copy_action();
+    update_paste_action();
 }
 
 TerminalWidget::~TerminalWidget()
@@ -177,17 +202,18 @@ void TerminalWidget::set_logical_focus(bool focus)
         m_cursor_blink_state = true;
         m_cursor_blink_timer->start();
     }
+    m_auto_scroll_direction = AutoScrollDirection::None;
     invalidate_cursor();
     update();
 }
 
-void TerminalWidget::focusin_event(Core::Event& event)
+void TerminalWidget::focusin_event(GUI::FocusEvent& event)
 {
     set_logical_focus(true);
     return GUI::Frame::focusin_event(event);
 }
 
-void TerminalWidget::focusout_event(Core::Event& event)
+void TerminalWidget::focusout_event(GUI::FocusEvent& event)
 {
     set_logical_focus(false);
     return GUI::Frame::focusout_event(event);
@@ -229,18 +255,19 @@ void TerminalWidget::keydown_event(GUI::KeyEvent& event)
 
     // Clear the selection if we type in/behind it.
     auto future_cursor_column = (event.key() == KeyCode::Key_Backspace) ? m_terminal.cursor_column() - 1 : m_terminal.cursor_column();
-    auto min_selection_row = min(m_selection_start.row(), m_selection_end.row());
-    auto max_selection_row = max(m_selection_start.row(), m_selection_end.row());
+    auto min_selection_row = min(m_selection.start().row(), m_selection.end().row());
+    auto max_selection_row = max(m_selection.start().row(), m_selection.end().row());
 
     if (future_cursor_column <= last_selection_column_on_row(m_terminal.cursor_row()) && m_terminal.cursor_row() >= min_selection_row && m_terminal.cursor_row() <= max_selection_row) {
-        m_selection_end = {};
+        m_selection.set_end({});
+        update_copy_action();
         update();
     }
 
     m_terminal.handle_key_press(event.key(), event.code_point(), event.modifiers());
 
     if (event.key() != Key_Control && event.key() != Key_Alt && event.key() != Key_LeftShift && event.key() != Key_RightShift && event.key() != Key_Logo)
-        m_scrollbar->set_value(m_scrollbar->max());
+        scroll_to_bottom();
 }
 
 void TerminalWidget::keyup_event(GUI::KeyEvent& event)
@@ -274,11 +301,11 @@ void TerminalWidget::paint_event(GUI::PaintEvent& event)
     invalidate_cursor();
 
     int rows_from_history = 0;
-    int first_row_from_history = m_terminal.history().size();
+    int first_row_from_history = m_terminal.history_size();
     int row_with_cursor = m_terminal.cursor_row();
     if (m_scrollbar->value() != m_scrollbar->max()) {
         rows_from_history = min((int)m_terminal.rows(), m_scrollbar->max() - m_scrollbar->value());
-        first_row_from_history = m_terminal.history().size() - (m_scrollbar->max() - m_scrollbar->value());
+        first_row_from_history = m_terminal.history_size() - (m_scrollbar->max() - m_scrollbar->value());
         row_with_cursor = m_terminal.cursor_row() + rows_from_history;
     }
 
@@ -294,7 +321,7 @@ void TerminalWidget::paint_event(GUI::PaintEvent& event)
             painter.clear_rect(row_rect, color_from_rgb(line.attributes()[0].background_color).with_alpha(m_opacity));
 
         for (size_t column = 0; column < line.length(); ++column) {
-            u32 codepoint = line.codepoint(column);
+            u32 code_point = line.code_point(column);
             bool should_reverse_fill_for_cursor_or_selection = m_cursor_blink_state
                 && m_has_logical_focus
                 && visual_row == row_with_cursor
@@ -342,12 +369,12 @@ void TerminalWidget::paint_event(GUI::PaintEvent& event)
                 }
             }
 
-            if (codepoint == ' ')
+            if (code_point == ' ')
                 continue;
 
             painter.draw_glyph_or_emoji(
                 character_rect.location(),
-                codepoint,
+                code_point,
                 attribute.flags & VT::Attribute::Bold ? bold_font() : font(),
                 text_color);
         }
@@ -373,7 +400,7 @@ void TerminalWidget::set_window_progress(int value, int max)
 void TerminalWidget::set_window_title(const StringView& title)
 {
     if (!Utf8View(title).validate()) {
-        dbg() << "TerminalWidget: Attempted to set window title to invalid UTF-8 string";
+        dbgln("TerminalWidget: Attempted to set window title to invalid UTF-8 string");
         return;
     }
 
@@ -432,7 +459,7 @@ void TerminalWidget::relayout(const Gfx::IntSize& size)
         size.height() - frame_thickness() * 2,
     };
     m_scrollbar->set_relative_rect(scrollbar_rect);
-    m_scrollbar->set_page(new_rows);
+    m_scrollbar->set_page_step(new_rows);
 }
 
 Gfx::IntSize TerminalWidget::compute_base_size() const
@@ -464,23 +491,16 @@ void TerminalWidget::set_opacity(u8 new_opacity)
     force_repaint();
 }
 
-VT::Position TerminalWidget::normalized_selection_start() const
-{
-    if (m_selection_start < m_selection_end)
-        return m_selection_start;
-    return m_selection_end;
-}
-
-VT::Position TerminalWidget::normalized_selection_end() const
-{
-    if (m_selection_start < m_selection_end)
-        return m_selection_end;
-    return m_selection_start;
-}
-
 bool TerminalWidget::has_selection() const
 {
-    return m_selection_start.is_valid() && m_selection_end.is_valid();
+    return m_selection.is_valid();
+}
+
+void TerminalWidget::set_selection(const VT::Range& selection)
+{
+    m_selection = selection;
+    update_copy_action();
+    update();
 }
 
 bool TerminalWidget::selection_contains(const VT::Position& position) const
@@ -489,6 +509,8 @@ bool TerminalWidget::selection_contains(const VT::Position& position) const
         return false;
 
     if (m_rectangle_selection) {
+        auto m_selection_start = m_selection.start();
+        auto m_selection_end = m_selection.end();
         auto min_selection_column = min(m_selection_start.column(), m_selection_end.column());
         auto max_selection_column = max(m_selection_start.column(), m_selection_end.column());
         auto min_selection_row = min(m_selection_start.row(), m_selection_end.row());
@@ -497,7 +519,8 @@ bool TerminalWidget::selection_contains(const VT::Position& position) const
         return position.column() >= min_selection_column && position.column() <= max_selection_column && position.row() >= min_selection_row && position.row() <= max_selection_row;
     }
 
-    return position >= normalized_selection_start() && position <= normalized_selection_end();
+    auto normalized_selection = m_selection.normalized();
+    return position >= normalized_selection.start() && position <= normalized_selection.end();
 }
 
 VT::Position TerminalWidget::buffer_position_at(const Gfx::IntPoint& position) const
@@ -517,6 +540,119 @@ VT::Position TerminalWidget::buffer_position_at(const Gfx::IntPoint& position) c
     return { row, column };
 }
 
+u32 TerminalWidget::code_point_at(const VT::Position& position) const
+{
+    ASSERT(position.row() >= 0 && static_cast<size_t>(position.row()) < m_terminal.line_count());
+    auto& line = m_terminal.line(position.row());
+    if (position.column() == line.length())
+        return '\n';
+    return line.code_point(position.column());
+}
+
+VT::Position TerminalWidget::next_position_after(const VT::Position& position, bool should_wrap) const
+{
+    ASSERT(position.row() >= 0 && static_cast<size_t>(position.row()) < m_terminal.line_count());
+    auto& line = m_terminal.line(position.row());
+    if (position.column() == line.length()) {
+        if (static_cast<size_t>(position.row()) == m_terminal.line_count() - 1) {
+            if (should_wrap)
+                return { 0, 0 };
+            return {};
+        }
+        return { position.row() + 1, 0 };
+    }
+    return { position.row(), position.column() + 1 };
+}
+
+VT::Position TerminalWidget::previous_position_before(const VT::Position& position, bool should_wrap) const
+{
+    ASSERT(position.row() >= 0 && static_cast<size_t>(position.row()) < m_terminal.line_count());
+    if (position.column() == 0) {
+        if (position.row() == 0) {
+            if (should_wrap) {
+                auto& last_line = m_terminal.line(m_terminal.line_count() - 1);
+                return { static_cast<int>(m_terminal.line_count() - 1), last_line.length() };
+            }
+            return {};
+        }
+        auto& prev_line = m_terminal.line(position.row() - 1);
+        return { position.row() - 1, prev_line.length() };
+    }
+    return { position.row(), position.column() - 1 };
+}
+
+static u32 to_lowercase_code_point(u32 code_point)
+{
+    // FIXME: this only handles ascii characters, but handling unicode lowercasing seems like a mess
+    if (code_point < 128)
+        return tolower(code_point);
+    return code_point;
+}
+
+VT::Range TerminalWidget::find_next(const StringView& needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
+{
+    if (needle.is_empty())
+        return {};
+
+    VT::Position position = start.is_valid() ? start : VT::Position(0, 0);
+    VT::Position original_position = position;
+
+    VT::Position start_of_potential_match;
+    size_t needle_index = 0;
+
+    do {
+        auto ch = code_point_at(position);
+        // FIXME: This is not the right way to use a Unicode needle!
+        auto needle_ch = (u32)needle[needle_index];
+        if (case_sensitivity ? ch == needle_ch : to_lowercase_code_point(ch) == to_lowercase_code_point(needle_ch)) {
+            if (needle_index == 0)
+                start_of_potential_match = position;
+            ++needle_index;
+            if (needle_index >= needle.length())
+                return { start_of_potential_match, position };
+        } else {
+            if (needle_index > 0)
+                position = start_of_potential_match;
+            needle_index = 0;
+        }
+        position = next_position_after(position, should_wrap);
+    } while (position.is_valid() && position != original_position);
+
+    return {};
+}
+
+VT::Range TerminalWidget::find_previous(const StringView& needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
+{
+    if (needle.is_empty())
+        return {};
+
+    VT::Position position = start.is_valid() ? start : VT::Position(m_terminal.line_count() - 1, m_terminal.line(m_terminal.line_count() - 1).length() - 1);
+    VT::Position original_position = position;
+
+    VT::Position end_of_potential_match;
+    size_t needle_index = needle.length() - 1;
+
+    do {
+        auto ch = code_point_at(position);
+        // FIXME: This is not the right way to use a Unicode needle!
+        auto needle_ch = (u32)needle[needle_index];
+        if (case_sensitivity ? ch == needle_ch : to_lowercase_code_point(ch) == to_lowercase_code_point(needle_ch)) {
+            if (needle_index == needle.length() - 1)
+                end_of_potential_match = position;
+            if (needle_index == 0)
+                return { position, end_of_potential_match };
+            --needle_index;
+        } else {
+            if (needle_index < needle.length() - 1)
+                position = end_of_potential_match;
+            needle_index = needle.length() - 1;
+        }
+        position = previous_position_before(position, should_wrap);
+    } while (position.is_valid() && position != original_position);
+
+    return {};
+}
+
 void TerminalWidget::doubleclick_event(GUI::MouseEvent& event)
 {
     if (event.button() == GUI::MouseButton::Left) {
@@ -524,21 +660,21 @@ void TerminalWidget::doubleclick_event(GUI::MouseEvent& event)
 
         auto position = buffer_position_at(event.position());
         auto& line = m_terminal.line(position.row());
-        bool want_whitespace = line.codepoint(position.column()) == ' ';
+        bool want_whitespace = line.code_point(position.column()) == ' ';
 
         int start_column = 0;
         int end_column = 0;
 
-        for (int column = position.column(); column >= 0 && (line.codepoint(column) == ' ') == want_whitespace; --column) {
+        for (int column = position.column(); column >= 0 && (line.code_point(column) == ' ') == want_whitespace; --column) {
             start_column = column;
         }
 
-        for (int column = position.column(); column < m_terminal.columns() && (line.codepoint(column) == ' ') == want_whitespace; ++column) {
+        for (int column = position.column(); column < m_terminal.columns() && (line.code_point(column) == ' ') == want_whitespace; ++column) {
             end_column = column;
         }
 
-        m_selection_start = { position.row(), start_column };
-        m_selection_end = { position.row(), end_column };
+        m_selection.set({ position.row(), start_column }, { position.row(), end_column });
+        update_copy_action();
     }
     GUI::Frame::doubleclick_event(event);
 }
@@ -547,10 +683,13 @@ void TerminalWidget::paste()
 {
     if (m_ptm_fd == -1)
         return;
+    auto mime_type = GUI::Clipboard::the().mime_type();
+    if (!mime_type.starts_with("text/"))
+        return;
     auto text = GUI::Clipboard::the().data();
     if (text.is_empty())
         return;
-    int nwritten = write(m_ptm_fd, text.characters(), text.length());
+    int nwritten = write(m_ptm_fd, text.data(), text.size());
     if (nwritten < 0) {
         perror("write");
         ASSERT_NOT_REACHED();
@@ -560,7 +699,7 @@ void TerminalWidget::paste()
 void TerminalWidget::copy()
 {
     if (has_selection())
-        GUI::Clipboard::the().set_data(selected_text());
+        GUI::Clipboard::the().set_plain_text(selected_text());
 }
 
 void TerminalWidget::mouseup_event(GUI::MouseEvent& event)
@@ -568,7 +707,7 @@ void TerminalWidget::mouseup_event(GUI::MouseEvent& event)
     if (event.button() == GUI::MouseButton::Left) {
         auto attribute = m_terminal.attribute_at(buffer_position_at(event.position()));
         if (!m_active_href_id.is_null() && attribute.href_id == m_active_href_id) {
-            dbg() << "Open hyperlinked URL: _" << attribute.href << "_";
+            dbgln("Open hyperlinked URL: '{}'", attribute.href);
             Desktop::Launcher::open(attribute.href);
         }
         if (!m_active_href_id.is_null()) {
@@ -576,6 +715,7 @@ void TerminalWidget::mouseup_event(GUI::MouseEvent& event)
             m_active_href_id = {};
             update();
         }
+        m_auto_scroll_direction = AutoScrollDirection::None;
     }
 }
 
@@ -599,17 +739,16 @@ void TerminalWidget::mousedown_event(GUI::MouseEvent& event)
             int end_column = m_terminal.columns() - 1;
 
             auto position = buffer_position_at(event.position());
-            m_selection_start = { position.row(), start_column };
-            m_selection_end = { position.row(), end_column };
+            m_selection.set({ position.row(), start_column }, { position.row(), end_column });
         } else {
-            m_selection_start = buffer_position_at(event.position());
-            m_selection_end = {};
+            m_selection.set(buffer_position_at(event.position()), {});
         }
         if (m_alt_key_held)
             m_rectangle_selection = true;
         else if (m_rectangle_selection)
             m_rectangle_selection = false;
 
+        update_copy_action();
         update();
     }
 }
@@ -629,9 +768,9 @@ void TerminalWidget::mousemove_event(GUI::MouseEvent& event)
             m_hovered_href = {};
         }
         if (!m_hovered_href.is_empty())
-            window()->set_override_cursor(GUI::StandardCursor::Hand);
+            set_override_cursor(Gfx::StandardCursor::Hand);
         else
-            window()->set_override_cursor(GUI::StandardCursor::None);
+            set_override_cursor(Gfx::StandardCursor::IBeam);
         update();
     }
 
@@ -659,15 +798,24 @@ void TerminalWidget::mousemove_event(GUI::MouseEvent& event)
         return;
     }
 
-    auto old_selection_end = m_selection_end;
-    m_selection_end = position;
-    if (old_selection_end != m_selection_end)
+    auto adjusted_position = event.position().translated(-(frame_thickness() + m_inset), -(frame_thickness() + m_inset));
+    if (adjusted_position.y() < 0)
+        m_auto_scroll_direction = AutoScrollDirection::Up;
+    else if (adjusted_position.y() > m_terminal.rows() * m_line_height)
+        m_auto_scroll_direction = AutoScrollDirection::Down;
+    else
+        m_auto_scroll_direction = AutoScrollDirection::None;
+
+    VT::Position old_selection_end = m_selection.end();
+    m_selection.set_end(position);
+    if (old_selection_end != m_selection.end()) {
+        update_copy_action();
         update();
+    }
 }
 
 void TerminalWidget::leave_event(Core::Event&)
 {
-    window()->set_override_cursor(GUI::StandardCursor::None);
     bool should_update = !m_hovered_href.is_empty();
     m_hovered_href = {};
     m_hovered_href_id = {};
@@ -679,6 +827,7 @@ void TerminalWidget::mousewheel_event(GUI::MouseEvent& event)
 {
     if (!is_scrollable())
         return;
+    m_auto_scroll_direction = AutoScrollDirection::None;
     m_scrollbar->set_value(m_scrollbar->value() + event.wheel_delta() * scroll_length());
     GUI::Frame::mousewheel_event(event);
 }
@@ -693,16 +842,13 @@ int TerminalWidget::scroll_length() const
     return m_scrollbar->step();
 }
 
-void TerminalWidget::set_scroll_length(int length)
-{
-    m_scrollbar->set_step(length);
-}
-
 String TerminalWidget::selected_text() const
 {
     StringBuilder builder;
-    auto start = normalized_selection_start();
-    auto end = normalized_selection_end();
+
+    auto normalized_selection = m_selection.normalized();
+    auto start = normalized_selection.start();
+    auto end = normalized_selection.end();
 
     for (int row = start.row(); row <= end.row(); ++row) {
         int first_column = first_selection_column_on_row(row);
@@ -715,10 +861,10 @@ String TerminalWidget::selected_text() const
             }
             // FIXME: This is a bit hackish.
             if (line.is_utf32()) {
-                u32 codepoint = line.codepoint(column);
-                builder.append(Utf32View(&codepoint, 1));
+                u32 code_point = line.code_point(column);
+                builder.append(Utf32View(&code_point, 1));
             } else {
-                builder.append(line.codepoint(column));
+                builder.append(line.code_point(column));
             }
             if (column == line.length() - 1 || (m_rectangle_selection && column == last_column)) {
                 builder.append('\n');
@@ -731,18 +877,20 @@ String TerminalWidget::selected_text() const
 
 int TerminalWidget::first_selection_column_on_row(int row) const
 {
-    return row == normalized_selection_start().row() || m_rectangle_selection ? normalized_selection_start().column() : 0;
+    auto normalized_selection_start = m_selection.normalized().start();
+    return row == normalized_selection_start.row() || m_rectangle_selection ? normalized_selection_start.column() : 0;
 }
 
 int TerminalWidget::last_selection_column_on_row(int row) const
 {
-    return row == normalized_selection_end().row() || m_rectangle_selection ? normalized_selection_end().column() : m_terminal.columns() - 1;
+    auto normalized_selection_end = m_selection.normalized().end();
+    return row == normalized_selection_end.row() || m_rectangle_selection ? normalized_selection_end.column() : m_terminal.columns() - 1;
 }
 
 void TerminalWidget::terminal_history_changed()
 {
     bool was_max = m_scrollbar->value() == m_scrollbar->max();
-    m_scrollbar->set_max(m_terminal.history().size());
+    m_scrollbar->set_max(m_terminal.history_size());
     if (was_max)
         m_scrollbar->set_value(m_scrollbar->max());
     m_scrollbar->update();
@@ -754,8 +902,7 @@ void TerminalWidget::terminal_did_resize(u16 columns, u16 rows)
     m_pixel_height = (frame_thickness() * 2) + (m_inset * 2) + (rows * (font().glyph_height() + m_line_spacing));
 
     if (m_automatic_size_policy) {
-        set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-        set_preferred_size(m_pixel_width, m_pixel_height);
+        set_fixed_size(m_pixel_width, m_pixel_height);
     }
 
     m_needs_background_fill = true;
@@ -772,7 +919,10 @@ void TerminalWidget::terminal_did_resize(u16 columns, u16 rows)
 
 void TerminalWidget::beep()
 {
-    if (m_should_beep) {
+    if (m_bell_mode == BellMode::Disabled) {
+        return;
+    }
+    if (m_bell_mode == BellMode::AudibleBeep) {
         sysbeep();
         return;
     }
@@ -806,30 +956,40 @@ void TerminalWidget::context_menu_event(GUI::ContextMenuEvent& event)
         }
 
         m_context_menu_for_hyperlink = GUI::Menu::construct();
+        RefPtr<GUI::Action> context_menu_default_action;
 
         // Go through the list of handlers and see if we can find a nice display name + icon for them.
         // Then add them to the context menu.
         // FIXME: Adapt this code when we actually support calling LaunchServer with a specific handler in mind.
         for (auto& handler : handlers) {
-            auto af_path = String::format("/res/apps/%s.af", LexicalPath(handler).basename().characters());
-            auto af = Core::ConfigFile::open(af_path);
-            auto handler_name = af->read_entry("App", "Name", handler);
-            auto handler_icon = af->read_entry("Icons", "16x16", {});
-
-            auto icon = Gfx::Bitmap::load_from_file(handler_icon);
-
-            m_context_menu_for_hyperlink->add_action(GUI::Action::create(String::format("Open in %s", handler_name.characters()), move(icon), [this, handler](auto&) {
+            auto af = Desktop::AppFile::get_for_app(LexicalPath(handler).basename());
+            if (!af->is_valid())
+                continue;
+            auto action = GUI::Action::create(String::formatted("Open in {}", af->name()), af->icon().bitmap_for_size(16), [this, handler](auto&) {
                 Desktop::Launcher::open(m_context_menu_href, handler);
-            }));
+            });
+
+            if (context_menu_default_action.is_null()) {
+                context_menu_default_action = action;
+            }
+
+            m_context_menu_for_hyperlink->add_action(action);
         }
         m_context_menu_for_hyperlink->add_action(GUI::Action::create("Copy URL", [this](auto&) {
-            GUI::Clipboard::the().set_data(m_context_menu_href);
+            GUI::Clipboard::the().set_plain_text(m_context_menu_href);
+        }));
+        m_context_menu_for_hyperlink->add_action(GUI::Action::create("Copy name", [&](auto&) {
+            // file://courage/home/anon/something -> /home/anon/something
+            auto path = URL(m_context_menu_href).path();
+            // /home/anon/something -> something
+            auto name = LexicalPath(path).basename();
+            GUI::Clipboard::the().set_plain_text(name);
         }));
         m_context_menu_for_hyperlink->add_separator();
         m_context_menu_for_hyperlink->add_action(copy_action());
         m_context_menu_for_hyperlink->add_action(paste_action());
 
-        m_context_menu_for_hyperlink->popup(event.screen_position());
+        m_context_menu_for_hyperlink->popup(event.screen_position(), context_menu_default_action);
     }
 }
 
@@ -862,7 +1022,7 @@ void TerminalWidget::did_change_font()
     m_line_height = font().glyph_height() + m_line_spacing;
 
     // TODO: try to find a bold version of the new font (e.g. CsillaThin7x10 -> CsillaBold7x10)
-    const Gfx::Font& bold_font = Gfx::Font::default_bold_fixed_width_font();
+    const Gfx::Font& bold_font = Gfx::FontDatabase::default_bold_fixed_width_font();
 
     if (bold_font.glyph_height() == font().glyph_height() && bold_font.glyph_width(' ') == font().glyph_width(' '))
         m_bold_font = &bold_font;
@@ -876,4 +1036,24 @@ void TerminalWidget::did_change_font()
 void TerminalWidget::clear_including_history()
 {
     m_terminal.clear_including_history();
+}
+
+void TerminalWidget::scroll_to_bottom()
+{
+    m_scrollbar->set_value(m_scrollbar->max());
+}
+
+void TerminalWidget::scroll_to_row(int row)
+{
+    m_scrollbar->set_value(row);
+}
+
+void TerminalWidget::update_copy_action()
+{
+    m_copy_action->set_enabled(has_selection());
+}
+
+void TerminalWidget::update_paste_action()
+{
+    m_paste_action->set_enabled(GUI::Clipboard::the().mime_type().starts_with("text/") && !GUI::Clipboard::the().data().is_empty());
 }

@@ -36,15 +36,15 @@ NonnullRefPtr<InodeWatcher> InodeWatcher::create(Inode& inode)
 }
 
 InodeWatcher::InodeWatcher(Inode& inode)
-    : m_inode(inode.make_weak_ptr())
+    : m_inode(inode)
 {
     inode.register_watcher({}, *this);
 }
 
 InodeWatcher::~InodeWatcher()
 {
-    if (RefPtr<Inode> safe_inode = m_inode.ptr())
-        safe_inode->unregister_watcher({}, *this);
+    if (auto inode = m_inode.strong_ref())
+        inode->unregister_watcher({}, *this);
 }
 
 bool InodeWatcher::can_read(const FileDescription&, size_t) const
@@ -57,7 +57,7 @@ bool InodeWatcher::can_write(const FileDescription&, size_t) const
     return true;
 }
 
-ssize_t InodeWatcher::read(FileDescription&, size_t, u8* buffer, ssize_t buffer_size)
+KResultOr<size_t> InodeWatcher::read(FileDescription&, size_t, UserOrKernelBuffer& buffer, size_t buffer_size)
 {
     LOCKER(m_lock);
     ASSERT(!m_queue.is_empty() || !m_inode);
@@ -65,41 +65,54 @@ ssize_t InodeWatcher::read(FileDescription&, size_t, u8* buffer, ssize_t buffer_
     if (!m_inode)
         return 0;
 
-    // FIXME: What should we do if the output buffer is too small?
-    ASSERT(buffer_size >= (int)sizeof(Event));
     auto event = m_queue.dequeue();
-    memcpy(buffer, &event, sizeof(event));
-    return sizeof(event);
+
+    if (buffer_size < sizeof(InodeWatcherEvent))
+        return buffer_size;
+
+    size_t bytes_to_write = min(buffer_size, sizeof(event));
+
+    ssize_t nwritten = buffer.write_buffered<sizeof(event)>(bytes_to_write, [&](u8* data, size_t data_bytes) {
+        memcpy(data, &event, bytes_to_write);
+        return (ssize_t)data_bytes;
+    });
+    if (nwritten < 0)
+        return KResult(nwritten);
+    evaluate_block_conditions();
+    return bytes_to_write;
 }
 
-ssize_t InodeWatcher::write(FileDescription&, size_t, const u8*, ssize_t)
+KResultOr<size_t> InodeWatcher::write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t)
 {
-    return -EIO;
+    return KResult(-EIO);
 }
 
 String InodeWatcher::absolute_path(const FileDescription&) const
 {
-    if (!m_inode)
-        return "InodeWatcher:(gone)";
-    return String::format("InodeWatcher:%s", m_inode->identifier().to_string().characters());
+    if (auto inode = m_inode.strong_ref())
+        return String::format("InodeWatcher:%s", inode->identifier().to_string().characters());
+    return "InodeWatcher:(gone)";
 }
 
-void InodeWatcher::notify_inode_event(Badge<Inode>, Event::Type event_type)
+void InodeWatcher::notify_inode_event(Badge<Inode>, InodeWatcherEvent::Type event_type)
 {
     LOCKER(m_lock);
-    m_queue.enqueue({ event_type, {} });
+    m_queue.enqueue({ event_type });
+    evaluate_block_conditions();
 }
 
-void InodeWatcher::notify_child_added(Badge<Inode>, const String& child_name)
+void InodeWatcher::notify_child_added(Badge<Inode>, const InodeIdentifier& child_id)
 {
     LOCKER(m_lock);
-    m_queue.enqueue({ Event::Type::ChildAdded, child_name });
+    m_queue.enqueue({ InodeWatcherEvent::Type::ChildAdded, child_id.index() });
+    evaluate_block_conditions();
 }
 
-void InodeWatcher::notify_child_removed(Badge<Inode>, const String& child_name)
+void InodeWatcher::notify_child_removed(Badge<Inode>, const InodeIdentifier& child_id)
 {
     LOCKER(m_lock);
-    m_queue.enqueue({ Event::Type::ChildRemoved, child_name });
+    m_queue.enqueue({ InodeWatcherEvent::Type::ChildRemoved, child_id.index() });
+    evaluate_block_conditions();
 }
 
 }

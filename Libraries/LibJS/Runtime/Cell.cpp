@@ -24,7 +24,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/LogStream.h>
 #include <LibJS/Heap/Heap.h>
 #include <LibJS/Heap/HeapBlock.h>
 #include <LibJS/Runtime/Cell.h>
@@ -51,21 +50,9 @@ Heap& Cell::heap() const
     return HeapBlock::from_cell(this)->heap();
 }
 
-Interpreter& Cell::interpreter()
+VM& Cell::vm() const
 {
-    return heap().interpreter();
-}
-
-Interpreter& Cell::interpreter() const
-{
-    return heap().interpreter();
-}
-
-const LogStream& operator<<(const LogStream& stream, const Cell* cell)
-{
-    if (!cell)
-        return stream << "Cell{nullptr}";
-    return stream << cell->class_name() << '{' << static_cast<const void*>(cell) << '}';
+    return heap().vm();
 }
 
 }

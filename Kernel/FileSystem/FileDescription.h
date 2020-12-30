@@ -38,20 +38,14 @@
 
 namespace Kernel {
 
-class CharacterDevice;
-class File;
-class MasterPTY;
-class Process;
-class Region;
-class Socket;
-class TTY;
-
 class FileDescription : public RefCounted<FileDescription> {
     MAKE_SLAB_ALLOCATED(FileDescription)
 public:
     static NonnullRefPtr<FileDescription> create(Custody&);
     static NonnullRefPtr<FileDescription> create(File&);
     ~FileDescription();
+
+    Thread::FileBlocker::BlockFlags should_unblock(Thread::FileBlocker::BlockFlags) const;
 
     bool is_readable() const { return m_readable; }
     bool is_writable() const { return m_writable; }
@@ -68,18 +62,18 @@ public:
     KResult close();
 
     off_t seek(off_t, int whence);
-    ssize_t read(u8*, ssize_t);
-    ssize_t write(const u8* data, ssize_t);
-    KResult fstat(stat&);
+    KResultOr<size_t> read(UserOrKernelBuffer&, size_t);
+    KResultOr<size_t> write(const UserOrKernelBuffer& data, size_t);
+    KResult stat(::stat&);
 
     KResult chmod(mode_t);
 
     bool can_read() const;
     bool can_write() const;
 
-    ssize_t get_dir_entries(u8* buffer, ssize_t);
+    ssize_t get_dir_entries(UserOrKernelBuffer& buffer, ssize_t);
 
-    KResultOr<ByteBuffer> read_entire_file();
+    KResultOr<NonnullOwnPtr<KBuffer>> read_entire_file();
 
     String absolute_path() const;
 
@@ -128,7 +122,7 @@ public:
     FIFO::Direction fifo_direction() { return m_fifo_direction; }
     void set_fifo_direction(Badge<FIFO>, FIFO::Direction direction) { m_fifo_direction = direction; }
 
-    Optional<KBuffer>& generator_cache() { return m_generator_cache; }
+    OwnPtr<KBuffer>& generator_cache() { return m_generator_cache; }
 
     void set_original_inode(Badge<VFS>, NonnullRefPtr<Inode>&& inode) { m_inode = move(inode); }
 
@@ -138,10 +132,17 @@ public:
 
     KResult chown(uid_t, gid_t);
 
+    FileBlockCondition& block_condition();
+
 private:
     friend class VFS;
     explicit FileDescription(File&);
     FileDescription(FIFO&, FIFO::Direction);
+
+    void evaluate_block_conditions()
+    {
+        block_condition().unblock();
+    }
 
     RefPtr<Custody> m_custody;
     RefPtr<Inode> m_inode;
@@ -149,7 +150,7 @@ private:
 
     off_t m_current_offset { 0 };
 
-    Optional<KBuffer> m_generator_cache;
+    OwnPtr<KBuffer> m_generator_cache;
 
     u32 m_file_flags { 0 };
 

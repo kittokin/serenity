@@ -29,20 +29,28 @@
 #include <AK/HashMap.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/RefCounted.h>
-#include <LibGfx/Forward.h>
+#include <LibGfx/Bitmap.h>
 
 namespace GUI {
 
 class IconImpl : public RefCounted<IconImpl> {
 public:
     static NonnullRefPtr<IconImpl> create() { return adopt(*new IconImpl); }
-    ~IconImpl() {}
+    ~IconImpl() { }
 
     const Gfx::Bitmap* bitmap_for_size(int) const;
     void set_bitmap_for_size(int, RefPtr<Gfx::Bitmap>&&);
 
+    Vector<int> sizes() const
+    {
+        Vector<int> sizes;
+        for (auto& it : m_bitmaps)
+            sizes.append(it.key);
+        return sizes;
+    }
+
 private:
-    IconImpl() {}
+    IconImpl() { }
     HashMap<int, RefPtr<Gfx::Bitmap>> m_bitmaps;
 };
 
@@ -53,7 +61,7 @@ public:
     explicit Icon(RefPtr<Gfx::Bitmap>&&, RefPtr<Gfx::Bitmap>&&);
     explicit Icon(const IconImpl&);
     Icon(const Icon&);
-    ~Icon() {}
+    ~Icon() { }
 
     static Icon default_icon(const StringView&);
 
@@ -68,6 +76,8 @@ public:
     void set_bitmap_for_size(int size, RefPtr<Gfx::Bitmap>&& bitmap) { m_impl->set_bitmap_for_size(size, move(bitmap)); }
 
     const IconImpl& impl() const { return *m_impl; }
+
+    Vector<int> sizes() const { return m_impl->sizes(); }
 
 private:
     NonnullRefPtr<IconImpl> m_impl;

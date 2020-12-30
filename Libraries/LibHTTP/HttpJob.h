@@ -38,8 +38,8 @@ namespace HTTP {
 class HttpJob final : public Job {
     C_OBJECT(HttpJob)
 public:
-    explicit HttpJob(const HttpRequest& request)
-        : Job(request)
+    explicit HttpJob(const HttpRequest& request, OutputStream& output_stream)
+        : Job(request, output_stream)
     {
     }
 
@@ -51,14 +51,15 @@ public:
     virtual void shutdown() override;
 
 protected:
+    virtual bool should_fail_on_empty_payload() const override { return false; }
     virtual void register_on_ready_to_read(Function<void()>) override;
     virtual void register_on_ready_to_write(Function<void()>) override;
     virtual bool can_read_line() const override;
-    virtual ByteBuffer read_line(size_t) override;
+    virtual String read_line(size_t) override;
     virtual bool can_read() const override;
     virtual ByteBuffer receive(size_t) override;
     virtual bool eof() const override;
-    virtual bool write(const ByteBuffer&) override;
+    virtual bool write(ReadonlyBytes) override;
     virtual bool is_established() const override { return true; }
 
 private:

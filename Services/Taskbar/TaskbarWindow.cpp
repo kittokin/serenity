@@ -29,14 +29,17 @@
 #include <AK/SharedBuffer.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/StandardPaths.h>
+#include <LibDesktop/AppFile.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/Desktop.h>
 #include <LibGUI/Frame.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Window.h>
 #include <LibGUI/WindowServerConnection.h>
 #include <LibGfx/Palette.h>
+#include <serenity.h>
 #include <stdio.h>
 
 //#define EVENT_DEBUG
@@ -45,10 +48,10 @@ class TaskbarWidget final : public GUI::Widget {
     C_OBJECT(TaskbarWidget);
 
 public:
-    virtual ~TaskbarWidget() override {}
+    virtual ~TaskbarWidget() override { }
 
 private:
-    TaskbarWidget() {}
+    TaskbarWidget() { }
 
     virtual void paint_event(GUI::PaintEvent& event) override
     {
@@ -56,6 +59,14 @@ private:
         painter.add_clip_rect(event.rect());
         painter.fill_rect(rect(), palette().button());
         painter.draw_line({ 0, 1 }, { width() - 1, 1 }, palette().threed_highlight());
+    }
+
+    virtual void did_layout() override
+    {
+        WindowList::the().for_each_window([&](auto& window) {
+            if (auto* button = window.button())
+                static_cast<TaskbarButton*>(button)->update_taskbar_rect();
+        });
     }
 };
 
@@ -85,9 +96,8 @@ TaskbarWindow::~TaskbarWindow()
 void TaskbarWindow::create_quick_launch_bar()
 {
     auto& quick_launch_bar = main_widget()->add<GUI::Frame>();
-    quick_launch_bar.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
     quick_launch_bar.set_layout<GUI::HorizontalBoxLayout>();
-    quick_launch_bar.layout()->set_spacing(3);
+    quick_launch_bar.layout()->set_spacing(0);
     quick_launch_bar.layout()->set_margins({ 3, 0, 3, 0 });
     quick_launch_bar.set_frame_thickness(0);
 
@@ -100,19 +110,17 @@ void TaskbarWindow::create_quick_launch_bar()
     // FIXME: Core::ConfigFile does not keep the order of the entries.
     for (auto& name : config->keys(quick_launch)) {
         auto af_name = config->read_entry(quick_launch, name);
-        ASSERT(!af_name.is_null());
-        auto af_path = String::format("/res/apps/%s", af_name.characters());
-        auto af = Core::ConfigFile::open(af_path);
-        auto app_executable = af->read_entry("App", "Executable");
-        auto app_icon_path = af->read_entry("Icons", "16x16");
-
+        auto af_path = String::formatted("{}/{}", Desktop::AppFile::APP_FILES_DIRECTORY, af_name);
+        auto af = Desktop::AppFile::open(af_path);
+        if (!af->is_valid())
+            continue;
+        auto app_executable = af->executable();
+        const int button_size = 24;
         auto& button = quick_launch_bar.add<GUI::Button>();
-        button.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-        button.set_preferred_size(22, 22);
+        button.set_fixed_size(button_size, button_size);
         button.set_button_style(Gfx::ButtonStyle::CoolBar);
-
-        button.set_icon(Gfx::Bitmap::load_from_file(app_icon_path));
-        button.set_tooltip(name);
+        button.set_icon(af->icon().bitmap_for_size(16));
+        button.set_tooltip(af->name());
         button.on_click = [app_executable](auto) {
             pid_t pid = fork();
             if (pid < 0) {
@@ -125,16 +133,19 @@ void TaskbarWindow::create_quick_launch_bar()
                 execl(app_executable.characters(), app_executable.characters(), nullptr);
                 perror("execl");
                 ASSERT_NOT_REACHED();
+            } else {
+                if (disown(pid) < 0)
+                    perror("disown");
             }
         };
 
         if (!first)
-            total_width += 3;
+            total_width += quick_launch_bar.layout()->spacing();
         first = false;
-        total_width += 22;
+        total_width += button_size;
     }
 
-    quick_launch_bar.set_preferred_size(total_width, 22);
+    quick_launch_bar.set_fixed_size(total_width, 24);
 }
 
 void TaskbarWindow::on_screen_rect_change(const Gfx::IntRect& rect)
@@ -146,8 +157,8 @@ void TaskbarWindow::on_screen_rect_change(const Gfx::IntRect& rect)
 NonnullRefPtr<GUI::Button> TaskbarWindow::create_button(const WindowIdentifier& identifier)
 {
     auto& button = main_widget()->add<TaskbarButton>(identifier);
-    button.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-    button.set_preferred_size(140, 22);
+    button.set_min_size(20, 23);
+    button.set_max_size(140, 23);
     button.set_text_alignment(Gfx::TextAlignment::CenterLeft);
     button.set_icon(*m_default_icon);
     return button;
@@ -179,11 +190,13 @@ void TaskbarWindow::add_window_button(::Window& window, const WindowIdentifier& 
     };
 }
 
-void TaskbarWindow::remove_window_button(::Window& window)
+void TaskbarWindow::remove_window_button(::Window& window, bool was_removed)
 {
     auto* button = window.button();
     if (!button)
         return;
+    if (!was_removed)
+        static_cast<TaskbarButton*>(button)->clear_taskbar_rect();
     window.set_button(nullptr);
     button->remove_from_parent();
 }
@@ -230,6 +243,8 @@ void TaskbarWindow::wm_event(GUI::WMEvent& event)
             removed_event.client_id(),
             removed_event.window_id());
 #endif
+        if (auto* window = WindowList::the().window(identifier))
+            remove_window_button(*window, true);
         WindowList::the().remove_window(identifier);
         update();
         break;
@@ -280,7 +295,7 @@ void TaskbarWindow::wm_event(GUI::WMEvent& event)
         if (!window.is_modal())
             add_window_button(window, identifier);
         else
-            remove_window_button(window);
+            remove_window_button(window, false);
         window.set_title(changed_event.title());
         window.set_rect(changed_event.rect());
         window.set_modal(changed_event.is_modal());

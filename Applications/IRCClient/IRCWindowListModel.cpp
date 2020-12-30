@@ -39,7 +39,7 @@ IRCWindowListModel::~IRCWindowListModel()
 
 int IRCWindowListModel::row_count(const GUI::ModelIndex&) const
 {
-    return m_client.window_count();
+    return m_client->window_count();
 }
 
 int IRCWindowListModel::column_count(const GUI::ModelIndex&) const
@@ -56,24 +56,24 @@ String IRCWindowListModel::column_name(int column) const
     ASSERT_NOT_REACHED();
 }
 
-GUI::Variant IRCWindowListModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant IRCWindowListModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
-    if (role == Role::TextAlignment)
+    if (role == GUI::ModelRole::TextAlignment)
         return Gfx::TextAlignment::CenterLeft;
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Display) {
         switch (index.column()) {
         case Column::Name: {
-            auto& window = m_client.window_at(index.row());
+            auto& window = m_client->window_at(index.row());
             if (window.unread_count())
-                return String::format("%s (%d)", window.name().characters(), window.unread_count());
+                return String::formatted("{} ({})", window.name(), window.unread_count());
             return window.name();
         }
         }
     }
-    if (role == Role::ForegroundColor) {
+    if (role == GUI::ModelRole::ForegroundColor) {
         switch (index.column()) {
         case Column::Name: {
-            auto& window = m_client.window_at(index.row());
+            auto& window = m_client->window_at(index.row());
             if (window.unread_count())
                 return Color(Color::Red);
             if (!window.channel().is_open())

@@ -96,6 +96,8 @@ void ColumnsView::paint_event(PaintEvent& event)
 
     int column_x = 0;
 
+    auto selection_color = is_focused() ? palette().selection() : palette().inactive_selection();
+
     for (size_t i = 0; i < m_columns.size(); i++) {
         auto& column = m_columns[i];
         auto* next_column = i + 1 == m_columns.size() ? nullptr : &m_columns[i + 1];
@@ -118,22 +120,26 @@ void ColumnsView::paint_event(PaintEvent& event)
             }
 
             if (is_selected_row) {
-                background_color = palette().selection();
-                text_color = palette().selection_text();
+                background_color = selection_color;
+                text_color = is_focused() ? palette().selection_text() : palette().inactive_selection_text();
             }
 
             Gfx::IntRect row_rect { column_x, row * item_height(), column.width, item_height() };
             painter.fill_rect(row_rect, background_color);
 
-            auto icon = model()->data(index, Model::Role::Icon);
+            auto icon = index.data(ModelRole::Icon);
             Gfx::IntRect icon_rect = { column_x + icon_spacing(), 0, icon_size(), icon_size() };
             icon_rect.center_vertically_within(row_rect);
             if (icon.is_icon()) {
                 if (auto* bitmap = icon.as_icon().bitmap_for_size(icon_size())) {
-                    if (m_hovered_index.is_valid() && m_hovered_index.parent() == index.parent() && m_hovered_index.row() == index.row())
+                    if (is_selected_row) {
+                        auto tint = selection_color.with_alpha(100);
+                        painter.blit_filtered(icon_rect.location(), *bitmap, bitmap->rect(), [&](auto src) { return src.blend(tint); });
+                    } else if (m_hovered_index.is_valid() && m_hovered_index.parent() == index.parent() && m_hovered_index.row() == index.row()) {
                         painter.blit_brightened(icon_rect.location(), *bitmap, bitmap->rect());
-                    else
+                    } else {
                         painter.blit(icon_rect.location(), *bitmap, bitmap->rect());
+                    }
                 }
             }
 
@@ -141,8 +147,12 @@ void ColumnsView::paint_event(PaintEvent& event)
                 icon_rect.right() + 1 + icon_spacing(), row * item_height(),
                 column.width - icon_spacing() - icon_size() - icon_spacing() - icon_spacing() - s_arrow_bitmap_width - icon_spacing(), item_height()
             };
-            auto text = model()->data(index).to_string();
-            painter.draw_text(text_rect, text, Gfx::TextAlignment::CenterLeft, text_color);
+            draw_item_text(painter, index, is_selected_row, text_rect, index.data().to_string(), font_for_index(index), Gfx::TextAlignment::CenterLeft, Gfx::TextElision::None);
+
+            if (is_focused() && index == cursor_index()) {
+                painter.draw_rect(row_rect, palette().color(background_role()));
+                painter.draw_focus_rect(row_rect, palette().focus_outline());
+            }
 
             bool expandable = model()->row_count(index) > 0;
             if (expandable) {
@@ -164,7 +174,7 @@ void ColumnsView::paint_event(PaintEvent& event)
     }
 }
 
-void ColumnsView::push_column(ModelIndex& parent_index)
+void ColumnsView::push_column(const ModelIndex& parent_index)
 {
     ASSERT(model());
 
@@ -203,7 +213,7 @@ void ColumnsView::update_column_sizes()
         for (int row = 0; row < row_count; row++) {
             ModelIndex index = model()->index(row, m_model_column, column.parent_index);
             ASSERT(index.is_valid());
-            auto text = model()->data(index).to_string();
+            auto text = index.data().to_string();
             int row_width = icon_spacing() + icon_size() + icon_spacing() + font().width(text) + icon_spacing() + s_arrow_bitmap_width + icon_spacing();
             if (row_width > column.width)
                 column.width = row_width;
@@ -259,9 +269,9 @@ void ColumnsView::mousedown_event(MouseEvent& event)
     }
 }
 
-void ColumnsView::did_update_model(unsigned flags)
+void ColumnsView::model_did_update(unsigned flags)
 {
-    AbstractView::did_update_model(flags);
+    AbstractView::model_did_update(flags);
 
     // FIXME: Don't drop the columns on minor updates.
     dbg() << "Model was updated; dropping columns :(";
@@ -272,82 +282,62 @@ void ColumnsView::did_update_model(unsigned flags)
     update();
 }
 
-void ColumnsView::keydown_event(KeyEvent& event)
+void ColumnsView::move_cursor(CursorMovement movement, SelectionUpdate selection_update)
 {
     if (!model())
         return;
     auto& model = *this->model();
-
-    if (event.key() == KeyCode::Key_Return) {
-        activate_selected();
+    if (!cursor_index().is_valid()) {
+        set_cursor(model.index(0, m_model_column, {}), SelectionUpdate::Set);
         return;
     }
 
-    if (event.key() == KeyCode::Key_Up) {
-        ModelIndex new_index;
-        if (!selection().is_empty()) {
-            auto old_index = selection().first();
-            auto parent_index = model.parent_index(old_index);
-            int row = old_index.row() > 0 ? old_index.row() - 1 : 0;
-            new_index = model.sibling(row, old_index.column(), parent_index);
-        } else {
-            new_index = model.index(0, m_model_column, {});
-        }
+    ModelIndex new_index;
+    auto cursor_parent = model.parent_index(cursor_index());
+
+    switch (movement) {
+    case CursorMovement::Up: {
+        int row = cursor_index().row() > 0 ? cursor_index().row() - 1 : 0;
+        new_index = model.index(row, cursor_index().column(), cursor_parent);
+        break;
+    }
+    case CursorMovement::Down: {
+        int row = cursor_index().row() + 1;
+        new_index = model.index(row, cursor_index().column(), cursor_parent);
+        break;
+    }
+    case CursorMovement::Left:
+        new_index = cursor_parent;
+        break;
+    case CursorMovement::Right:
+        new_index = model.index(0, m_model_column, cursor_index());
         if (model.is_valid(new_index)) {
-            selection().set(new_index);
+            if (model.is_valid(cursor_index()))
+                push_column(cursor_index());
             update();
+            break;
         }
-        return;
+    default:
+        break;
     }
 
-    if (event.key() == KeyCode::Key_Down) {
-        ModelIndex new_index;
-        if (!selection().is_empty()) {
-            auto old_index = selection().first();
-            auto parent_index = model.parent_index(old_index);
-            int row = old_index.row() + 1;
-            new_index = model.sibling(row, old_index.column(), parent_index);
-        } else {
-            new_index = model.index(0, m_model_column, {});
-        }
-        if (model.is_valid(new_index)) {
-            selection().set(new_index);
-            update();
-        }
-        return;
+    if (new_index.is_valid())
+        set_cursor(new_index, selection_update);
+}
+
+Gfx::IntRect ColumnsView::content_rect(const ModelIndex& index) const
+{
+    if (!index.is_valid())
+        return {};
+
+    int column_x = 0;
+    for (auto& column : m_columns) {
+        if (column.parent_index == index.parent())
+            return { column_x + icon_size(), index.row() * item_height(), column.width - icon_size(), item_height() };
+        column_x += column.width + 1;
     }
 
-    if (event.key() == KeyCode::Key_Left) {
-        ModelIndex new_index;
-        if (!selection().is_empty()) {
-            auto old_index = selection().first();
-            new_index = model.parent_index(old_index);
-        } else {
-            new_index = model.index(0, m_model_column, {});
-        }
-        if (model.is_valid(new_index)) {
-            selection().set(new_index);
-            update();
-        }
-        return;
-    }
-
-    if (event.key() == KeyCode::Key_Right) {
-        ModelIndex old_index, new_index;
-        if (!selection().is_empty()) {
-            old_index = selection().first();
-            new_index = model.index(0, m_model_column, old_index);
-        } else {
-            new_index = model.index(0, m_model_column, {});
-        }
-        if (model.is_valid(new_index)) {
-            selection().set(new_index);
-            if (model.is_valid(old_index))
-                push_column(old_index);
-            update();
-        }
-        return;
-    }
+    return {};
 }
 
 }

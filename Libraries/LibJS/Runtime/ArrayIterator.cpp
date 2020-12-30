@@ -45,4 +45,10 @@ ArrayIterator::~ArrayIterator()
 {
 }
 
+void ArrayIterator::visit_edges(Cell::Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(m_array);
+}
+
 }

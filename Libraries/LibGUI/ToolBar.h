@@ -58,6 +58,7 @@ private:
         RefPtr<Action> action;
     };
     NonnullOwnPtrVector<Item> m_items;
+    const Gfx::Orientation m_orientation;
     int m_button_size { 16 };
     bool m_has_frame { true };
 };

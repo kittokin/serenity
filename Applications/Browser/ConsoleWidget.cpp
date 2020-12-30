@@ -30,15 +30,16 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/JSSyntaxHighlighter.h>
 #include <LibGUI/TextBox.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibJS/Interpreter.h>
 #include <LibJS/MarkupGenerator.h>
 #include <LibJS/Parser.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibWeb/DOM/DocumentType.h>
 #include <LibWeb/DOM/ElementFactory.h>
-#include <LibWeb/DOM/HTMLBodyElement.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/DOMTreeModel.h>
+#include <LibWeb/HTML/HTMLBodyElement.h>
 
 namespace Browser {
 
@@ -47,28 +48,27 @@ ConsoleWidget::ConsoleWidget()
     set_layout<GUI::VerticalBoxLayout>();
     set_fill_with_background_color(true);
 
-    auto base_document = adopt(*new Web::Document);
-    base_document->append_child(adopt(*new Web::DocumentType(base_document)));
-    auto html_element = create_element(base_document, "html");
+    auto base_document = Web::DOM::Document::create();
+    base_document->append_child(adopt(*new Web::DOM::DocumentType(base_document)));
+    auto html_element = base_document->create_element("html");
     base_document->append_child(html_element);
-    auto head_element = create_element(base_document, "head");
+    auto head_element = base_document->create_element("head");
     html_element->append_child(head_element);
-    auto body_element = create_element(base_document, "body");
+    auto body_element = base_document->create_element("body");
     html_element->append_child(body_element);
     m_output_container = body_element;
 
-    m_output_view = add<Web::PageView>();
+    m_output_view = add<Web::InProcessWebView>();
     m_output_view->set_document(base_document);
 
     auto& bottom_container = add<GUI::Widget>();
     bottom_container.set_layout<GUI::HorizontalBoxLayout>();
-    bottom_container.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    bottom_container.set_preferred_size(0, 22);
+    bottom_container.set_fixed_height(22);
 
     m_input = bottom_container.add<GUI::TextBox>();
     m_input->set_syntax_highlighter(make<GUI::JSSyntaxHighlighter>());
     // FIXME: Syntax Highlighting breaks the cursor's position on non fixed-width fonts.
-    m_input->set_font(Gfx::Font::default_fixed_width_font());
+    m_input->set_font(Gfx::FontDatabase::default_fixed_width_font());
     m_input->set_history_enabled(true);
 
     m_input->on_return_pressed = [this] {
@@ -91,10 +91,10 @@ ConsoleWidget::ConsoleWidget()
             auto error = parser.errors()[0];
             auto hint = error.source_location_hint(js_source);
             if (!hint.is_empty())
-                output_html.append(String::format("<pre>%s</pre>", hint.characters()));
-            m_interpreter->throw_exception<JS::SyntaxError>(error.to_string());
+                output_html.append(String::formatted("<pre>{}</pre>", escape_html_entities(hint)));
+            m_interpreter->vm().throw_exception<JS::SyntaxError>(m_interpreter->global_object(), error.to_string());
         } else {
-            m_interpreter->run(m_interpreter->global_object(),*program);
+            m_interpreter->run(m_interpreter->global_object(), *program);
         }
 
         if (m_interpreter->exception()) {
@@ -102,16 +102,17 @@ ConsoleWidget::ConsoleWidget()
             output_html.append(JS::MarkupGenerator::html_from_value(m_interpreter->exception()->value()));
             print_html(output_html.string_view());
 
-            m_interpreter->clear_exception();
+            m_interpreter->vm().clear_exception();
             return;
         }
 
-        print_html(JS::MarkupGenerator::html_from_value(m_interpreter->last_value()));
+        print_html(JS::MarkupGenerator::html_from_value(m_interpreter->vm().last_value()));
     };
 
+    set_focus_proxy(m_input);
+
     auto& clear_button = bottom_container.add<GUI::Button>();
-    clear_button.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-    clear_button.set_preferred_size(22, 22);
+    clear_button.set_fixed_size(22, 22);
     clear_button.set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/delete.png"));
     clear_button.set_tooltip("Clear the console output");
     clear_button.on_click = [this](auto) {
@@ -129,8 +130,8 @@ void ConsoleWidget::set_interpreter(WeakPtr<JS::Interpreter> interpreter)
         return;
 
     m_interpreter = interpreter;
-    m_console_client = adopt_own(*new BrowserConsoleClient(interpreter->console(), *this));
-    interpreter->console().set_client(*m_console_client.ptr());
+    m_console_client = make<BrowserConsoleClient>(interpreter->global_object().console(), *this);
+    interpreter->global_object().console().set_client(*m_console_client.ptr());
 
     clear_output();
 }
@@ -149,7 +150,7 @@ void ConsoleWidget::print_source_line(const StringView& source)
 
 void ConsoleWidget::print_html(const StringView& line)
 {
-    auto paragraph = create_element(m_output_container->document(), "p");
+    auto paragraph = m_output_container->document().create_element("p");
     paragraph->set_inner_html(line);
 
     m_output_container->append_child(paragraph);

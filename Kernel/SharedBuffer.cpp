@@ -24,17 +24,19 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/Singleton.h>
 #include <Kernel/Process.h>
 #include <Kernel/SharedBuffer.h>
 
+//#define SHARED_BUFFER_DEBUG
+
 namespace Kernel {
+
+static AK::Singleton<Lockable<HashMap<int, NonnullOwnPtr<SharedBuffer>>>> s_map;
 
 Lockable<HashMap<int, NonnullOwnPtr<SharedBuffer>>>& shared_buffers()
 {
-    static Lockable<HashMap<int, NonnullOwnPtr<SharedBuffer>>>* map;
-    if (!map)
-        map = new Lockable<HashMap<int, NonnullOwnPtr<SharedBuffer>>>;
-    return *map;
+    return *s_map;
 }
 
 void SharedBuffer::sanity_check(const char* what)
@@ -48,13 +50,13 @@ void SharedBuffer::sanity_check(const char* what)
     if (found_refs != m_total_refs) {
         dbg() << what << " sanity -- SharedBuffer{" << this << "} id: " << m_shbuf_id << " has total refs " << m_total_refs << " but we found " << found_refs;
         for (const auto& ref : m_refs) {
-            dbg() << "    ref from pid " << ref.pid << ": refcnt " << ref.count;
+            dbg() << "    ref from pid " << ref.pid.value() << ": refcnt " << ref.count;
         }
         ASSERT_NOT_REACHED();
     }
 }
 
-bool SharedBuffer::is_shared_with(pid_t peer_pid) const
+bool SharedBuffer::is_shared_with(ProcessID peer_pid) const
 {
     LOCKER(shared_buffers().lock(), Lock::Mode::Shared);
     if (m_global)
@@ -90,19 +92,19 @@ void* SharedBuffer::ref_for_process_and_get_address(Process& process)
                 auto* region = process.allocate_region_with_vmobject(VirtualAddress(), size(), m_vmobject, 0, "SharedBuffer", PROT_READ | (m_writable ? PROT_WRITE : 0));
                 if (!region)
                     return (void*)-ENOMEM;
-                ref.region = region->make_weak_ptr();
-                ref.region->set_shared(true);
+                ref.region = region;
+                region->set_shared(true);
             }
             ref.count++;
             m_total_refs++;
             sanity_check("ref_for_process_and_get_address");
-            return ref.region->vaddr().as_ptr();
+            return ref.region.unsafe_ptr()->vaddr().as_ptr(); // TODO: Region needs to be RefCounted!
         }
     }
     ASSERT_NOT_REACHED();
 }
 
-void SharedBuffer::share_with(pid_t peer_pid)
+void SharedBuffer::share_with(ProcessID peer_pid)
 {
     LOCKER(shared_buffers().lock());
     if (m_global)
@@ -119,21 +121,42 @@ void SharedBuffer::share_with(pid_t peer_pid)
     sanity_check("share_with (new ref)");
 }
 
+void SharedBuffer::share_all_shared_buffers(Process& from_process, Process& with_process)
+{
+    LOCKER(shared_buffers().lock());
+    for (auto& shbuf : shared_buffers().resource()) {
+        auto& shared_buffer = *shbuf.value;
+        // We need to clone all references (including for global shared buffers),
+        // and the reference counts as well.
+        for (auto& ref : shared_buffer.m_refs) {
+            if (ref.pid == from_process.pid()) {
+                auto ref_count = ref.count;
+                shared_buffer.m_refs.append(Reference(with_process.pid(), ref_count));
+                // NOTE: ref may become invalid after we appended!
+                shared_buffer.m_total_refs += ref_count;
+                break;
+            }
+        }
+    }
+}
+
 void SharedBuffer::deref_for_process(Process& process)
 {
     LOCKER(shared_buffers().lock());
     for (size_t i = 0; i < m_refs.size(); ++i) {
         auto& ref = m_refs[i];
         if (ref.pid == process.pid()) {
+            ASSERT(ref.count > 0);
             ref.count--;
+            ASSERT(m_total_refs > 0);
             m_total_refs--;
             if (ref.count == 0) {
 #ifdef SHARED_BUFFER_DEBUG
-                dbg() << "Releasing shared buffer reference on " << m_shbuf_id << " of size " << size() << " by PID " << process.pid();
+                dbg() << "Releasing shared buffer reference on " << m_shbuf_id << " of size " << size() << " by PID " << process.pid().value();
 #endif
-                process.deallocate_region(*ref.region);
+                process.deallocate_region(*ref.region.unsafe_ptr()); // TODO: Region needs to be RefCounted!
 #ifdef SHARED_BUFFER_DEBUG
-                dbg() << "Released shared buffer reference on " << m_shbuf_id << " of size " << size() << " by PID " << process.pid();
+                dbg() << "Released shared buffer reference on " << m_shbuf_id << " of size " << size() << " by PID " << process.pid().value();
 #endif
                 sanity_check("deref_for_process");
                 destroy_if_unused();
@@ -146,24 +169,27 @@ void SharedBuffer::deref_for_process(Process& process)
     ASSERT_NOT_REACHED();
 }
 
-void SharedBuffer::disown(pid_t pid)
+bool SharedBuffer::disown(ProcessID pid)
 {
     LOCKER(shared_buffers().lock());
     for (size_t i = 0; i < m_refs.size(); ++i) {
         auto& ref = m_refs[i];
         if (ref.pid == pid) {
 #ifdef SHARED_BUFFER_DEBUG
-            dbg() << "Disowning shared buffer " << m_shbuf_id << " of size " << size() << " by PID " << pid;
+            dbg() << "Disowning shared buffer " << m_shbuf_id << " of size " << size() << " by PID " << pid.value();
 #endif
+            ASSERT(m_total_refs >= ref.count);
             m_total_refs -= ref.count;
             m_refs.unstable_take(i);
 #ifdef SHARED_BUFFER_DEBUG
-            dbg() << "Disowned shared buffer " << m_shbuf_id << " of size " << size() << " by PID " << pid;
+            dbg() << "Disowned shared buffer " << m_shbuf_id << " of size " << size() << " by PID " << pid.value();
 #endif
             destroy_if_unused();
-            return;
+            break;
         }
     }
+
+    return m_total_refs == 0;
 }
 
 void SharedBuffer::destroy_if_unused()
@@ -185,9 +211,10 @@ void SharedBuffer::seal()
     LOCKER(shared_buffers().lock());
     m_writable = false;
     for (auto& ref : m_refs) {
-        if (ref.region) {
-            ref.region->set_writable(false);
-            ref.region->remap();
+        // TODO: Region needs to be RefCounted!
+        if (auto* region = ref.region.unsafe_ptr()) {
+            region->set_writable(false);
+            region->remap();
         }
     }
 }

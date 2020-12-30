@@ -31,20 +31,23 @@
 
 namespace UserspaceEmulator {
 
-class SharedBufferRegion final : public SoftMMU::Region {
+class SharedBufferRegion final : public Region {
 public:
     static NonnullOwnPtr<SharedBufferRegion> create_with_shbuf_id(u32 base, u32 size, int shbuf_id, u8* shbuf_data);
     virtual ~SharedBufferRegion() override;
 
-    virtual u8 read8(u32 offset) override;
-    virtual u16 read16(u32 offset) override;
-    virtual u32 read32(u32 offset) override;
+    virtual ValueWithShadow<u8> read8(u32 offset) override;
+    virtual ValueWithShadow<u16> read16(u32 offset) override;
+    virtual ValueWithShadow<u32> read32(u32 offset) override;
+    virtual ValueWithShadow<u64> read64(u32 offset) override;
 
-    virtual void write8(u32 offset, u8 value) override;
-    virtual void write16(u32 offset, u16 value) override;
-    virtual void write32(u32 offset, u32 value) override;
+    virtual void write8(u32 offset, ValueWithShadow<u8>) override;
+    virtual void write16(u32 offset, ValueWithShadow<u16>) override;
+    virtual void write32(u32 offset, ValueWithShadow<u32>) override;
+    virtual void write64(u32 offset, ValueWithShadow<u64>) override;
 
-    u8* data() { return m_data; }
+    virtual u8* data() override { return m_data; }
+    virtual u8* shadow_data() override { return m_shadow_data; }
 
     bool is_shared_buffer() const override { return true; }
 
@@ -60,6 +63,7 @@ private:
     SharedBufferRegion(u32 base, u32 size, int shbuf_id, u8* shbuf_data);
 
     u8* m_data { nullptr };
+    u8* m_shadow_data { nullptr };
     int m_shbuf_id { 0 };
 };
 

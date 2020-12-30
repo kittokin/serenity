@@ -26,15 +26,18 @@
 
 #include "BacktraceModel.h"
 #include "Debugger.h"
+#include <LibDebug/StackFrameUtils.h>
 
-NonnullRefPtr<BacktraceModel> BacktraceModel::create(const DebugSession& debug_session, const PtraceRegisters& regs)
+namespace HackStudio {
+
+NonnullRefPtr<BacktraceModel> BacktraceModel::create(const Debug::DebugSession& debug_session, const PtraceRegisters& regs)
 {
     return adopt(*new BacktraceModel(create_backtrace(debug_session, regs)));
 }
 
-GUI::Variant BacktraceModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant BacktraceModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Display) {
         auto& frame = m_frames.at(index.row());
         return frame.function_name;
     }
@@ -48,7 +51,7 @@ GUI::ModelIndex BacktraceModel::index(int row, int column, const GUI::ModelIndex
     return create_index(row, column, &m_frames.at(row));
 }
 
-Vector<BacktraceModel::FrameInfo> BacktraceModel::create_backtrace(const DebugSession& debug_session, const PtraceRegisters& regs)
+Vector<BacktraceModel::FrameInfo> BacktraceModel::create_backtrace(const Debug::DebugSession& debug_session, const PtraceRegisters& regs)
 {
     u32 current_ebp = regs.ebp;
     u32 current_instruction = regs.eip;
@@ -56,13 +59,17 @@ Vector<BacktraceModel::FrameInfo> BacktraceModel::create_backtrace(const DebugSe
     do {
         String name = debug_session.debug_info().name_of_containing_function(current_instruction);
         if (name.is_null()) {
-            dbg() << "BacktraceModel: couldn't find containing function for address: " << (void*)current_instruction;
-            break;
+            dbgln("BacktraceModel: couldn't find containing function for address: {:p}", current_instruction);
+            name = "<missing>";
         }
 
         frames.append({ name, current_instruction, current_ebp });
-        current_instruction = Debugger::the().session()->peek(reinterpret_cast<u32*>(current_ebp + 4)).value();
-        current_ebp = Debugger::the().session()->peek(reinterpret_cast<u32*>(current_ebp)).value();
-    } while (current_ebp);
+        auto frame_info = Debug::StackFrameUtils::get_info(*Debugger::the().session(), current_ebp);
+        ASSERT(frame_info.has_value());
+        current_instruction = frame_info.value().return_address;
+        current_ebp = frame_info.value().next_ebp;
+    } while (current_ebp && current_instruction);
     return frames;
+}
+
 }

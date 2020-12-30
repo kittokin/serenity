@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/internals.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -70,11 +71,13 @@ public:
     bool gets(u8*, size_t);
     bool ungetc(u8 byte) { return m_buffer.enqueue_front(byte); }
 
-    int seek(long offset, int whence);
-    long tell();
+    int seek(off_t offset, int whence);
+    off_t tell();
 
     pid_t popen_child() { return m_popen_child; }
     void set_popen_child(pid_t child_pid) { m_popen_child = child_pid; }
+
+    void reopen(int fd, int mode);
 
 private:
     struct Buffer {
@@ -389,7 +392,7 @@ bool FILE::gets(u8* data, size_t size)
     return total_read > 0;
 }
 
-int FILE::seek(long offset, int whence)
+int FILE::seek(off_t offset, int whence)
 {
     bool ok = flush();
     if (!ok)
@@ -405,13 +408,30 @@ int FILE::seek(long offset, int whence)
     return 0;
 }
 
-long FILE::tell()
+off_t FILE::tell()
 {
     bool ok = flush();
     if (!ok)
         return -1;
 
     return lseek(m_fd, 0, SEEK_CUR);
+}
+
+void FILE::reopen(int fd, int mode)
+{
+    // Dr. POSIX says: "Failure to flush or close the file descriptor
+    //                  successfully shall be ignored"
+    // and so we ignore any failures these two might have.
+    flush();
+    close();
+
+    // Just in case flush() and close() didn't drop the buffer.
+    m_buffer.drop();
+
+    m_fd = fd;
+    m_mode = mode;
+    m_error = 0;
+    m_eof = false;
 }
 
 FILE::Buffer::~Buffer()
@@ -565,6 +585,7 @@ void __stdio_init()
     new (stdout) FILE(1, O_WRONLY);
     new (stderr) FILE(2, O_WRONLY);
     stderr->setbuf(nullptr, _IONBF, 0);
+    __stdio_is_initialized = true;
 }
 
 int setvbuf(FILE* stream, char* buf, int mode, size_t size)
@@ -643,7 +664,11 @@ int getchar()
 
 ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream)
 {
-    char *ptr, *eptr;
+    if (!lineptr || !n) {
+        errno = EINVAL;
+        return -1;
+    }
+
     if (*lineptr == nullptr || *n == 0) {
         *n = BUFSIZ;
         if ((*lineptr = static_cast<char*>(malloc(*n))) == nullptr) {
@@ -651,6 +676,8 @@ ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream)
         }
     }
 
+    char* ptr;
+    char* eptr;
     for (ptr = *lineptr, eptr = *lineptr + *n;;) {
         int c = fgetc(stream);
         if (c == -1) {
@@ -768,7 +795,19 @@ int fseek(FILE* stream, long offset, int whence)
     return stream->seek(offset, whence);
 }
 
+int fseeko(FILE* stream, off_t offset, int whence)
+{
+    ASSERT(stream);
+    return stream->seek(offset, whence);
+}
+
 long ftell(FILE* stream)
+{
+    ASSERT(stream);
+    return stream->tell();
+}
+
+off_t ftello(FILE* stream)
 {
     ASSERT(stream);
     return stream->tell();
@@ -779,7 +818,7 @@ int fgetpos(FILE* stream, fpos_t* pos)
     ASSERT(stream);
     ASSERT(pos);
 
-    long val = stream->tell();
+    off_t val = stream->tell();
     if (val == -1L)
         return 1;
 
@@ -792,7 +831,7 @@ int fsetpos(FILE* stream, const fpos_t* pos)
     ASSERT(stream);
     ASSERT(pos);
 
-    return stream->seek((long)*pos, SEEK_SET);
+    return stream->seek(*pos, SEEK_SET);
 }
 
 void rewind(FILE* stream)
@@ -800,6 +839,11 @@ void rewind(FILE* stream)
     ASSERT(stream);
     int rc = stream->seek(0, SEEK_SET);
     ASSERT(rc == 0);
+}
+
+int vdbgprintf(const char* fmt, va_list ap)
+{
+    return printf_internal([](char*&, char ch) { dbgputch(ch); }, nullptr, fmt, ap);
 }
 
 int dbgprintf(const char* fmt, ...)
@@ -883,10 +927,16 @@ ALWAYS_INLINE void sized_buffer_putch(char*& bufptr, char ch)
 
 int vsnprintf(char* buffer, size_t size, const char* fmt, va_list ap)
 {
-    __vsnprintf_space_remaining = size;
+    if (size) {
+        __vsnprintf_space_remaining = size - 1;
+    } else {
+        __vsnprintf_space_remaining = 0;
+    }
     int ret = printf_internal(sized_buffer_putch, buffer, fmt, ap);
     if (__vsnprintf_space_remaining) {
         buffer[ret] = '\0';
+    } else if (size > 0) {
+        buffer[size - 1] = '\0';
     }
     return ret;
 }
@@ -955,10 +1005,19 @@ FILE* fopen(const char* pathname, const char* mode)
 
 FILE* freopen(const char* pathname, const char* mode, FILE* stream)
 {
-    (void)pathname;
-    (void)mode;
-    (void)stream;
-    ASSERT_NOT_REACHED();
+    ASSERT(stream);
+    if (!pathname) {
+        // FIXME: Someone should probably implement this path.
+        TODO();
+    }
+
+    int flags = parse_mode(mode);
+    int fd = open(pathname, flags, 0666);
+    if (fd < 0)
+        return nullptr;
+
+    stream->reopen(fd, flags);
+    return stream;
 }
 
 FILE* fdopen(int fd, const char* mode)
@@ -1004,7 +1063,7 @@ void dbgputch(char ch)
     syscall(SC_dbgputch, ch);
 }
 
-ssize_t dbgputstr(const char* characters, ssize_t length)
+int dbgputstr(const char* characters, ssize_t length)
 {
     int rc = syscall(SC_dbgputstr, characters, length);
     __RETURN_WITH_ERRNO(rc, rc, -1);
@@ -1132,15 +1191,13 @@ int vfscanf(FILE* stream, const char* fmt, va_list ap)
     return vsscanf(buffer, fmt, ap);
 }
 
-void flockfile(FILE* filehandle)
+void flockfile([[maybe_unused]] FILE* filehandle)
 {
-    (void)filehandle;
     dbgprintf("FIXME: Implement flockfile()\n");
 }
 
-void funlockfile(FILE* filehandle)
+void funlockfile([[maybe_unused]] FILE* filehandle)
 {
-    (void)filehandle;
     dbgprintf("FIXME: Implement funlockfile()\n");
 }
 

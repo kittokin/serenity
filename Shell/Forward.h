@@ -26,11 +26,60 @@
 
 #pragma once
 
-class Shell;
-namespace AST {
+namespace Shell::AST {
 
+struct Command;
 class Node;
 class Value;
 class SyntaxError;
+class Pipeline;
+struct Rewiring;
+class NodeVisitor;
+
+class PathRedirectionNode;
+class And;
+class ListConcatenate;
+class Background;
+class BarewordLiteral;
+class BraceExpansion;
+class CastToCommand;
+class CastToList;
+class CloseFdRedirection;
+class CommandLiteral;
+class Comment;
+class ContinuationControl;
+class DynamicEvaluate;
+class DoubleQuotedString;
+class Fd2FdRedirection;
+class FunctionDeclaration;
+class ForLoop;
+class Glob;
+class Execute;
+class IfCond;
+class Join;
+class MatchExpr;
+class Or;
+class Pipe;
+class Range;
+class ReadRedirection;
+class ReadWriteRedirection;
+class Sequence;
+class Subshell;
+class SimpleVariable;
+class SpecialVariable;
+class Juxtaposition;
+class StringLiteral;
+class StringPartCompose;
+class SyntaxError;
+class Tilde;
+class VariableDeclarations;
+class WriteAppendRedirection;
+class WriteRedirection;
+
+}
+
+namespace Shell {
+
+class Shell;
 
 }

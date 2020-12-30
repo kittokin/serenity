@@ -42,7 +42,7 @@ void ClientConnection::for_each_client(Function<void(ClientConnection&)> callbac
 }
 
 ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket, int client_id)
-    : IPC::ClientConnection<ClipboardServerEndpoint>(*this, move(socket), client_id)
+    : IPC::ClientConnection<ClipboardClientEndpoint, ClipboardServerEndpoint>(*this, move(socket), client_id)
 {
     s_connections.set(client_id, *this);
 }
@@ -68,7 +68,7 @@ OwnPtr<Messages::ClipboardServer::SetClipboardDataResponse> ClientConnection::ha
         did_misbehave("SetClipboardData: Bad shared buffer ID");
         return nullptr;
     }
-    Storage::the().set_data(*shared_buffer, message.data_size(), message.mime_type());
+    Storage::the().set_data(*shared_buffer, message.data_size(), message.mime_type(), message.metadata().entries());
     return make<Messages::ClipboardServer::SetClipboardDataResponse>();
 }
 
@@ -83,7 +83,7 @@ OwnPtr<Messages::ClipboardServer::GetClipboardDataResponse> ClientConnection::ha
         //        It would be even nicer if a SharedBuffer could have an arbitrary number of clients..
         RefPtr<SharedBuffer> shared_buffer = SharedBuffer::create_with_size(storage.data_size());
         ASSERT(shared_buffer);
-        memcpy(shared_buffer->data(), storage.data(), storage.data_size());
+        memcpy(shared_buffer->data<void>(), storage.data(), storage.data_size());
         shared_buffer->seal();
         shared_buffer->share_with(client_pid());
         shbuf_id = shared_buffer->shbuf_id();
@@ -92,7 +92,7 @@ OwnPtr<Messages::ClipboardServer::GetClipboardDataResponse> ClientConnection::ha
         //        After we respond to GetClipboardData, we have to wait for the client to ref the buffer on his side.
         m_last_sent_buffer = move(shared_buffer);
     }
-    return make<Messages::ClipboardServer::GetClipboardDataResponse>(shbuf_id, storage.data_size(), storage.mime_type());
+    return make<Messages::ClipboardServer::GetClipboardDataResponse>(shbuf_id, storage.data_size(), storage.mime_type(), storage.metadata());
 }
 
 void ClientConnection::notify_about_clipboard_change()

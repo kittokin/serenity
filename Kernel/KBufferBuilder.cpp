@@ -33,19 +33,21 @@ namespace Kernel {
 
 inline bool KBufferBuilder::can_append(size_t size) const
 {
-    bool has_space = ((m_size + size) < m_buffer.size());
+    if (!m_buffer)
+        return false;
+    bool has_space = ((m_size + size) < m_buffer->size());
     ASSERT(has_space);
     return has_space;
 }
 
-KBuffer KBufferBuilder::build()
+OwnPtr<KBuffer> KBufferBuilder::build()
 {
-    m_buffer.set_size(m_size);
-    return m_buffer;
+    m_buffer->set_size(m_size);
+    return m_buffer.release_nonnull();
 }
 
 KBufferBuilder::KBufferBuilder()
-    : m_buffer(KBuffer::create_with_size(4 * MB, Region::Access::Read | Region::Access::Write))
+    : m_buffer(KBuffer::try_create_with_size(4 * MiB, Region::Access::Read | Region::Access::Write))
 {
 }
 
@@ -91,6 +93,34 @@ void KBufferBuilder::appendf(const char* fmt, ...)
     va_start(ap, fmt);
     appendvf(fmt, ap);
     va_end(ap);
+}
+
+void KBufferBuilder::append_escaped_for_json(const StringView& string)
+{
+    for (auto ch : string) {
+        switch (ch) {
+        case '\e':
+            append("\\u001B");
+            break;
+        case '\b':
+            append("\\b");
+            break;
+        case '\n':
+            append("\\n");
+            break;
+        case '\t':
+            append("\\t");
+            break;
+        case '\"':
+            append("\\\"");
+            break;
+        case '\\':
+            append("\\\\");
+            break;
+        default:
+            append(ch);
+        }
+    }
 }
 
 }

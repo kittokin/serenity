@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <AK/FlyString.h>
 #include <LibJS/Runtime/PrimitiveString.h>
 #include <LibJS/Runtime/Symbol.h>
 #include <LibJS/Runtime/Value.h>
@@ -34,13 +35,16 @@ namespace JS {
 
 class StringOrSymbol {
 public:
-    static StringOrSymbol from_value(Interpreter& interpreter, Value value)
+    static StringOrSymbol from_value(GlobalObject& global_object, Value value)
     {
+        if (value.is_empty())
+            return {};
         if (value.is_symbol())
             return &value.as_symbol();
-        if (!value.is_empty())
-            return value.to_string(interpreter);
-        return {};
+        auto string = value.to_string(global_object);
+        if (string.is_null())
+            return {};
+        return string;
     }
 
     StringOrSymbol() = default;
@@ -51,8 +55,23 @@ public:
     }
 
     StringOrSymbol(const String& string)
-        : m_ptr(StringImpl::create(string.characters(), string.length()).leak_ref())
+        : m_ptr(string.impl())
     {
+        ASSERT(!string.is_null());
+        as_string_impl().ref();
+    }
+
+    StringOrSymbol(const FlyString& string)
+        : m_ptr(string.impl())
+    {
+        ASSERT(!string.is_null());
+        as_string_impl().ref();
+    }
+
+    ~StringOrSymbol()
+    {
+        if (is_string())
+            as_string_impl().unref();
     }
 
     StringOrSymbol(const Symbol* symbol)
@@ -64,6 +83,13 @@ public:
     StringOrSymbol(const StringOrSymbol& other)
     {
         m_ptr = other.m_ptr;
+        if (is_string())
+            as_string_impl().ref();
+    }
+
+    StringOrSymbol(StringOrSymbol&& other)
+    {
+        m_ptr = exchange(other.m_ptr, nullptr);
     }
 
     ALWAYS_INLINE bool is_valid() const { return m_ptr != nullptr; }
@@ -73,7 +99,7 @@ public:
     ALWAYS_INLINE String as_string() const
     {
         ASSERT(is_string());
-        return reinterpret_cast<const StringImpl*>(m_ptr);
+        return as_string_impl();
     }
 
     ALWAYS_INLINE const Symbol* as_symbol() const
@@ -91,16 +117,16 @@ public:
         ASSERT_NOT_REACHED();
     }
 
-    Value to_value(Interpreter& interpreter) const
+    Value to_value(VM& vm) const
     {
         if (is_string())
-            return js_string(interpreter, as_string());
+            return js_string(vm, as_string());
         if (is_symbol())
             return const_cast<Symbol*>(as_symbol());
         return {};
     }
 
-    void visit_children(Cell::Visitor& visitor)
+    void visit_edges(Cell::Visitor& visitor)
     {
         if (is_symbol())
             visitor.visit(const_cast<Symbol*>(as_symbol()));
@@ -109,7 +135,7 @@ public:
     ALWAYS_INLINE bool operator==(const StringOrSymbol& other) const
     {
         if (is_string())
-            return other.is_string() && as_string() == other.as_string();
+            return other.is_string() && as_string_impl() == other.as_string_impl();
         if (is_symbol())
             return other.is_symbol() && as_symbol() == other.as_symbol();
         return true;
@@ -120,7 +146,23 @@ public:
         if (this == &other)
             return *this;
         m_ptr = other.m_ptr;
+        if (is_string())
+            as_string_impl().ref();
         return *this;
+    }
+
+    StringOrSymbol& operator=(StringOrSymbol&& other)
+    {
+        if (this != &other)
+            m_ptr = exchange(other.m_ptr, nullptr);
+        return *this;
+    }
+
+    unsigned hash() const
+    {
+        if (is_string())
+            return as_string_impl().hash();
+        return ptr_hash(as_symbol());
     }
 
 private:
@@ -134,6 +176,12 @@ private:
         m_ptr = reinterpret_cast<const void*>(bits() | 1ul);
     }
 
+    ALWAYS_INLINE const StringImpl& as_string_impl() const
+    {
+        ASSERT(is_string());
+        return *reinterpret_cast<const StringImpl*>(m_ptr);
+    }
+
     const void* m_ptr { nullptr };
 };
 
@@ -143,10 +191,6 @@ template<>
 struct AK::Traits<JS::StringOrSymbol> : public GenericTraits<JS::StringOrSymbol> {
     static unsigned hash(const JS::StringOrSymbol& key)
     {
-        if (key.is_string())
-            return key.as_string().hash();
-        if (key.is_symbol())
-            return ptr_hash(key.as_symbol());
-        return 0;
+        return key.hash();
     }
 };

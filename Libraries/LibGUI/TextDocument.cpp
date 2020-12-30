@@ -30,6 +30,7 @@
 #include <LibCore/Timer.h>
 #include <LibGUI/TextDocument.h>
 #include <LibGUI/TextEditor.h>
+#include <LibRegex/Regex.h>
 #include <ctype.h>
 
 namespace GUI {
@@ -87,11 +88,39 @@ void TextDocument::set_text(const StringView& text)
 size_t TextDocumentLine::first_non_whitespace_column() const
 {
     for (size_t i = 0; i < length(); ++i) {
-        auto codepoint = codepoints()[i];
-        if (!isspace(codepoint))
+        auto code_point = code_points()[i];
+        if (!isspace(code_point))
             return i;
     }
     return length();
+}
+
+Optional<size_t> TextDocumentLine::last_non_whitespace_column() const
+{
+    for (ssize_t i = length() - 1; i >= 0; --i) {
+        auto code_point = code_points()[i];
+        if (!isspace(code_point))
+            return i;
+    }
+    return {};
+}
+
+bool TextDocumentLine::ends_in_whitespace() const
+{
+    if (!length())
+        return false;
+    return isspace(code_points()[length() - 1]);
+}
+
+size_t TextDocumentLine::leading_spaces() const
+{
+    size_t count = 0;
+    for (; count < m_text.size(); ++count) {
+        if (m_text[count] != ' ') {
+            break;
+        }
+    }
+    return count;
 }
 
 String TextDocumentLine::to_utf8() const
@@ -131,35 +160,35 @@ void TextDocumentLine::set_text(TextDocument& document, const StringView& text)
     }
     m_text.clear();
     Utf8View utf8_view(text);
-    for (auto codepoint : utf8_view)
-        m_text.append(codepoint);
+    for (auto code_point : utf8_view)
+        m_text.append(code_point);
     document.update_views({});
 }
 
-void TextDocumentLine::append(TextDocument& document, const u32* codepoints, size_t length)
+void TextDocumentLine::append(TextDocument& document, const u32* code_points, size_t length)
 {
     if (length == 0)
         return;
-    m_text.append(codepoints, length);
+    m_text.append(code_points, length);
     document.update_views({});
 }
 
-void TextDocumentLine::append(TextDocument& document, u32 codepoint)
+void TextDocumentLine::append(TextDocument& document, u32 code_point)
 {
-    insert(document, length(), codepoint);
+    insert(document, length(), code_point);
 }
 
-void TextDocumentLine::prepend(TextDocument& document, u32 codepoint)
+void TextDocumentLine::prepend(TextDocument& document, u32 code_point)
 {
-    insert(document, 0, codepoint);
+    insert(document, 0, code_point);
 }
 
-void TextDocumentLine::insert(TextDocument& document, size_t index, u32 codepoint)
+void TextDocumentLine::insert(TextDocument& document, size_t index, u32 code_point)
 {
     if (index == length()) {
-        m_text.append(codepoint);
+        m_text.append(code_point);
     } else {
-        m_text.insert(index, codepoint);
+        m_text.insert(index, code_point);
     }
     document.update_views({});
 }
@@ -255,6 +284,8 @@ void TextDocument::notify_did_change()
         for (auto* client : m_clients)
             client->document_did_change();
     }
+
+    m_regex_needs_update = true;
 }
 
 void TextDocument::set_all_cursors(const TextPosition& position)
@@ -263,6 +294,18 @@ void TextDocument::set_all_cursors(const TextPosition& position)
         for (auto* client : m_clients)
             client->document_did_set_cursor(position);
     }
+}
+
+String TextDocument::text() const
+{
+    StringBuilder builder;
+    for (size_t i = 0; i < line_count(); ++i) {
+        auto& line = this->line(i);
+        builder.append(line.view());
+        if (i != line_count() - 1)
+            builder.append('\n');
+    }
+    return builder.to_string();
 }
 
 String TextDocument::text_in_range(const TextRange& a_range) const
@@ -274,7 +317,7 @@ String TextDocument::text_in_range(const TextRange& a_range) const
         auto& line = this->line(i);
         size_t selection_start_column_on_line = range.start().line() == i ? range.start().column() : 0;
         size_t selection_end_column_on_line = range.end().line() == i ? range.end().column() : line.length();
-        builder.append(Utf32View(line.codepoints() + selection_start_column_on_line, selection_end_column_on_line - selection_start_column_on_line));
+        builder.append(Utf32View(line.code_points() + selection_start_column_on_line, selection_end_column_on_line - selection_start_column_on_line));
         if (i != range.end().line())
             builder.append('\n');
     }
@@ -282,13 +325,13 @@ String TextDocument::text_in_range(const TextRange& a_range) const
     return builder.to_string();
 }
 
-u32 TextDocument::codepoint_at(const TextPosition& position) const
+u32 TextDocument::code_point_at(const TextPosition& position) const
 {
     ASSERT(position.line() < line_count());
     auto& line = this->line(position.line());
     if (position.column() == line.length())
         return '\n';
-    return line.codepoints()[position.column()];
+    return line.code_points()[position.column()];
 }
 
 TextPosition TextDocument::next_position_after(const TextPosition& position, SearchShouldWrap should_wrap) const
@@ -321,10 +364,77 @@ TextPosition TextDocument::previous_position_before(const TextPosition& position
     return { position.line(), position.column() - 1 };
 }
 
-TextRange TextDocument::find_next(const StringView& needle, const TextPosition& start, SearchShouldWrap should_wrap) const
+void TextDocument::update_regex_matches(const StringView& needle)
+{
+    if (m_regex_needs_update || needle != m_regex_needle) {
+        Regex<PosixExtended> re(needle);
+
+        Vector<RegexStringView> views;
+
+        for (size_t line = 0; line < m_lines.size(); ++line) {
+            views.append(m_lines.at(line).view());
+        }
+        re.search(views, m_regex_result);
+        m_regex_needs_update = false;
+        m_regex_needle = String { needle };
+        m_regex_result_match_index = -1;
+        m_regex_result_match_capture_group_index = -1;
+    }
+}
+
+TextRange TextDocument::find_next(const StringView& needle, const TextPosition& start, SearchShouldWrap should_wrap, bool regmatch)
 {
     if (needle.is_empty())
         return {};
+
+    if (regmatch) {
+        if (!m_regex_result.matches.size())
+            return {};
+
+        regex::Match match;
+        bool use_whole_match { false };
+
+        auto next_match = [&] {
+            m_regex_result_match_capture_group_index = 0;
+            if (m_regex_result_match_index == m_regex_result.matches.size() - 1) {
+                if (should_wrap == SearchShouldWrap::Yes)
+                    m_regex_result_match_index = 0;
+                else
+                    ++m_regex_result_match_index;
+            } else
+                ++m_regex_result_match_index;
+        };
+
+        if (m_regex_result.n_capture_groups) {
+            if (m_regex_result_match_index >= m_regex_result.capture_group_matches.size())
+                next_match();
+            else {
+                // check if last capture group has been reached
+                if (m_regex_result_match_capture_group_index >= m_regex_result.capture_group_matches.at(m_regex_result_match_index).size()) {
+                    next_match();
+                } else {
+                    // get to the next capture group item
+                    ++m_regex_result_match_capture_group_index;
+                }
+            }
+
+            // use whole match, if there is no capture group for current index
+            if (m_regex_result_match_index >= m_regex_result.capture_group_matches.size())
+                use_whole_match = true;
+            else if (m_regex_result_match_capture_group_index >= m_regex_result.capture_group_matches.at(m_regex_result_match_index).size())
+                next_match();
+
+        } else {
+            next_match();
+        }
+
+        if (use_whole_match || !m_regex_result.capture_group_matches.at(m_regex_result_match_index).size())
+            match = m_regex_result.matches.at(m_regex_result_match_index);
+        else
+            match = m_regex_result.capture_group_matches.at(m_regex_result_match_index).at(m_regex_result_match_capture_group_index);
+
+        return TextRange { { match.line, match.column }, { match.line, match.column + match.view.length() } };
+    }
 
     TextPosition position = start.is_valid() ? start : TextPosition(0, 0);
     TextPosition original_position = position;
@@ -333,7 +443,7 @@ TextRange TextDocument::find_next(const StringView& needle, const TextPosition& 
     size_t needle_index = 0;
 
     do {
-        auto ch = codepoint_at(position);
+        auto ch = code_point_at(position);
         // FIXME: This is not the right way to use a Unicode needle!
         if (ch == (u32)needle[needle_index]) {
             if (needle_index == 0)
@@ -352,10 +462,60 @@ TextRange TextDocument::find_next(const StringView& needle, const TextPosition& 
     return {};
 }
 
-TextRange TextDocument::find_previous(const StringView& needle, const TextPosition& start, SearchShouldWrap should_wrap) const
+TextRange TextDocument::find_previous(const StringView& needle, const TextPosition& start, SearchShouldWrap should_wrap, bool regmatch)
 {
     if (needle.is_empty())
         return {};
+
+    if (regmatch) {
+        if (!m_regex_result.matches.size())
+            return {};
+
+        regex::Match match;
+        bool use_whole_match { false };
+
+        auto next_match = [&] {
+            if (m_regex_result_match_index == 0) {
+                if (should_wrap == SearchShouldWrap::Yes)
+                    m_regex_result_match_index = m_regex_result.matches.size() - 1;
+                else
+                    --m_regex_result_match_index;
+            } else
+                --m_regex_result_match_index;
+
+            m_regex_result_match_capture_group_index = m_regex_result.capture_group_matches.at(m_regex_result_match_index).size() - 1;
+        };
+
+        if (m_regex_result.n_capture_groups) {
+            if (m_regex_result_match_index >= m_regex_result.capture_group_matches.size())
+                next_match();
+            else {
+                // check if last capture group has been reached
+                if (m_regex_result_match_capture_group_index >= m_regex_result.capture_group_matches.at(m_regex_result_match_index).size()) {
+                    next_match();
+                } else {
+                    // get to the next capture group item
+                    --m_regex_result_match_capture_group_index;
+                }
+            }
+
+            // use whole match, if there is no capture group for current index
+            if (m_regex_result_match_index >= m_regex_result.capture_group_matches.size())
+                use_whole_match = true;
+            else if (m_regex_result_match_capture_group_index >= m_regex_result.capture_group_matches.at(m_regex_result_match_index).size())
+                next_match();
+
+        } else {
+            next_match();
+        }
+
+        if (use_whole_match || !m_regex_result.capture_group_matches.at(m_regex_result_match_index).size())
+            match = m_regex_result.matches.at(m_regex_result_match_index);
+        else
+            match = m_regex_result.capture_group_matches.at(m_regex_result_match_index).at(m_regex_result_match_capture_group_index);
+
+        return TextRange { { match.line, match.column }, { match.line, match.column + match.view.length() } };
+    }
 
     TextPosition position = start.is_valid() ? start : TextPosition(0, 0);
     position = previous_position_before(position, should_wrap);
@@ -365,7 +525,7 @@ TextRange TextDocument::find_previous(const StringView& needle, const TextPositi
     size_t needle_index = needle.length() - 1;
 
     do {
-        auto ch = codepoint_at(position);
+        auto ch = code_point_at(position);
         // FIXME: This is not the right way to use a Unicode needle!
         if (ch == (u32)needle[needle_index]) {
             if (needle_index == needle.length() - 1)
@@ -384,13 +544,13 @@ TextRange TextDocument::find_previous(const StringView& needle, const TextPositi
     return {};
 }
 
-Vector<TextRange> TextDocument::find_all(const StringView& needle) const
+Vector<TextRange> TextDocument::find_all(const StringView& needle, bool regmatch)
 {
     Vector<TextRange> ranges;
 
     TextPosition position;
     for (;;) {
-        auto range = find_next(needle, position, SearchShouldWrap::No);
+        auto range = find_next(needle, position, SearchShouldWrap::No, regmatch);
         if (!range.is_valid())
             break;
         ranges.append(range);
@@ -439,11 +599,11 @@ TextPosition TextDocument::first_word_break_before(const TextPosition& position,
 
     auto target = position;
     auto line = this->line(target.line());
-    auto is_start_alphanumeric = isalnum(line.codepoints()[target.column() - (start_at_column_before ? 1 : 0)]);
+    auto is_start_alphanumeric = isalnum(line.code_points()[target.column() - (start_at_column_before ? 1 : 0)]);
 
     while (target.column() > 0) {
-        auto next_codepoint = line.codepoints()[target.column() - 1];
-        if ((is_start_alphanumeric && !isalnum(next_codepoint)) || (!is_start_alphanumeric && isalnum(next_codepoint)))
+        auto prev_code_point = line.code_points()[target.column() - 1];
+        if ((is_start_alphanumeric && !isalnum(prev_code_point)) || (!is_start_alphanumeric && isalnum(prev_code_point)))
             break;
         target.set_column(target.column() - 1);
     }
@@ -463,11 +623,11 @@ TextPosition TextDocument::first_word_break_after(const TextPosition& position) 
         return TextPosition(position.line() + 1, 0);
     }
 
-    auto is_start_alphanumeric = isalnum(line.codepoints()[target.column()]);
+    auto is_start_alphanumeric = isalnum(line.code_points()[target.column()]);
 
     while (target.column() < line.length()) {
-        auto next_codepoint = line.codepoints()[target.column()];
-        if ((is_start_alphanumeric && !isalnum(next_codepoint)) || (!is_start_alphanumeric && isalnum(next_codepoint)))
+        auto next_code_point = line.code_points()[target.column()];
+        if ((is_start_alphanumeric && !isalnum(next_code_point)) || (!is_start_alphanumeric && isalnum(next_code_point)))
             break;
         target.set_column(target.column() + 1);
     }
@@ -510,6 +670,52 @@ InsertTextCommand::InsertTextCommand(TextDocument& document, const String& text,
     , m_text(text)
     , m_range({ position, position })
 {
+}
+
+void InsertTextCommand::perform_formatting(const TextDocument::Client& client)
+{
+    const size_t tab_width = client.soft_tab_width();
+    const auto& dest_line = m_document.line(m_range.start().line());
+    const bool should_auto_indent = client.is_automatic_indentation_enabled();
+
+    StringBuilder builder;
+    size_t column = m_range.start().column();
+    size_t line_indentation = dest_line.leading_spaces();
+    bool at_start_of_line = line_indentation == column;
+
+    for (auto input_char : m_text) {
+        if (input_char == '\n') {
+            builder.append('\n');
+            column = 0;
+            if (should_auto_indent) {
+                for (; column < line_indentation; ++column) {
+                    builder.append(' ');
+                }
+            }
+            at_start_of_line = true;
+        } else if (input_char == '\t') {
+            size_t next_soft_tab_stop = ((column + tab_width) / tab_width) * tab_width;
+            size_t spaces_to_insert = next_soft_tab_stop - column;
+            for (size_t i = 0; i < spaces_to_insert; ++i) {
+                builder.append(' ');
+            }
+            column = next_soft_tab_stop;
+            if (at_start_of_line) {
+                line_indentation = column;
+            }
+        } else {
+            if (input_char == ' ') {
+                if (at_start_of_line) {
+                    ++line_indentation;
+                }
+            } else {
+                at_start_of_line = false;
+            }
+            builder.append(input_char);
+            ++column;
+        }
+    }
+    m_text = builder.build();
 }
 
 void InsertTextCommand::redo()
@@ -555,65 +761,25 @@ TextPosition TextDocument::insert_at(const TextPosition& position, const StringV
 {
     TextPosition cursor = position;
     Utf8View utf8_view(text);
-    for (auto codepoint : utf8_view)
-        cursor = insert_at(cursor, codepoint, client);
+    for (auto code_point : utf8_view)
+        cursor = insert_at(cursor, code_point, client);
     return cursor;
 }
 
-TextPosition TextDocument::insert_at(const TextPosition& position, u32 codepoint, const Client* client)
+TextPosition TextDocument::insert_at(const TextPosition& position, u32 code_point, const Client*)
 {
-    bool automatic_indentation_enabled = client ? client->is_automatic_indentation_enabled() : false;
-    size_t m_soft_tab_width = client ? client->soft_tab_width() : 4;
-
-    bool at_head = position.column() == 0;
-    bool at_tail = position.column() == line(position.line()).length();
-    if (codepoint == '\n') {
-        if (at_tail || at_head) {
-            String new_line_contents;
-            if (automatic_indentation_enabled && at_tail) {
-                size_t leading_spaces = 0;
-                auto& old_line = lines()[position.line()];
-                for (size_t i = 0; i < old_line.length(); ++i) {
-                    if (old_line.codepoints()[i] == ' ')
-                        ++leading_spaces;
-                    else
-                        break;
-                }
-                if (leading_spaces)
-                    new_line_contents = String::repeated(' ', leading_spaces);
-            }
-
-            size_t row = position.line();
-            Vector<u32> line_content;
-            for (size_t i = position.column(); i < line(row).length(); i++)
-                line_content.append(line(row).codepoints()[i]);
-            insert_line(position.line() + (at_tail ? 1 : 0), make<TextDocumentLine>(*this, new_line_contents));
-            notify_did_change();
-            return { position.line() + 1, line(position.line() + 1).length() };
-        }
+    if (code_point == '\n') {
         auto new_line = make<TextDocumentLine>(*this);
-        new_line->append(*this, line(position.line()).codepoints() + position.column(), line(position.line()).length() - position.column());
-
-        Vector<u32> line_content;
-        for (size_t i = 0; i < new_line->length(); i++)
-            line_content.append(new_line->codepoints()[i]);
+        new_line->append(*this, line(position.line()).code_points() + position.column(), line(position.line()).length() - position.column());
         line(position.line()).truncate(*this, position.column());
         insert_line(position.line() + 1, move(new_line));
         notify_did_change();
         return { position.line() + 1, 0 };
-    }
-    if (codepoint == '\t') {
-        size_t next_soft_tab_stop = ((position.column() + m_soft_tab_width) / m_soft_tab_width) * m_soft_tab_width;
-        size_t spaces_to_insert = next_soft_tab_stop - position.column();
-        for (size_t i = 0; i < spaces_to_insert; ++i) {
-            line(position.line()).insert(*this, position.column(), ' ');
-        }
+    } else {
+        line(position.line()).insert(*this, position.column(), code_point);
         notify_did_change();
-        return { position.line(), next_soft_tab_stop };
+        return { position.line(), position.column() + 1 };
     }
-    line(position.line()).insert(*this, position.column(), codepoint);
-    notify_did_change();
-    return { position.line(), position.column() + 1 };
 }
 
 void TextDocument::remove(const TextRange& unnormalized_range)
@@ -644,10 +810,10 @@ void TextDocument::remove(const TextRange& unnormalized_range)
         ASSERT(range.start().line() == range.end().line() - 1);
         auto& first_line = line(range.start().line());
         auto& second_line = line(range.end().line());
-        Vector<u32> codepoints;
-        codepoints.append(first_line.codepoints(), range.start().column());
-        codepoints.append(second_line.codepoints() + range.end().column(), second_line.length() - range.end().column());
-        first_line.set_text(*this, move(codepoints));
+        Vector<u32> code_points;
+        code_points.append(first_line.code_points(), range.start().column());
+        code_points.append(second_line.code_points() + range.end().column(), second_line.length() - range.end().column());
+        first_line.set_text(*this, move(code_points));
         remove_line(range.end().line());
     }
 
@@ -658,11 +824,25 @@ void TextDocument::remove(const TextRange& unnormalized_range)
     notify_did_change();
 }
 
+bool TextDocument::is_empty() const
+{
+    return line_count() == 1 && line(0).is_empty();
+}
+
 TextRange TextDocument::range_for_entire_line(size_t line_index) const
 {
     if (line_index >= line_count())
         return {};
     return { { line_index, 0 }, { line_index, line(line_index).length() } };
+}
+
+const TextDocumentSpan* TextDocument::span_at(const TextPosition& position) const
+{
+    for (auto& span : m_spans) {
+        if (span.range.contains(position))
+            return &span;
+    }
+    return nullptr;
 }
 
 }

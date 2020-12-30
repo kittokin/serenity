@@ -24,8 +24,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <LibGUI/Button.h>
 #include <LibGUI/ComboBox.h>
+#include <LibGUI/ControlBoxButton.h>
 #include <LibGUI/Desktop.h>
 #include <LibGUI/ListView.h>
 #include <LibGUI/Model.h>
@@ -58,40 +58,37 @@ private:
 
 ComboBox::ComboBox()
 {
+    set_min_width(32);
+    set_fixed_height(22);
+
     m_editor = add<ComboBoxEditor>();
-    m_editor->set_has_open_button(true);
-    m_editor->on_change = [this] {
-        if (on_change)
-            on_change(m_editor->text(), m_list_view->selection().first());
-    };
+    m_editor->set_frame_thickness(0);
     m_editor->on_return_pressed = [this] {
         if (on_return_pressed)
             on_return_pressed();
     };
     m_editor->on_up_pressed = [this] {
-        m_list_view->move_selection(-1);
+        m_list_view->move_cursor(AbstractView::CursorMovement::Up, AbstractView::SelectionUpdate::Set);
     };
     m_editor->on_down_pressed = [this] {
-        m_list_view->move_selection(1);
+        m_list_view->move_cursor(AbstractView::CursorMovement::Down, AbstractView::SelectionUpdate::Set);
     };
     m_editor->on_pageup_pressed = [this] {
-        m_list_view->move_selection(-m_list_view->selection().first().row());
+        m_list_view->move_cursor(AbstractView::CursorMovement::PageUp, AbstractView::SelectionUpdate::Set);
     };
     m_editor->on_pagedown_pressed = [this] {
-        if (model())
-            m_list_view->move_selection((model()->row_count() - 1) - m_list_view->selection().first().row());
+        m_list_view->move_cursor(AbstractView::CursorMovement::PageDown, AbstractView::SelectionUpdate::Set);
     };
     m_editor->on_mousewheel = [this](int delta) {
-        m_list_view->move_selection(delta);
+        m_list_view->move_cursor_relative(delta, AbstractView::SelectionUpdate::Set);
     };
     m_editor->on_mousedown = [this] {
         if (only_allow_values_from_model())
             m_open_button->click();
     };
 
-    m_open_button = add<Button>();
-    m_open_button->set_focusable(false);
-    m_open_button->set_text("\xE2\xAC\x87"); // DOWNWARDS BLACK ARROW
+    m_open_button = add<ControlBoxButton>(ControlBoxButton::DownArrow);
+    m_open_button->set_focus_policy(GUI::FocusPolicy::NoFocus);
     m_open_button->on_click = [this](auto) {
         if (m_list_window->is_visible())
             close();
@@ -119,19 +116,21 @@ ComboBox::ComboBox()
     m_list_view->on_selection = [this](auto& index) {
         ASSERT(model());
         m_list_view->set_activates_on_selection(true);
-        auto new_value = model()->data(index).to_string();
+        auto new_value = index.data().to_string();
         m_editor->set_text(new_value);
         if (!m_only_allow_values_from_model)
             m_editor->select_all();
+    };
+
+    m_list_view->on_activation = [this](auto& index) {
         deferred_invoke([this, index](auto&) {
             if (on_change)
                 on_change(m_editor->text(), index);
         });
-    };
-    m_list_view->on_activation = [this](auto&) {
         m_list_view->set_activates_on_selection(false);
         close();
     };
+
     m_list_view->on_escape_pressed = [this] {
         close();
     };
@@ -143,11 +142,13 @@ ComboBox::~ComboBox()
 
 void ComboBox::resize_event(ResizeEvent& event)
 {
-    int frame_thickness = m_editor->frame_thickness();
-    int button_height = event.size().height() - frame_thickness * 2;
+    Widget::resize_event(event);
+    int button_height = event.size().height() - frame_thickness() * 2;
     int button_width = 15;
-    m_open_button->set_relative_rect(width() - button_width - frame_thickness, frame_thickness, button_width, button_height);
-    m_editor->set_relative_rect(0, 0, width(), height());
+    m_open_button->set_relative_rect(width() - button_width - frame_thickness(), frame_thickness(), button_width, button_height);
+    auto editor_rect = frame_inner_rect();
+    editor_rect.set_width(editor_rect.width() - button_width);
+    m_editor->set_relative_rect(editor_rect);
 }
 
 void ComboBox::set_model(NonnullRefPtr<Model> model)
@@ -157,11 +158,14 @@ void ComboBox::set_model(NonnullRefPtr<Model> model)
 
 void ComboBox::set_selected_index(size_t index)
 {
-    auto model = this->m_list_view->model();
+    if (!m_list_view->model())
+        return;
+    m_list_view->set_cursor(m_list_view->model()->index(index, 0), AbstractView::SelectionUpdate::Set);
+}
 
-    auto model_index = model->index(index, 0);
-    if (model->is_valid(model_index))
-        this->m_list_view->selection().set(model_index);
+size_t ComboBox::selected_index() const
+{
+    return m_list_view->cursor_index().row();
 }
 
 void ComboBox::select_all()
@@ -179,7 +183,7 @@ void ComboBox::open()
     int longest_item_width = 0;
     for (int i = 0; i < model()->row_count(); ++i) {
         auto index = model()->index(i);
-        auto item_text = model()->data(index).to_string();
+        auto item_text = index.data().to_string();
         longest_item_width = max(longest_item_width, m_list_view->font().width(item_text));
     }
     Gfx::IntSize size {
@@ -187,11 +191,13 @@ void ComboBox::open()
         model()->row_count() * m_list_view->item_height() + m_list_view->frame_thickness() * 2
     };
 
+    auto taskbar_height = GUI::Desktop::the().taskbar_height();
+    auto menubar_height = GUI::Desktop::the().menubar_height();
+    // NOTE: This is so the combobox bottom edge exactly fits the taskbar's
+    //       top edge - the value was found through trial and error though.
+    auto offset = 8;
     Gfx::IntRect list_window_rect { my_screen_rect.bottom_left(), size };
-    list_window_rect.intersect(Desktop::the().rect().shrunken(0, 128));
-
-    if (m_list_view->hover_highlighting())
-        m_list_view->set_last_valid_hovered_index({});
+    list_window_rect.intersect(Desktop::the().rect().shrunken(0, taskbar_height + menubar_height + offset));
 
     m_editor->set_has_visible_list(true);
     m_editor->set_focus(true);

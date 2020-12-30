@@ -27,6 +27,7 @@
 #pragma once
 
 #include "ClientConnection.h"
+#include <AK/Atomic.h>
 #include <AK/Badge.h>
 #include <AK/ByteBuffer.h>
 #include <AK/NonnullRefPtrVector.h>
@@ -45,7 +46,7 @@ class ClientConnection;
 class BufferQueue : public RefCounted<BufferQueue> {
 public:
     explicit BufferQueue(ClientConnection&);
-    ~BufferQueue() {}
+    ~BufferQueue() { }
 
     bool is_full() const { return m_queue.size() >= 3; }
     void enqueue(NonnullRefPtr<Audio::Buffer>&&);
@@ -102,10 +103,10 @@ public:
 private:
     RefPtr<Audio::Buffer> m_current;
     Queue<NonnullRefPtr<Audio::Buffer>> m_queue;
-    int m_position{ 0 };
-    int m_remaining_samples{ 0 };
-    int m_played_samples{ 0 };
-    bool m_paused{ false };
+    int m_position { 0 };
+    int m_remaining_samples { 0 };
+    int m_played_samples { 0 };
+    bool m_paused { false };
     WeakPtr<ClientConnection> m_client;
 };
 
@@ -118,13 +119,14 @@ public:
     NonnullRefPtr<BufferQueue> create_queue(ClientConnection&);
 
     int main_volume() const { return m_main_volume; }
-    void set_main_volume(int volume) { m_main_volume = volume; }
+    void set_main_volume(int volume);
 
     bool is_muted() const { return m_muted; }
     void set_muted(bool);
 
 private:
     Vector<NonnullRefPtr<BufferQueue>> m_pending_mixing;
+    Atomic<bool> m_added_queue { false };
     pthread_mutex_t m_pending_mutex;
     pthread_cond_t m_pending_cond;
 
@@ -132,10 +134,10 @@ private:
 
     LibThread::Thread m_sound_thread;
 
-    bool m_muted{ false };
-    int m_main_volume{ 100 };
+    bool m_muted { false };
+    int m_main_volume { 100 };
 
-    u8* m_zero_filled_buffer{ nullptr };
+    u8* m_zero_filled_buffer { nullptr };
 
     void mix();
 };

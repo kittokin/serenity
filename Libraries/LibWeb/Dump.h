@@ -26,16 +26,16 @@
 
 #pragma once
 
+#include <AK/Forward.h>
 #include <LibWeb/Forward.h>
 
 namespace Web {
 
-void dump_tree(const Node&);
-void dump_tree(const LayoutNode&);
-void dump_sheet(const StyleSheet&);
-void dump_rule(const StyleRule&);
-void dump_selector(const Selector&);
-
-#undef HTML_DEBUG
+void dump_tree(const DOM::Node&);
+void dump_tree(StringBuilder&, const Layout::Node&, bool show_box_model = false, bool show_specified_style = false, bool colorize = false);
+void dump_tree(const Layout::Node&, bool show_box_model = false, bool show_specified_style = false);
+void dump_sheet(const CSS::StyleSheet&);
+void dump_rule(const CSS::StyleRule&);
+void dump_selector(const CSS::Selector&);
 
 }

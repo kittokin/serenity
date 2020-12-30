@@ -74,16 +74,16 @@ public:
     const TmpFS& fs() const { return static_cast<const TmpFS&>(Inode::fs()); }
 
     // ^Inode
-    virtual ssize_t read_bytes(off_t, ssize_t, u8* buffer, FileDescription*) const override;
+    virtual ssize_t read_bytes(off_t, ssize_t, UserOrKernelBuffer& buffer, FileDescription*) const override;
     virtual InodeMetadata metadata() const override;
-    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntry&)>) const override;
+    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntryView&)>) const override;
     virtual RefPtr<Inode> lookup(StringView name) override;
     virtual void flush_metadata() override;
-    virtual ssize_t write_bytes(off_t, ssize_t, const u8* buffer, FileDescription*) override;
+    virtual ssize_t write_bytes(off_t, ssize_t, const UserOrKernelBuffer& buffer, FileDescription*) override;
     virtual KResultOr<NonnullRefPtr<Inode>> create_child(const String& name, mode_t, dev_t, uid_t, gid_t) override;
     virtual KResult add_child(Inode&, const StringView& name, mode_t) override;
     virtual KResult remove_child(const StringView& name) override;
-    virtual size_t directory_entry_count() const override;
+    virtual KResultOr<size_t> directory_entry_count() const override;
     virtual KResult chmod(mode_t) override;
     virtual KResult chown(uid_t, gid_t) override;
     virtual KResult truncate(u64) override;
@@ -102,9 +102,9 @@ private:
     InodeMetadata m_metadata;
     InodeIdentifier m_parent;
 
-    Optional<KBuffer> m_content;
+    OwnPtr<KBuffer> m_content;
     struct Child {
-        FS::DirectoryEntry entry;
+        String name;
         NonnullRefPtr<TmpFSInode> inode;
     };
     HashMap<String, Child> m_children;

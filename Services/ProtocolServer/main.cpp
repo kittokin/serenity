@@ -27,20 +27,25 @@
 #include <LibCore/EventLoop.h>
 #include <LibCore/LocalServer.h>
 #include <LibIPC/ClientConnection.h>
+#include <LibTLS/Certificate.h>
+#include <ProtocolServer/ClientConnection.h>
 #include <ProtocolServer/GeminiProtocol.h>
 #include <ProtocolServer/HttpProtocol.h>
 #include <ProtocolServer/HttpsProtocol.h>
-#include <ProtocolServer/ClientConnection.h>
 
 int main(int, char**)
 {
-    if (pledge("stdio inet shared_buffer accept unix rpath cpath fattr", nullptr) < 0) {
+    if (pledge("stdio inet shared_buffer accept unix rpath cpath fattr sendfd recvfd", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
+
+    // Ensure the certificates are read out here.
+    [[maybe_unused]] auto& certs = DefaultRootCACertificates::the();
+
     Core::EventLoop event_loop;
     // FIXME: Establish a connection to LookupServer and then drop "unix"?
-    if (pledge("stdio inet shared_buffer accept unix", nullptr) < 0) {
+    if (pledge("stdio inet shared_buffer accept unix sendfd recvfd", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -53,9 +58,9 @@ int main(int, char**)
         return 1;
     }
 
-    (void)*new ProtocolServer::GeminiProtocol;
-    (void)*new ProtocolServer::HttpProtocol;
-    (void)*new ProtocolServer::HttpsProtocol;
+    [[maybe_unused]] auto gemini = new ProtocolServer::GeminiProtocol;
+    [[maybe_unused]] auto http = new ProtocolServer::HttpProtocol;
+    [[maybe_unused]] auto https = new ProtocolServer::HttpsProtocol;
 
     auto socket = Core::LocalSocket::take_over_accepted_socket_from_system_server();
     ASSERT(socket);

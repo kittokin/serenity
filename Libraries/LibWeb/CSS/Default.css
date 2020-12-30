@@ -1,8 +1,13 @@
 html {
-    font-family: Katica;
+    font-family: sans-serif;
 }
 
-head, link, meta, script, style, title {
+head,
+link,
+meta,
+script,
+style,
+title {
     display: none;
 }
 
@@ -10,48 +15,76 @@ body {
     margin: 8px;
 }
 
-h1, h2 {
+h1,
+h2 {
     font-family: Pebbleton;
+    font-size: 14px;
     font-weight: bold;
 }
 
-h3 {
+h3,
+h4,
+h5,
+h6 {
     font-weight: bold;
 }
 
 pre {
-    font-family: Csilla;
-    font-weight: lighter;
+    font-family: monospace;
     margin-bottom: 8px;
     margin-top: 8px;
     white-space: pre;
 }
 
 code {
-    font-family: Csilla;
-    font-weight: lighter;
+    font-family: monospace;
 }
 
-u, ins {
+u,
+ins {
     text-decoration: underline;
 }
 
-strong, b {
+strong,
+b {
     font-weight: bold;
 }
 
-html, address,
+html,
+address,
 blockquote,
-body, dd, div,
-dl, dt, fieldset, form,
-frame, frameset,
+body,
+dd,
+div,
+dl,
+dt,
+fieldset,
+form,
+frame,
+frameset,
 hgroup,
-h1, h2, h3, h4,
-h5, h6, noframes,
-ol, p, ul, center,
-dir, hr, menu, pre,
-header, footer, nav, main,
-article, aside, section {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+noframes,
+ol,
+p,
+ul,
+center,
+dir,
+hr,
+menu,
+pre,
+header,
+footer,
+nav,
+main,
+article,
+aside,
+section {
     display: block;
 }
 
@@ -59,19 +92,27 @@ center {
     text-align: -libweb-center;
 }
 
-h1, h2, h3 {
+h1,
+h2,
+h3 {
     margin: 8px 0 8px 0;
 }
 
-h4, p,
-blockquote, ul,
-fieldset, form,
-ol, dl, dir,
+h4,
+p,
+blockquote,
+ul,
+fieldset,
+form,
+ol,
+dl,
+dir,
 menu {
     margin: 4px 0 4px 0;
 }
 
-h5, h6 {
+h5,
+h6 {
     margin: 2px 0 2px 0;
 }
 
@@ -127,7 +168,8 @@ tr {
     display: table-row;
 }
 
-td, th {
+td,
+th {
     display: table-cell;
 }
 
@@ -148,7 +190,7 @@ blockquote {
     margin-right: 25px;
 }
 
-/* FIXME: I think this should only apply in quirks mode. */
-table {
-    text-align: left;
+ul,
+ol {
+    padding-left: 20px;
 }

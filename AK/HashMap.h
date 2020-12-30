@@ -31,6 +31,13 @@
 #include <AK/StdLibExtras.h>
 #include <AK/Vector.h>
 
+// NOTE: We can't include <initializer_list> during the toolchain bootstrap,
+//       since it's part of libstdc++, and libstdc++ depends on LibC.
+//       For this reason, we don't support HashMap(initializer_list) in LibC.
+#ifndef SERENITY_LIBC_BUILD
+#    include <initializer_list>
+#endif
+
 namespace AK {
 
 template<typename K, typename V, typename KeyTraits>
@@ -47,9 +54,21 @@ private:
     };
 
 public:
-    HashMap() {}
+    HashMap() { }
 
-    bool is_empty() const { return m_table.is_empty(); }
+#ifndef SERENITY_LIBC_BUILD
+    HashMap(std::initializer_list<Entry> list)
+    {
+        ensure_capacity(list.size());
+        for (auto& item : list)
+            set(item.key, item.value);
+    }
+#endif
+
+    bool is_empty() const
+    {
+        return m_table.is_empty();
+    }
     size_t size() const { return m_table.size(); }
     size_t capacity() const { return m_table.capacity(); }
     void clear() { m_table.clear(); }
@@ -67,9 +86,9 @@ public:
     }
     void remove_one_randomly() { m_table.remove(m_table.begin()); }
 
-    typedef HashTable<Entry, EntryTraits> HashTableType;
-    typedef typename HashTableType::Iterator IteratorType;
-    typedef typename HashTableType::ConstIterator ConstIteratorType;
+    using HashTableType = HashTable<Entry, EntryTraits>;
+    using IteratorType = typename HashTableType::Iterator;
+    using ConstIteratorType = typename HashTableType::ConstIterator;
 
     IteratorType begin() { return m_table.begin(); }
     IteratorType end() { return m_table.end(); }

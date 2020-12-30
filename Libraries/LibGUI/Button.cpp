@@ -30,14 +30,23 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/StylePainter.h>
 
 namespace GUI {
 
-Button::Button(const StringView& text)
-    : AbstractButton(text)
+Button::Button(String text)
+    : AbstractButton(move(text))
 {
+    set_min_width(32);
+    set_fixed_height(22);
+    set_focus_policy(GUI::FocusPolicy::StrongFocus);
+
+    REGISTER_ENUM_PROPERTY(
+        "button_style", button_style, set_button_style, Gfx::ButtonStyle,
+        { Gfx::ButtonStyle::Normal, "Normal" },
+        { Gfx::ButtonStyle::CoolBar, "CoolBar" });
 }
 
 Button::~Button()
@@ -51,7 +60,7 @@ void Button::paint_event(PaintEvent& event)
     Painter painter(*this);
     painter.add_clip_rect(event.rect());
 
-    Gfx::StylePainter::paint_button(painter, rect(), palette(), m_button_style, is_being_pressed(), is_hovered(), is_checked(), is_enabled());
+    Gfx::StylePainter::paint_button(painter, rect(), palette(), m_button_style, is_being_pressed(), is_hovered(), is_checked(), is_enabled(), is_focused());
 
     if (text().is_empty() && !m_icon)
         return;
@@ -60,8 +69,17 @@ void Button::paint_event(PaintEvent& event)
     auto icon_location = m_icon ? content_rect.center().translated(-(m_icon->width() / 2), -(m_icon->height() / 2)) : Gfx::IntPoint();
     if (m_icon && !text().is_empty())
         icon_location.set_x(content_rect.x());
+
     if (is_being_pressed() || is_checked())
         painter.translate(1, 1);
+    else if (m_icon && is_enabled() && is_hovered() && button_style() == Gfx::ButtonStyle::CoolBar) {
+        auto shadow_color = palette().button().darkened(0.7f);
+        painter.blit_filtered(icon_location.translated(1, 1), *m_icon, m_icon->rect(), [&shadow_color](auto) {
+            return shadow_color;
+        });
+        icon_location.move_by(-1, -1);
+    }
+
     if (m_icon) {
         if (is_enabled()) {
             if (is_hovered())
@@ -69,10 +87,10 @@ void Button::paint_event(PaintEvent& event)
             else
                 painter.blit(icon_location, *m_icon, m_icon->rect());
         } else {
-            painter.blit_dimmed(icon_location, *m_icon, m_icon->rect());
+            painter.blit_disabled(icon_location, *m_icon, m_icon->rect(), palette());
         }
     }
-    auto& font = is_checked() ? Gfx::Font::default_bold_font() : this->font();
+    auto& font = is_checked() ? Gfx::FontDatabase::default_bold_font() : this->font();
     if (m_icon && !text().is_empty()) {
         content_rect.move_by(m_icon->width() + 4, 0);
         content_rect.set_width(content_rect.width() - m_icon->width() - 4);
@@ -83,12 +101,24 @@ void Button::paint_event(PaintEvent& event)
         text_rect.set_width(content_rect.width());
     text_rect.align_within(content_rect, text_alignment());
     paint_text(painter, text_rect, font, text_alignment());
+
+    if (is_focused()) {
+        Gfx::IntRect focus_rect;
+        if (m_icon && !text().is_empty())
+            focus_rect = text_rect.inflated(6, 6);
+        else
+            focus_rect = rect().shrunken(8, 8);
+        painter.draw_focus_rect(focus_rect, palette().focus_outline());
+    }
 }
 
 void Button::click(unsigned modifiers)
 {
     if (!is_enabled())
         return;
+
+    NonnullRefPtr protector = *this;
+
     if (is_checkable()) {
         if (is_checked() && !is_uncheckable())
             return;
@@ -110,7 +140,7 @@ void Button::context_menu_event(ContextMenuEvent& context_menu_event)
 
 void Button::set_action(Action& action)
 {
-    m_action = action.make_weak_ptr();
+    m_action = action;
     action.register_button({}, *this);
     set_enabled(action.is_enabled());
     set_checkable(action.is_checkable());

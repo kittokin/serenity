@@ -27,6 +27,7 @@
 #include "Card.h"
 #include <LibGUI/Widget.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 
 static const NonnullRefPtr<Gfx::CharacterBitmap> s_diamond = Gfx::CharacterBitmap::create_from_ascii(
     "    #    "
@@ -92,7 +93,7 @@ Card::Card(Type type, uint8_t value)
         Gfx::Painter bg_painter(*s_background);
 
         s_background->fill(Color::White);
-        auto image = Gfx::Bitmap::load_from_file("/res/icons/buggie-deck.png");
+        auto image = Gfx::Bitmap::load_from_file("/res/icons/solitaire/buggie-deck.png");
         ASSERT(!image.is_null());
 
         float aspect_ratio = image->width() / static_cast<float>(image->height());
@@ -105,7 +106,7 @@ Card::Card(Type type, uint8_t value)
     }
 
     Gfx::Painter painter(m_front);
-    auto& font = Gfx::Font::default_bold_font();
+    auto& font = Gfx::FontDatabase::default_bold_font();
     static const String labels[] = { "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K" };
 
     auto label = labels[value];
@@ -166,7 +167,7 @@ void Card::save_old_position()
     m_old_position_valid = true;
 }
 
-void Card::draw_complete(GUI::Painter& painter, const Color& background_color)
+void Card::clear_and_draw(GUI::Painter& painter, const Color& background_color)
 {
     if (is_old_position_valid())
         clear(painter, background_color);

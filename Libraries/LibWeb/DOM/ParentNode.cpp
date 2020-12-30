@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020, Luke Wilde <luke.wilde@live.co.uk>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,15 +24,60 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <LibWeb/CSS/Parser/CSSParser.h>
+#include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/DOM/ParentNode.h>
+#include <LibWeb/Dump.h>
 
-namespace Web {
+namespace Web::DOM {
 
-void ParentNode::remove_all_children()
+RefPtr<Element> ParentNode::query_selector(const StringView& selector_text)
 {
-    while (RefPtr<Node> child = first_child()) {
-        remove_child(*child);
-    }
+    auto selector = parse_selector(CSS::ParsingContext(*this), selector_text);
+    if (!selector.has_value())
+        return {};
+
+    dump_selector(selector.value());
+
+    RefPtr<Element> result;
+    for_each_in_subtree_of_type<Element>([&](auto& element) {
+        if (SelectorEngine::matches(selector.value(), element)) {
+            result = element;
+            return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
+    });
+
+    return result;
+}
+
+NonnullRefPtrVector<Element> ParentNode::query_selector_all(const StringView& selector_text)
+{
+    auto selector = parse_selector(CSS::ParsingContext(*this), selector_text);
+    if (!selector.has_value())
+        return {};
+
+    dump_selector(selector.value());
+
+    NonnullRefPtrVector<Element> elements;
+    for_each_in_subtree_of_type<Element>([&](auto& element) {
+        if (SelectorEngine::matches(selector.value(), element)) {
+            elements.append(element);
+        }
+        return IterationDecision::Continue;
+    });
+
+    return elements;
+}
+
+RefPtr<Element> ParentNode::first_element_child()
+{
+    return first_child_of_type<Element>();
+}
+
+RefPtr<Element> ParentNode::last_element_child()
+{
+    return last_child_of_type<Element>();
 }
 
 }

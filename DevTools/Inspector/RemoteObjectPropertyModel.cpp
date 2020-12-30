@@ -28,6 +28,8 @@
 #include "RemoteObject.h"
 #include "RemoteProcess.h"
 
+namespace Inspector {
+
 RemoteObjectPropertyModel::RemoteObjectPropertyModel(RemoteObject& object)
     : m_object(object)
 {
@@ -62,22 +64,22 @@ String RemoteObjectPropertyModel::column_name(int column) const
     ASSERT_NOT_REACHED();
 }
 
-GUI::Variant RemoteObjectPropertyModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant RemoteObjectPropertyModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
     auto* path = static_cast<const JsonPath*>(index.internal_data());
     if (!path)
         return {};
 
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Display) {
         switch (index.column()) {
         case Column::Name:
             return path->last().to_string();
         case Column::Value: {
             auto data = path->resolve(m_object.json);
             if (data.is_array())
-                return String::format("<Array with %d element%s", data.as_array().size(), data.as_array().size() == 1 ? ">" : "s>");
+                return String::formatted("<Array with {} element{}", data.as_array().size(), data.as_array().size() == 1 ? ">" : "s>");
             if (data.is_object())
-                return String::format("<Object with %d entrie%s", data.as_object().size(), data.as_object().size() == 1 ? ">" : "s>");
+                return String::formatted("<Object with {} entr{}", data.as_object().size(), data.as_object().size() == 1 ? "y>" : "ies>");
             return data;
         }
         }
@@ -187,7 +189,7 @@ GUI::ModelIndex RemoteObjectPropertyModel::parent_index(const GUI::ModelIndex& i
         return create_index(index_in_parent, 0, cpath);
     }
 
-    dbg() << "No cached path found for path " << path.to_string();
+    dbgln("No cached path found for path {}", path.to_string());
     return {};
 }
 
@@ -234,4 +236,6 @@ const JsonPath* RemoteObjectPropertyModel::find_cached_path(const Vector<JsonPat
     }
 
     return nullptr;
+}
+
 }

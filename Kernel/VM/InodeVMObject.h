@@ -39,7 +39,7 @@ public:
     Inode& inode() { return *m_inode; }
     const Inode& inode() const { return *m_inode; }
 
-    void inode_contents_changed(Badge<Inode>, off_t, ssize_t, const u8*);
+    void inode_contents_changed(Badge<Inode>, off_t, ssize_t, const UserOrKernelBuffer&);
     void inode_size_changed(Badge<Inode>, size_t old_size, size_t new_size);
 
     size_t amount_dirty() const;
@@ -66,10 +66,8 @@ protected:
     Bitmap m_dirty_pages;
 };
 
-template<>
-inline bool is<InodeVMObject>(const VMObject& vmobject)
-{
-    return vmobject.is_inode();
 }
 
-}
+AK_BEGIN_TYPE_TRAITS(Kernel::InodeVMObject)
+static bool is_type(const Kernel::VMObject& vmobject) { return vmobject.is_inode(); }
+AK_END_TYPE_TRAITS()

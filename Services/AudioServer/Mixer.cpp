@@ -24,7 +24,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/BufferStream.h>
+#include <AK/Array.h>
+#include <AK/MemoryStream.h>
 #include <AK/NumericLimits.h>
 #include <AudioServer/ClientConnection.h>
 #include <AudioServer/Mixer.h>
@@ -63,6 +64,7 @@ NonnullRefPtr<BufferQueue> Mixer::create_queue(ClientConnection& client)
     auto queue = adopt(*new BufferQueue(client));
     pthread_mutex_lock(&m_pending_mutex);
     m_pending_mixing.append(*queue);
+    m_added_queue = true;
     pthread_cond_signal(&m_pending_cond);
     pthread_mutex_unlock(&m_pending_mutex);
     return queue;
@@ -73,11 +75,12 @@ void Mixer::mix()
     decltype(m_pending_mixing) active_mix_queues;
 
     for (;;) {
-        if (active_mix_queues.is_empty()) {
+        if (active_mix_queues.is_empty() || m_added_queue) {
             pthread_mutex_lock(&m_pending_mutex);
             pthread_cond_wait(&m_pending_cond, &m_pending_mutex);
             active_mix_queues.append(move(m_pending_mixing));
             pthread_mutex_unlock(&m_pending_mutex);
+            m_added_queue = false;
         }
 
         active_mix_queues.remove_all_matching([&](auto& entry) { return !entry->client(); });
@@ -101,35 +104,42 @@ void Mixer::mix()
             }
         }
 
-        bool muted = m_muted;
+        if (m_muted) {
+            m_device->write(m_zero_filled_buffer, 4096);
+        } else {
+            Array<u8, 4096> buffer;
+            OutputMemoryStream stream { buffer };
 
-        // output the mixed stuff to the device
-        u8 raw_buffer[4096];
-        auto buffer = ByteBuffer::wrap(muted ? m_zero_filled_buffer : raw_buffer, sizeof(raw_buffer));
-
-        BufferStream stream(buffer);
-        if (!muted) {
             for (int i = 0; i < mixed_buffer_length; ++i) {
                 auto& mixed_sample = mixed_buffer[i];
 
                 mixed_sample.scale(m_main_volume);
                 mixed_sample.clip();
 
-                i16 out_sample;
+                LittleEndian<i16> out_sample;
                 out_sample = mixed_sample.left * NumericLimits<i16>::max();
                 stream << out_sample;
 
-                ASSERT(!stream.at_end()); // we should have enough space for both channels in one buffer!
                 out_sample = mixed_sample.right * NumericLimits<i16>::max();
                 stream << out_sample;
             }
-        }
 
-        if (stream.offset() != 0) {
-            buffer.trim(stream.offset());
+            ASSERT(stream.is_end());
+            ASSERT(!stream.has_any_error());
+            m_device->write(stream.data(), stream.size());
         }
-        m_device->write(buffer);
     }
+}
+
+void Mixer::set_main_volume(int volume)
+{
+    if (volume > 100)
+        m_main_volume = 100;
+    else
+        m_main_volume = volume;
+    ClientConnection::for_each([volume](ClientConnection& client) {
+        client.did_change_main_mix_volume({}, volume);
+    });
 }
 
 void Mixer::set_muted(bool muted)
@@ -143,7 +153,7 @@ void Mixer::set_muted(bool muted)
 }
 
 BufferQueue::BufferQueue(ClientConnection& client)
-    : m_client(client.make_weak_ptr())
+    : m_client(client)
 {
 }
 

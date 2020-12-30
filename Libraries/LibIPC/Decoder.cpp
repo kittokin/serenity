@@ -24,78 +24,81 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/BufferStream.h>
+#include <AK/MemoryStream.h>
 #include <AK/URL.h>
 #include <LibIPC/Decoder.h>
 #include <LibIPC/Dictionary.h>
+#include <LibIPC/File.h>
+#include <string.h>
+#include <sys/socket.h>
 
 namespace IPC {
 
 bool Decoder::decode(bool& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(u8& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(u16& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(u32& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(u64& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(i8& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(i16& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(i32& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(i64& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(float& value)
 {
     m_stream >> value;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(String& value)
 {
     i32 length = 0;
     m_stream >> length;
-    if (m_stream.handle_read_failure())
+    if (m_stream.handle_any_error())
         return false;
     if (length < 0) {
         value = {};
@@ -107,11 +110,28 @@ bool Decoder::decode(String& value)
     }
     char* text_buffer = nullptr;
     auto text_impl = StringImpl::create_uninitialized(static_cast<size_t>(length), text_buffer);
-    for (size_t i = 0; i < static_cast<size_t>(length); ++i) {
-        m_stream >> text_buffer[i];
-    }
+    m_stream >> Bytes { text_buffer, static_cast<size_t>(length) };
     value = *text_impl;
-    return !m_stream.handle_read_failure();
+    return !m_stream.handle_any_error();
+}
+
+bool Decoder::decode(ByteBuffer& value)
+{
+    i32 length = 0;
+    m_stream >> length;
+    if (m_stream.handle_any_error())
+        return false;
+    if (length < 0) {
+        value = {};
+        return true;
+    }
+    if (length == 0) {
+        value = ByteBuffer::create_uninitialized(0);
+        return true;
+    }
+    value = ByteBuffer::create_uninitialized(length);
+    m_stream >> value.bytes();
+    return !m_stream.handle_any_error();
 }
 
 bool Decoder::decode(URL& value)
@@ -127,9 +147,9 @@ bool Decoder::decode(Dictionary& dictionary)
 {
     u64 size = 0;
     m_stream >> size;
-    if (m_stream.handle_read_failure())
+    if (m_stream.handle_any_error())
         return false;
-    if (size >= NumericLimits<i32>::max()) {
+    if (size >= (size_t)NumericLimits<i32>::max()) {
         ASSERT_NOT_REACHED();
     }
 
@@ -144,6 +164,23 @@ bool Decoder::decode(Dictionary& dictionary)
     }
 
     return true;
+}
+
+bool Decoder::decode([[maybe_unused]] File& file)
+{
+#ifdef __serenity__
+    int fd = recvfd(m_sockfd);
+    if (fd < 0) {
+        dbgln("recvfd: {}", strerror(errno));
+        return false;
+    }
+    file = File(fd);
+    return true;
+#else
+    [[maybe_unused]] auto fd = m_sockfd;
+    warnln("fd passing is not supported on this platform, sorry :(");
+    return false;
+#endif
 }
 
 }

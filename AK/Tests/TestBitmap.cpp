@@ -48,6 +48,78 @@ TEST_CASE(find_first_unset)
     EXPECT_EQ(bitmap.find_first_unset().value(), 51u);
 }
 
+TEST_CASE(find_one_anywhere_set)
+{
+    {
+        Bitmap bitmap(168, false);
+        bitmap.set(34, true);
+        bitmap.set(97, true);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(0).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(31).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(32).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(34).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(36).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(63).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(64).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(96).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(96).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(97).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(127).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(128).value(), 34u);
+    }
+    {
+        Bitmap bitmap(128 + 24, false);
+        bitmap.set(34, true);
+        bitmap.set(126, true);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(0).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(63).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_set(64).value(), 126u);
+    }
+    {
+        Bitmap bitmap(32, false);
+        bitmap.set(12, true);
+        bitmap.set(24, true);
+        auto got = bitmap.find_one_anywhere_set(0).value();
+        EXPECT(got == 12 || got == 24);
+    }
+}
+
+TEST_CASE(find_one_anywhere_unset)
+{
+    {
+        Bitmap bitmap(168, true);
+        bitmap.set(34, false);
+        bitmap.set(97, false);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(0).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(31).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(32).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(34).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(36).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(63).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(64).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(96).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(96).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(97).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(127).value(), 97u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(128).value(), 34u);
+    }
+    {
+        Bitmap bitmap(128 + 24, true);
+        bitmap.set(34, false);
+        bitmap.set(126, false);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(0).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(63).value(), 34u);
+        EXPECT_EQ(bitmap.find_one_anywhere_unset(64).value(), 126u);
+    }
+    {
+        Bitmap bitmap(32, true);
+        bitmap.set(12, false);
+        bitmap.set(24, false);
+        auto got = bitmap.find_one_anywhere_unset(0).value();
+        EXPECT(got == 12 || got == 24);
+    }
+}
+
 TEST_CASE(find_first_range)
 {
     Bitmap bitmap(128, true);
@@ -65,20 +137,36 @@ TEST_CASE(find_first_range)
 
 TEST_CASE(set_range)
 {
-    Bitmap bitmap(128, false);
-    bitmap.set_range(41, 10, true);
-    EXPECT_EQ(bitmap.get(40), false);
-    EXPECT_EQ(bitmap.get(41), true);
-    EXPECT_EQ(bitmap.get(42), true);
-    EXPECT_EQ(bitmap.get(43), true);
-    EXPECT_EQ(bitmap.get(44), true);
-    EXPECT_EQ(bitmap.get(45), true);
-    EXPECT_EQ(bitmap.get(46), true);
-    EXPECT_EQ(bitmap.get(47), true);
-    EXPECT_EQ(bitmap.get(48), true);
-    EXPECT_EQ(bitmap.get(49), true);
-    EXPECT_EQ(bitmap.get(50), true);
-    EXPECT_EQ(bitmap.get(51), false);
+    {
+        Bitmap bitmap(128, false);
+        bitmap.set_range(41, 10, true);
+        EXPECT_EQ(bitmap.get(40), false);
+        EXPECT_EQ(bitmap.get(41), true);
+        EXPECT_EQ(bitmap.get(42), true);
+        EXPECT_EQ(bitmap.get(43), true);
+        EXPECT_EQ(bitmap.get(44), true);
+        EXPECT_EQ(bitmap.get(45), true);
+        EXPECT_EQ(bitmap.get(46), true);
+        EXPECT_EQ(bitmap.get(47), true);
+        EXPECT_EQ(bitmap.get(48), true);
+        EXPECT_EQ(bitmap.get(49), true);
+        EXPECT_EQ(bitmap.get(50), true);
+        EXPECT_EQ(bitmap.get(51), false);
+    }
+    {
+        Bitmap bitmap(288, false);
+        bitmap.set_range(48, 32, true);
+        bitmap.set_range(94, 39, true);
+        bitmap.set_range(190, 71, true);
+        bitmap.set_range(190 + 71 - 7, 21, false); // slightly overlapping clear
+        for (size_t i = 0; i < bitmap.size(); i++) {
+            bool should_be_set = (i >= 48 && i < 48 + 32)
+                || (i >= 94 && i < 94 + 39)
+                || ((i >= 190 && i < 190 + 71) && !(i >= 190 + 71 - 7 && i < 190 + 71 - 7 + 21));
+            EXPECT_EQ(bitmap.get(i), should_be_set);
+        }
+        EXPECT_EQ(bitmap.count_slow(true), 32u + 39u + 71u - 7u);
+    }
 }
 
 TEST_CASE(find_first_fit)
@@ -134,6 +222,51 @@ TEST_CASE(find_longest_range_of_unset_bits_edge)
     auto result = bitmap.find_longest_range_of_unset_bits(1, found_range_size);
     EXPECT_EQ(result.has_value(), true);
     EXPECT_EQ(result.value(), 32u);
+}
+
+TEST_CASE(count_in_range)
+{
+    Bitmap bitmap(256, false);
+    bitmap.set(14, true);
+    bitmap.set(17, true);
+    bitmap.set(19, true);
+    bitmap.set(20, true);
+    for (size_t i = 34; i < 250; i++) {
+        if (i < 130 || i > 183)
+            bitmap.set(i, true);
+    }
+
+    auto count_bits_slow = [](const Bitmap& b, size_t start, size_t len, bool value) -> size_t {
+        size_t count = 0;
+        for (size_t i = start; i < start + len; i++) {
+            if (b.get(i) == value)
+                count++;
+        }
+        return count;
+    };
+    auto test_with_value = [&](bool value) {
+        auto do_test = [&](size_t start, size_t len) {
+            EXPECT_EQ(bitmap.count_in_range(start, len, value), count_bits_slow(bitmap, start, len, value));
+        };
+        do_test(16, 2);
+        do_test(16, 3);
+        do_test(16, 4);
+
+        for (size_t start = 8; start < 24; start++) {
+            for (size_t end = 9; end < 25; end++) {
+                if (start >= end)
+                    continue;
+                do_test(start, end - start);
+            }
+        }
+
+        for (size_t start = 1; start <= 9; start++) {
+            for (size_t i = start + 1; i < bitmap.size() - start + 1; i++)
+                do_test(start, i - start);
+        }
+    };
+    test_with_value(true);
+    test_with_value(false);
 }
 
 TEST_MAIN(Bitmap)

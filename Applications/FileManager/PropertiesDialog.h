@@ -30,7 +30,7 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/Dialog.h>
 #include <LibGUI/FileSystemModel.h>
-#include <LibGUI/Image.h>
+#include <LibGUI/ImageWidget.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/TextBox.h>
 
@@ -40,11 +40,12 @@ public:
     virtual ~PropertiesDialog() override;
 
 private:
-    PropertiesDialog(GUI::FileSystemModel&, String, bool disable_rename, Window* parent = nullptr);
+    PropertiesDialog(const String& path, bool disable_rename, Window* parent = nullptr);
 
     struct PropertyValuePair {
         String property;
         String value;
+        Optional<URL> link = {};
     };
 
     struct PermissionMasks {
@@ -76,22 +77,21 @@ private:
     }
 
     GUI::Button& make_button(String, GUI::Widget& parent);
-    void make_divider(GUI::Widget& parent);
     void make_property_value_pairs(const Vector<PropertyValuePair>& pairs, GUI::Widget& parent);
     void make_permission_checkboxes(GUI::Widget& parent, PermissionMasks, String label_string, mode_t mode);
     void permission_changed(mode_t mask, bool set);
     bool apply_changes();
     void update();
-    String make_full_path(String name);
+    String make_full_path(const String& name);
 
-    GUI::FileSystemModel& m_model;
     RefPtr<GUI::Button> m_apply_button;
     RefPtr<GUI::TextBox> m_name_box;
-    RefPtr<GUI::Image> m_icon;
+    RefPtr<GUI::ImageWidget> m_icon;
     String m_name;
+    String m_parent_path;
     String m_path;
-    mode_t m_mode;
-    mode_t m_old_mode;
+    mode_t m_mode { 0 };
+    mode_t m_old_mode { 0 };
     bool m_permissions_dirty { false };
     bool m_name_dirty { false };
 };

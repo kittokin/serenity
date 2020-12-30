@@ -55,6 +55,12 @@ enum class WindowTileType {
     None = 0,
     Left,
     Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight
 };
 
 enum class PopupMenuItem {
@@ -153,7 +159,7 @@ public:
     void set_rect(int x, int y, int width, int height) { set_rect({ x, y, width, height }); }
     void set_rect_without_repaint(const Gfx::IntRect&);
 
-    void set_taskbar_rect(const Gfx::IntRect& rect) { m_taskbar_rect = rect; }
+    void set_taskbar_rect(const Gfx::IntRect&);
     const Gfx::IntRect& taskbar_rect() const { return m_taskbar_rect; }
 
     void move_to(const Gfx::IntPoint& position) { set_rect({ position, size() }); }
@@ -167,8 +173,13 @@ public:
 
     Gfx::IntSize size() const { return m_rect.size(); }
 
-    void invalidate();
-    void invalidate(const Gfx::IntRect&);
+    void invalidate(bool with_frame = true);
+    void invalidate(const Gfx::IntRect&, bool with_frame = false);
+    bool invalidate_no_notify(const Gfx::IntRect& rect, bool with_frame = false);
+
+    void prepare_dirty_rects();
+    void clear_dirty_rects();
+    Gfx::DisjointRectSet& dirty_rects() { return m_dirty_rects; }
 
     virtual void event(Core::Event&) override;
 
@@ -202,6 +213,9 @@ public:
     Gfx::IntSize size_increment() const { return m_size_increment; }
     void set_size_increment(const Gfx::IntSize& increment) { m_size_increment = increment; }
 
+    const Optional<Gfx::IntSize>& resize_aspect_ratio() const { return m_resize_aspect_ratio; }
+    void set_resize_aspect_ratio(const Optional<Gfx::IntSize>& ratio) { m_resize_aspect_ratio = ratio; }
+
     Gfx::IntSize base_size() const { return m_base_size; }
     void set_base_size(const Gfx::IntSize& size) { m_base_size = size; }
 
@@ -210,17 +224,17 @@ public:
 
     void set_default_icon();
 
-    const Cursor* override_cursor() const { return m_override_cursor.ptr(); }
-    void set_override_cursor(RefPtr<Cursor>&& cursor) { m_override_cursor = move(cursor); }
+    const Cursor* cursor() const { return m_cursor.ptr(); }
+    void set_cursor(RefPtr<Cursor> cursor) { m_cursor = move(cursor); }
 
     void request_update(const Gfx::IntRect&, bool ignore_occlusion = false);
     Gfx::DisjointRectSet take_pending_paint_rects() { return move(m_pending_paint_rects); }
 
+    bool has_taskbar_rect() const { return m_have_taskbar_rect; };
     bool in_minimize_animation() const { return m_minimize_animation_step != -1; }
-
     int minimize_animation_index() const { return m_minimize_animation_step; }
     void step_minimize_animation() { m_minimize_animation_step += 1; }
-    void start_minimize_animation() { m_minimize_animation_step = 0; }
+    void start_minimize_animation();
     void end_minimize_animation() { m_minimize_animation_step = -1; }
 
     Gfx::IntRect tiled_rect(WindowTileType) const;
@@ -259,6 +273,24 @@ public:
     bool is_destroyed() const { return m_destroyed; }
     void destroy();
 
+    bool default_positioned() const { return m_default_positioned; }
+    void set_default_positioned(bool p) { m_default_positioned = p; }
+
+    bool is_invalidated() const { return m_invalidated; }
+
+    bool is_opaque() const
+    {
+        if (opacity() < 1.0f)
+            return false;
+        if (has_alpha_channel())
+            return false;
+        return true;
+    }
+
+    Gfx::DisjointRectSet& opaque_rects() { return m_opaque_rects; }
+    Gfx::DisjointRectSet& transparency_rects() { return m_transparency_rects; }
+    Gfx::DisjointRectSet& transparency_wallpaper_rects() { return m_transparency_wallpaper_rects; }
+
 private:
     void handle_mouse_event(const MouseEvent&);
     void update_menu_item_text(PopupMenuItem item);
@@ -278,6 +310,10 @@ private:
     Gfx::IntRect m_rect;
     Gfx::IntRect m_saved_nonfullscreen_rect;
     Gfx::IntRect m_taskbar_rect;
+    Gfx::DisjointRectSet m_dirty_rects;
+    Gfx::DisjointRectSet m_opaque_rects;
+    Gfx::DisjointRectSet m_transparency_rects;
+    Gfx::DisjointRectSet m_transparency_wallpaper_rects;
     WindowType m_type { WindowType::Normal };
     bool m_global_cursor_tracking_enabled { false };
     bool m_automatic_cursor_tracking_enabled { false };
@@ -287,12 +323,18 @@ private:
     bool m_minimizable { false };
     bool m_frameless { false };
     bool m_resizable { false };
+    Optional<Gfx::IntSize> m_resize_aspect_ratio {};
     bool m_listens_to_wm_events { false };
     bool m_minimized { false };
     bool m_maximized { false };
     bool m_fullscreen { false };
     bool m_accessory { false };
     bool m_destroyed { false };
+    bool m_default_positioned { false };
+    bool m_have_taskbar_rect { false };
+    bool m_invalidated { true };
+    bool m_invalidated_all { true };
+    bool m_invalidated_frame { true };
     WindowTileType m_tiled { WindowTileType::None };
     Gfx::IntRect m_untiled_rect;
     bool m_occluded { false };
@@ -304,7 +346,7 @@ private:
     Gfx::IntSize m_size_increment;
     Gfx::IntSize m_base_size;
     NonnullRefPtr<Gfx::Bitmap> m_icon;
-    RefPtr<Cursor> m_override_cursor;
+    RefPtr<Cursor> m_cursor;
     WindowFrame m_frame;
     unsigned m_wm_event_mask { 0 };
     Gfx::DisjointRectSet m_pending_paint_rects;

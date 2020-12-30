@@ -32,6 +32,7 @@
 #include <LibCore/Object.h>
 #include <LibGUI/Forward.h>
 #include <LibGUI/Shortcut.h>
+#include <LibGUI/Widget.h>
 #include <LibGfx/Forward.h>
 
 namespace GUI {
@@ -53,8 +54,9 @@ public:
     void register_global_shortcut_action(Badge<Action>, Action&);
     void unregister_global_shortcut_action(Badge<Action>, Action&);
 
-    void show_tooltip(const StringView&, const Gfx::IntPoint& screen_location);
+    void show_tooltip(String, const Widget* tooltip_source_widget);
     void hide_tooltip();
+    Widget* tooltip_source_widget() { return m_tooltip_source_widget; };
 
     bool quit_when_last_window_deleted() const { return m_quit_when_last_window_deleted; }
     void set_quit_when_last_window_deleted(bool b) { m_quit_when_last_window_deleted = b; }
@@ -72,8 +74,13 @@ public:
 
     bool focus_debugging_enabled() const { return m_focus_debugging_enabled; }
 
+    Core::EventLoop& event_loop() { return *m_event_loop; }
+
 private:
     Application(int argc, char** argv);
+
+    void tooltip_show_timer_did_fire();
+    void tooltip_hide_timer_did_fire();
 
     OwnPtr<Core::EventLoop> m_event_loop;
     RefPtr<MenuBar> m_menubar;
@@ -81,7 +88,10 @@ private:
     RefPtr<Gfx::PaletteImpl> m_system_palette;
     HashMap<Shortcut, Action*> m_global_shortcut_actions;
     class TooltipWindow;
+    RefPtr<Core::Timer> m_tooltip_show_timer;
+    RefPtr<Core::Timer> m_tooltip_hide_timer;
     RefPtr<TooltipWindow> m_tooltip_window;
+    RefPtr<Widget> m_tooltip_source_widget;
     bool m_quit_when_last_window_deleted { true };
     bool m_focus_debugging_enabled { false };
     String m_invoked_as;

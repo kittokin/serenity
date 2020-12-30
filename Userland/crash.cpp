@@ -115,7 +115,7 @@ int main(int argc, char** argv)
     bool do_read_from_uninitialized_malloc_memory = false;
     bool do_read_from_freed_memory = false;
     bool do_invalid_stack_pointer_on_syscall = false;
-    bool do_invalid_stack_pointer_on_page_fault  = false;
+    bool do_invalid_stack_pointer_on_page_fault = false;
     bool do_syscall_from_writeable_memory = false;
     bool do_write_to_freed_memory_still_cached_by_malloc = false;
     bool do_read_from_freed_memory_still_cached_by_malloc = false;
@@ -125,6 +125,9 @@ int main(int argc, char** argv)
     bool do_read_cpu_counter = false;
 
     auto args_parser = Core::ArgsParser();
+    args_parser.set_general_help(
+        "Exercise error-handling paths of the execution environment "
+        "(i.e., Kernel or UE) by crashing in many different ways.");
     args_parser.add_option(do_all_crash_types, "Test that all of the following crash types crash as expected", nullptr, 'A');
     args_parser.add_option(do_segmentation_violation, "Perform a segmentation violation by dereferencing an invalid pointer", nullptr, 's');
     args_parser.add_option(do_division_by_zero, "Perform a division by zero", nullptr, 'd');
@@ -167,13 +170,12 @@ int main(int argc, char** argv)
         Crash("Division by zero", []() {
             volatile int lala = 10;
             volatile int zero = 0;
-            volatile int test = lala / zero;
-            UNUSED_PARAM(test);
+            [[maybe_unused]] volatile int test = lala / zero;
             return Crash::Failure::DidNotCrash;
         }).run(run_type);
     }
 
-    if (do_illegal_instruction|| do_all_crash_types) {
+    if (do_illegal_instruction || do_all_crash_types) {
         Crash("Illegal instruction", []() {
             asm volatile("ud2");
             return Crash::Failure::DidNotCrash;
@@ -193,8 +195,7 @@ int main(int argc, char** argv)
             if (!uninitialized_memory)
                 return Crash::Failure::UnexpectedError;
 
-            volatile auto x = uninitialized_memory[0][0];
-            UNUSED_PARAM(x);
+            [[maybe_unused]] volatile auto x = uninitialized_memory[0][0];
             return Crash::Failure::DidNotCrash;
         }).run(run_type);
     }
@@ -206,8 +207,7 @@ int main(int argc, char** argv)
                 return Crash::Failure::UnexpectedError;
 
             free(uninitialized_memory);
-            volatile auto x = uninitialized_memory[4][0];
-            UNUSED_PARAM(x);
+            [[maybe_unused]] volatile auto x = uninitialized_memory[4][0];
             return Crash::Failure::DidNotCrash;
         }).run(run_type);
     }
@@ -302,8 +302,7 @@ int main(int argc, char** argv)
 
             free(ptr);
             dbgprintf("ptr = %p\n", ptr);
-            volatile auto foo = *ptr;
-            UNUSED_PARAM(foo);
+            [[maybe_unused]] volatile auto foo = *ptr;
             return Crash::Failure::DidNotCrash;
         }).run(run_type);
     }

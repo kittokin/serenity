@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2020, Hüseyin Aslıtürk <asliturk@hotmail.com>
+ * Copyright (c) 2020, Hüseyin Aslıtürk <asliturk@hotmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -69,7 +69,7 @@ void AppletManager::event(Core::Event& event)
 
 void AppletManager::add_applet(Window& applet)
 {
-    m_applets.append(applet.make_weak_ptr());
+    m_applets.append(applet);
 
     // Prune any dead weak pointers from the applet list.
     m_applets.remove_all_matching([](auto& entry) {
@@ -83,6 +83,8 @@ void AppletManager::add_applet(Window& applet)
     });
 
     calculate_applet_rects(MenuManager::the().window());
+
+    MenuManager::the().refresh();
 }
 
 void AppletManager::calculate_applet_rects(Window& window)
@@ -105,6 +107,8 @@ void AppletManager::remove_applet(Window& applet)
     m_applets.remove_first_matching([&](auto& entry) {
         return &applet == entry.ptr();
     });
+
+    MenuManager::the().refresh();
 }
 
 void AppletManager::draw()
@@ -122,6 +126,8 @@ void AppletManager::draw_applet(const Window& applet)
         return;
 
     Gfx::Painter painter(*MenuManager::the().window().backing_store());
+    Gfx::PainterStateSaver saver(painter);
+    painter.add_clip_rect(applet.rect_in_menubar());
     painter.fill_rect(applet.rect_in_menubar(), WindowManager::the().palette().window());
     painter.blit(applet.rect_in_menubar().location(), *applet.backing_store(), applet.backing_store()->rect());
 }

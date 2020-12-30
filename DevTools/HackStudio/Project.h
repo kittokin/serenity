@@ -27,64 +27,38 @@
 #pragma once
 
 #include "ProjectFile.h"
+#include <AK/LexicalPath.h>
 #include <AK/Noncopyable.h>
-#include <AK/NonnullRefPtrVector.h>
 #include <AK/OwnPtr.h>
-#include <LibGUI/Icon.h>
-#include <LibGUI/Model.h>
+#include <LibGUI/FileSystemModel.h>
 
-enum class ProjectType {
-    Unknown,
-    Cpp,
-    JavaScript
-};
+namespace HackStudio {
 
 class Project {
-    AK_MAKE_NONCOPYABLE(Project)
-    AK_MAKE_NONMOVABLE(Project)
+    AK_MAKE_NONCOPYABLE(Project);
+    AK_MAKE_NONMOVABLE(Project);
+
 public:
     ~Project();
 
-    static OwnPtr<Project> load_from_file(const String& path);
+    static OwnPtr<Project> open_with_root_path(const String& root_path);
 
-    [[nodiscard]] bool add_file(const String& filename);
-    [[nodiscard]] bool remove_file(const String& filename);
-    [[nodiscard]] bool save();
+    GUI::FileSystemModel& model() { return *m_model; }
+    const GUI::FileSystemModel& model() const { return *m_model; }
+    String name() const { return LexicalPath(m_root_path).basename(); }
+    String root_path() const { return m_root_path; }
 
-    ProjectFile* get_file(const String& filename);
+    RefPtr<ProjectFile> get_file(const String& path) const;
 
-    ProjectType type() const { return m_type; }
-    GUI::Model& model() { return *m_model; }
-    String default_file() const;
-    String name() const { return m_name; }
-    String path() const { return m_path; }
-
-    template<typename Callback>
-    void for_each_text_file(Callback callback) const
-    {
-        for (auto& file : m_files) {
-            callback(file);
-        }
-    }
+    void for_each_text_file(Function<void(const ProjectFile&)>) const;
 
 private:
-    friend class ProjectModel;
-    struct ProjectTreeNode;
-    explicit Project(const String& path, Vector<String>&& files);
+    explicit Project(const String& root_path);
 
-    const ProjectTreeNode& root_node() const { return *m_root_node; }
-    void rebuild_tree();
+    RefPtr<GUI::FileSystemModel> m_model;
+    mutable NonnullRefPtrVector<ProjectFile> m_files;
 
-    ProjectType m_type { ProjectType::Unknown };
-    String m_name;
-    String m_path;
-    RefPtr<GUI::Model> m_model;
-    NonnullRefPtrVector<ProjectFile> m_files;
-    RefPtr<ProjectTreeNode> m_root_node;
-
-    GUI::Icon m_directory_icon;
-    GUI::Icon m_file_icon;
-    GUI::Icon m_cplusplus_icon;
-    GUI::Icon m_header_icon;
-    GUI::Icon m_project_icon;
+    String m_root_path;
 };
+
+}

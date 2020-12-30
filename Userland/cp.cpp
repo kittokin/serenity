@@ -29,6 +29,7 @@
 #include <AK/StringBuilder.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/DirIterator.h>
+#include <LibCore/File.h>
 #include <assert.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -36,8 +37,10 @@
 #include <unistd.h>
 
 bool copy_file_or_directory(String, String, bool);
-bool copy_file(String, String, struct stat, int);
+bool copy_file(String, String, const struct stat&, int);
 bool copy_directory(String, String);
+
+static mode_t my_umask = 0;
 
 int main(int argc, char** argv)
 {
@@ -47,19 +50,26 @@ int main(int argc, char** argv)
     }
 
     bool recursion_allowed = false;
+    bool verbose = false;
     Vector<const char*> sources;
     const char* destination = nullptr;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(recursion_allowed, "Copy directories recursively", "recursive", 'r');
+    args_parser.add_option(verbose, "Verbose", "verbose", 'v');
     args_parser.add_positional_argument(sources, "Source file path", "source");
     args_parser.add_positional_argument(destination, "Destination file path", "destination");
     args_parser.parse(argc, argv);
+
+    auto my_umask = umask(0);
+    umask(my_umask);
 
     for (auto& source : sources) {
         bool ok = copy_file_or_directory(source, destination, recursion_allowed);
         if (!ok)
             return 1;
+        if (verbose)
+            printf("'%s' -> '%s'\n", source, destination);
     }
     return 0;
 }
@@ -101,9 +111,12 @@ bool copy_file_or_directory(String src_path, String dst_path, bool recursion_all
  *
  * To avoid repeated work, the source file's stat and file descriptor are required.
  */
-bool copy_file(String src_path, String dst_path, struct stat src_stat, int src_fd)
+bool copy_file(String src_path, String dst_path, const struct stat& src_stat, int src_fd)
 {
-    int dst_fd = creat(dst_path.characters(), 0666);
+    // NOTE: We don't copy the set-uid and set-gid bits.
+    mode_t mode = (src_stat.st_mode & ~my_umask) & ~06000;
+
+    int dst_fd = creat(dst_path.characters(), mode);
     if (dst_fd < 0) {
         if (errno != EISDIR) {
             perror("open dst");
@@ -151,14 +164,6 @@ bool copy_file(String src_path, String dst_path, struct stat src_stat, int src_f
         }
     }
 
-    auto my_umask = umask(0);
-    umask(my_umask);
-    int rc = fchmod(dst_fd, src_stat.st_mode & ~my_umask);
-    if (rc < 0) {
-        perror("fchmod dst");
-        return false;
-    }
-
     close(src_fd);
     close(dst_fd);
     return true;
@@ -174,6 +179,18 @@ bool copy_directory(String src_path, String dst_path)
         perror("cp: mkdir");
         return false;
     }
+
+    String src_rp = Core::File::real_path_for(src_path);
+    src_rp = String::format("%s/", src_rp.characters());
+    String dst_rp = Core::File::real_path_for(dst_path);
+    dst_rp = String::format("%s/", dst_rp.characters());
+
+    if (!dst_rp.is_empty() && dst_rp.starts_with(src_rp)) {
+        fprintf(stderr, "cp: Cannot copy %s into itself (%s)\n",
+            src_path.characters(), dst_path.characters());
+        return false;
+    }
+
     Core::DirIterator di(src_path, Core::DirIterator::SkipDots);
     if (di.has_error()) {
         fprintf(stderr, "cp: DirIterator: %s\n", di.error_string());

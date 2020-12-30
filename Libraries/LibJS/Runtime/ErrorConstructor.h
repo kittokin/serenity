@@ -36,11 +36,11 @@ class ErrorConstructor final : public NativeFunction {
 
 public:
     explicit ErrorConstructor(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~ErrorConstructor() override;
 
-    virtual Value call(Interpreter&) override;
-    virtual Value construct(Interpreter&, Function& new_target) override;
+    virtual Value call() override;
+    virtual Value construct(Function& new_target) override;
 
 private:
     virtual bool has_constructor() const override { return true; }
@@ -52,16 +52,16 @@ private:
                                                                                                   \
     public:                                                                                       \
         explicit ConstructorName(GlobalObject&);                                                  \
-        virtual void initialize(Interpreter&, GlobalObject&) override;                            \
+        virtual void initialize(GlobalObject&) override;                                          \
         virtual ~ConstructorName() override;                                                      \
-        virtual Value call(Interpreter&) override;                                                \
-        virtual Value construct(Interpreter&, Function& new_target) override;                     \
+        virtual Value call() override;                                                            \
+        virtual Value construct(Function& new_target) override;                                   \
                                                                                                   \
     private:                                                                                      \
         virtual bool has_constructor() const override { return true; }                            \
     };
 
-#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName) \
+#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \
     DECLARE_ERROR_SUBCLASS_CONSTRUCTOR(ClassName, snake_name, PrototypeName, ConstructorName)
 JS_ENUMERATE_ERROR_SUBCLASSES
 #undef __JS_ENUMERATE

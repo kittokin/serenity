@@ -33,7 +33,7 @@
 
 static const u8 central_directory_file_header_sig[] = "\x50\x4b\x01\x02";
 
-bool seek_and_read(u8* buffer, const MappedFile& file, off_t seek_to, size_t bytes_to_read)
+static bool seek_and_read(u8* buffer, const MappedFile& file, off_t seek_to, size_t bytes_to_read)
 {
     if (!buffer)
         return false;
@@ -46,7 +46,7 @@ bool seek_and_read(u8* buffer, const MappedFile& file, off_t seek_to, size_t byt
     return true;
 }
 
-bool find_next_central_directory(off_t file_size, const MappedFile& file, off_t current_index, off_t& return_index)
+static bool find_next_central_directory(off_t file_size, const MappedFile& file, off_t current_index, off_t& return_index)
 {
     off_t start_index = current_index == 0 ? current_index : current_index + 1;
     for (off_t index = start_index; index < file_size - 4; index++) {
@@ -62,7 +62,7 @@ bool find_next_central_directory(off_t file_size, const MappedFile& file, off_t 
     return false;
 }
 
-bool unpack_file_for_central_directory_index(off_t central_directory_index, const MappedFile& file)
+static bool unpack_file_for_central_directory_index(off_t central_directory_index, const MappedFile& file)
 {
     enum CentralFileDirectoryHeaderOffsets {
         CFDHCompressionMethodOffset = 10,
@@ -115,10 +115,9 @@ bool unpack_file_for_central_directory_index(off_t central_directory_index, cons
         return false;
     off_t extra_field_length = buffer[1] << 8 | buffer[0];
 
-    if (!seek_and_read(buffer, file, local_file_header_index + LFHFileNameBaseOffset, file_name_length))
-        return false;
     char file_name[file_name_length + 1];
-    memcpy(file_name, buffer, file_name_length);
+    if (!seek_and_read((u8*)file_name, file, local_file_header_index + LFHFileNameBaseOffset, file_name_length))
+        return false;
     file_name[file_name_length] = '\0';
 
     if (file_name[file_name_length - 1] == '/') {
@@ -156,7 +155,7 @@ bool unpack_file_for_central_directory_index(off_t central_directory_index, cons
 int main(int argc, char** argv)
 {
     const char* path;
-    int map_size_limit = 32 * MB;
+    int map_size_limit = 32 * MiB;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(map_size_limit, "Maximum chunk size to map", "map-size-limit", 0, "size");
@@ -183,6 +182,8 @@ int main(int argc, char** argv)
     }
 
     MappedFile mapped_file { zip_file_path };
+    if (!mapped_file.is_valid())
+        return 1;
 
     printf("Archive: %s\n", zip_file_path.characters());
 

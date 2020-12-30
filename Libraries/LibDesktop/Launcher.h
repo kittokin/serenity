@@ -43,11 +43,9 @@ public:
         UserDefault
     };
 
-    struct Details: public RefCounted<Details> {
-
+    struct Details : public RefCounted<Details> {
         String name;
         String executable;
-        HashMap<String, String> icons;
         LauncherType launcher_type { LauncherType::Default };
 
         static NonnullRefPtr<Details> from_details_str(const String&);

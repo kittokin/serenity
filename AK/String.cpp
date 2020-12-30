@@ -24,7 +24,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/ByteBuffer.h>
 #include <AK/FlyString.h>
+#include <AK/Format.h>
 #include <AK/Memory.h>
 #include <AK/StdLibExtras.h>
 #include <AK/String.h>
@@ -34,10 +36,6 @@
 
 #ifndef KERNEL
 #    include <inttypes.h>
-#endif
-
-#ifdef KERNEL
-extern "C" char* strstr(const char* haystack, const char* needle);
 #endif
 
 namespace AK {
@@ -63,10 +61,7 @@ bool String::operator==(const String& other) const
     if (!other.m_impl)
         return false;
 
-    if (length() != other.length())
-        return false;
-
-    return !memcmp(characters(), other.characters(), length());
+    return *m_impl == *other.m_impl;
 }
 
 bool String::operator==(const StringView& other) const
@@ -110,6 +105,18 @@ String String::empty()
     return StringImpl::the_empty_stringimpl();
 }
 
+bool String::copy_characters_to_buffer(char* buffer, size_t buffer_size) const
+{
+    // We must fit at least the NUL-terminator.
+    ASSERT(buffer_size > 0);
+
+    size_t characters_to_copy = min(length(), buffer_size - 1);
+    __builtin_memcpy(buffer, characters(), characters_to_copy);
+    buffer[characters_to_copy] = 0;
+
+    return characters_to_copy == length();
+}
+
 String String::isolated_copy() const
 {
     if (!m_impl)
@@ -122,10 +129,17 @@ String String::isolated_copy() const
     return String(move(*impl));
 }
 
+String String::substring(size_t start) const
+{
+    ASSERT(m_impl);
+    ASSERT(start <= length());
+    return { characters() + start, length() - start };
+}
+
 String String::substring(size_t start, size_t length) const
 {
     if (!length)
-        return {};
+        return "";
     ASSERT(m_impl);
     ASSERT(start + length <= m_impl->length());
     // FIXME: This needs some input bounds checking.
@@ -138,6 +152,13 @@ StringView String::substring_view(size_t start, size_t length) const
     ASSERT(start + length <= m_impl->length());
     // FIXME: This needs some input bounds checking.
     return { characters() + start, length };
+}
+
+StringView String::substring_view(size_t start) const
+{
+    ASSERT(m_impl);
+    ASSERT(start <= length());
+    return { characters() + start, length() - start };
 }
 
 Vector<String> String::split(char separator, bool keep_empty) const
@@ -196,59 +217,27 @@ ByteBuffer String::to_byte_buffer() const
     return ByteBuffer::copy(reinterpret_cast<const u8*>(characters()), length());
 }
 
-Optional<int> String::to_int() const
+template<typename T>
+Optional<T> String::to_int() const
 {
-    return StringUtils::convert_to_int(view());
+    return StringUtils::convert_to_int<T>(view());
 }
 
-Optional<unsigned> String::to_uint() const
+template Optional<i8> String::to_int() const;
+template Optional<i16> String::to_int() const;
+template Optional<i32> String::to_int() const;
+template Optional<i64> String::to_int() const;
+
+template<typename T>
+Optional<T> String::to_uint() const
 {
-    return StringUtils::convert_to_uint(view());
+    return StringUtils::convert_to_uint<T>(view());
 }
 
-String String::number(unsigned long long value)
-{
-    int size;
-    char buffer[32];
-    size = sprintf(buffer, "%llu", value);
-    return String(buffer, size);
-}
-
-String String::number(unsigned long value)
-{
-    int size;
-    char buffer[32];
-    size = sprintf(buffer, "%lu", value);
-    return String(buffer, size);
-}
-
-String String::number(unsigned value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%u", value);
-    return String(buffer, size);
-}
-
-String String::number(long long value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%lld", value);
-    return String(buffer, size);
-}
-
-String String::number(long value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%ld", value);
-    return String(buffer, size);
-}
-
-String String::number(int value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%d", value);
-    return String(buffer, size);
-}
+template Optional<u8> String::to_uint() const;
+template Optional<u16> String::to_uint() const;
+template Optional<u32> String::to_uint() const;
+template Optional<u64> String::to_uint() const;
 
 String String::format(const char* fmt, ...)
 {
@@ -260,15 +249,9 @@ String String::format(const char* fmt, ...)
     return builder.to_string();
 }
 
-bool String::starts_with(const StringView& str) const
+bool String::starts_with(const StringView& str, CaseSensitivity case_sensitivity) const
 {
-    if (str.is_empty())
-        return true;
-    if (is_empty())
-        return false;
-    if (str.length() > length())
-        return false;
-    return !memcmp(characters(), str.characters_without_null_termination(), str.length());
+    return StringUtils::starts_with(*this, str, case_sensitivity);
 }
 
 bool String::starts_with(char ch) const
@@ -299,16 +282,19 @@ String String::repeated(char ch, size_t count)
     return *impl;
 }
 
+bool String::matches(const StringView& mask, Vector<MaskSpan>& mask_spans, CaseSensitivity case_sensitivity) const
+{
+    return StringUtils::matches(*this, mask, case_sensitivity, &mask_spans);
+}
+
 bool String::matches(const StringView& mask, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::matches(*this, mask, case_sensitivity);
 }
 
-bool String::contains(const String& needle) const
+bool String::contains(const StringView& needle, CaseSensitivity case_sensitivity) const
 {
-    if (is_null() || needle.is_null())
-        return false;
-    return strstr(characters(), needle.characters());
+    return StringUtils::contains(*this, needle, case_sensitivity);
 }
 
 Optional<size_t> String::index_of(const String& needle, size_t start) const
@@ -328,7 +314,7 @@ bool String::equals_ignoring_case(const StringView& other) const
     return StringUtils::equals_ignoring_case(view(), other);
 }
 
-int String::replace(const String& needle, const String& replacement, bool all_occurences)
+int String::replace(const String& needle, const String& replacement, bool all_occurrences)
 {
     if (is_empty())
         return 0;
@@ -342,7 +328,7 @@ int String::replace(const String& needle, const String& replacement, bool all_oc
 
         pos = ptr - characters();
         positions.append(pos);
-        if (!all_occurences)
+        if (!all_occurrences)
             break;
 
         start = pos + 1;
@@ -363,42 +349,13 @@ int String::replace(const String& needle, const String& replacement, bool all_oc
     return positions.size();
 }
 
-String String::trim_whitespace(TrimMode mode) const
+String String::reverse() const
 {
-    auto is_whitespace_character = [](char ch) -> bool {
-        return ch == '\t'
-            || ch == '\n'
-            || ch == '\v'
-            || ch == '\f'
-            || ch == '\r'
-            || ch == ' ';
-    };
-
-    size_t substring_start = 0;
-    size_t substring_length = length();
-
-    if (mode == TrimMode::Left || mode == TrimMode::Both) {
-        for (size_t i = 0; i < length(); ++i) {
-            if (substring_length == 0)
-                return "";
-            if (!is_whitespace_character(characters()[i]))
-                break;
-            ++substring_start;
-            --substring_length;
-        }
+    StringBuilder reversed_string;
+    for (size_t i = length(); i-- > 0;) {
+        reversed_string.append(characters()[i]);
     }
-
-    if (mode == TrimMode::Right || mode == TrimMode::Both) {
-        for (size_t i = length() - 1; i > 0; --i) {
-            if (substring_length == 0)
-                return "";
-            if (!is_whitespace_character(characters()[i]))
-                break;
-            --substring_length;
-        }
-    }
-
-    return substring(substring_start, substring_length);
+    return reversed_string.to_string();
 }
 
 String escape_html_entities(const StringView& html)
@@ -480,6 +437,36 @@ bool String::operator==(const char* cstring) const
 StringView String::view() const
 {
     return { characters(), length() };
+}
+
+InputStream& operator>>(InputStream& stream, String& string)
+{
+    StringBuilder builder;
+
+    for (;;) {
+        char next_char;
+        stream >> next_char;
+
+        if (stream.has_any_error()) {
+            stream.set_fatal_error();
+            string = nullptr;
+            return stream;
+        }
+
+        if (next_char) {
+            builder.append(next_char);
+        } else {
+            string = builder.to_string();
+            return stream;
+        }
+    }
+}
+
+String String::vformatted(StringView fmtstr, TypeErasedFormatParams params)
+{
+    StringBuilder builder;
+    vformat(builder, fmtstr, params);
+    return builder.to_string();
 }
 
 }

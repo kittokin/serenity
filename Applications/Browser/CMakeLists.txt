@@ -1,3 +1,6 @@
+compile_gml(BrowserWindow.gml BrowserWindowGML.h browser_window_gml)
+compile_gml(Tab.gml TabGML.h tab_gml)
+
 set(SOURCES
     BookmarksBarWidget.cpp
     BrowserConsoleClient.cpp
@@ -8,7 +11,9 @@ set(SOURCES
     main.cpp
     Tab.cpp
     WindowActions.cpp
+    BrowserWindowGML.h
+    TabGML.h
 )
 
-serenity_bin(Browser)
+serenity_app(Browser ICON app-browser)
 target_link_libraries(Browser LibWeb LibProtocol LibGUI LibDesktop)

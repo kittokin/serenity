@@ -37,7 +37,8 @@ public:
     using OutputType = KBuffer;
 
     explicit KBufferBuilder();
-    ~KBufferBuilder() {}
+    KBufferBuilder(KBufferBuilder&&) = default;
+    ~KBufferBuilder() { }
 
     void append(const StringView&);
     void append(char);
@@ -45,13 +46,28 @@ public:
     void appendf(const char*, ...);
     void appendvf(const char*, va_list);
 
-    KBuffer build();
+    void append_escaped_for_json(const StringView&);
+
+    template<typename... Parameters>
+    void appendff(StringView fmtstr, const Parameters&... parameters)
+    {
+        // FIXME: This is really not the way to go about it, but vformat expects a
+        //        StringBuilder. Why does this class exist anyways?
+        append(String::formatted(fmtstr, parameters...));
+    }
+
+    OwnPtr<KBuffer> build();
 
 private:
     bool can_append(size_t) const;
-    u8* insertion_ptr() { return m_buffer.data() + m_size; }
+    u8* insertion_ptr()
+    {
+        if (!m_buffer)
+            return nullptr;
+        return m_buffer->data() + m_size;
+    }
 
-    KBuffer m_buffer;
+    OwnPtr<KBuffer> m_buffer;
     size_t m_size { 0 };
 };
 

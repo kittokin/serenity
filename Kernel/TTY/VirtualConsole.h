@@ -33,12 +33,14 @@
 
 namespace Kernel {
 
+static constexpr unsigned s_max_virtual_consoles = 6;
+
 class VirtualConsole final : public TTY
     , public KeyboardClient
     , public VT::TerminalClient {
     AK_MAKE_ETERNAL
 public:
-    VirtualConsole(unsigned index);
+    VirtualConsole(const unsigned index);
     virtual ~VirtualConsole() override;
 
     static void switch_to(unsigned);
@@ -52,8 +54,8 @@ private:
     virtual void on_key_pressed(KeyboardDevice::Event) override;
 
     // ^TTY
-    virtual ssize_t on_tty_write(const u8*, ssize_t) override;
-    virtual StringView tty_name() const override { return m_tty_name; }
+    virtual ssize_t on_tty_write(const UserOrKernelBuffer&, ssize_t) override;
+    virtual String tty_name() const override { return m_tty_name; }
     virtual void echo(u8) override;
 
     // ^TerminalClient

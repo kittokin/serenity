@@ -27,7 +27,9 @@
 #pragma once
 
 #include <AK/ByteBuffer.h>
+#include <AK/Format.h>
 #include <AK/Forward.h>
+#include <AK/StringView.h>
 #include <stdarg.h>
 
 namespace AK {
@@ -36,16 +38,24 @@ class StringBuilder {
 public:
     using OutputType = String;
 
-    explicit StringBuilder(size_t initial_capacity = 16);
-    ~StringBuilder() {}
+    explicit StringBuilder(size_t initial_capacity = inline_capacity);
+    ~StringBuilder() { }
 
     void append(const StringView&);
     void append(const Utf32View&);
     void append(char);
-    void append_codepoint(u32);
+    void append_code_point(u32);
     void append(const char*, size_t);
     void appendf(const char*, ...);
     void appendvf(const char*, va_list);
+
+    void append_escaped_for_json(const StringView&);
+
+    template<typename... Parameters>
+    void appendff(StringView fmtstr, const Parameters&... parameters)
+    {
+        vformat(*this, fmtstr, VariadicFormatParams { parameters... });
+    }
 
     String build() const;
     String to_string() const;
@@ -73,7 +83,12 @@ public:
 
 private:
     void will_append(size_t);
+    u8* data() { return m_buffer.is_null() ? m_inline_buffer : m_buffer.data(); }
+    const u8* data() const { return m_buffer.is_null() ? m_inline_buffer : m_buffer.data(); }
+    bool using_inline_buffer() const { return m_buffer.is_null(); }
 
+    static constexpr size_t inline_capacity = 128;
+    u8 m_inline_buffer[inline_capacity];
     ByteBuffer m_buffer;
     size_t m_length { 0 };
 };

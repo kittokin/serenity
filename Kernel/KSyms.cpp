@@ -30,7 +30,6 @@
 #include <Kernel/KSyms.h>
 #include <Kernel/Process.h>
 #include <Kernel/Scheduler.h>
-#include <LibELF/Loader.h>
 
 namespace Kernel {
 
@@ -69,7 +68,7 @@ const KernelSymbol* symbolicate_kernel_address(u32 address)
     return nullptr;
 }
 
-static void load_kernel_sybols_from_data(const ByteBuffer& buffer)
+static void load_kernel_sybols_from_data(const KBuffer& buffer)
 {
     g_lowest_kernel_symbol_address = 0xffffffff;
     g_highest_kernel_symbol_address = 0;
@@ -115,7 +114,7 @@ static void load_kernel_sybols_from_data(const ByteBuffer& buffer)
     g_kernel_symbols_available = true;
 }
 
-NEVER_INLINE void dump_backtrace_impl(FlatPtr base_pointer, bool use_ksyms)
+NEVER_INLINE static void dump_backtrace_impl(FlatPtr base_pointer, bool use_ksyms)
 {
     SmapDisabler disabler;
 #if 0
@@ -129,11 +128,6 @@ NEVER_INLINE void dump_backtrace_impl(FlatPtr base_pointer, bool use_ksyms)
         return;
     }
 
-    OwnPtr<Process::ELFBundle> elf_bundle;
-    auto current_process = Process::current();
-    if (current_process)
-        elf_bundle = current_process->elf_bundle();
-
     struct RecognizedSymbol {
         FlatPtr address;
         const KernelSymbol* symbol { nullptr };
@@ -142,16 +136,25 @@ NEVER_INLINE void dump_backtrace_impl(FlatPtr base_pointer, bool use_ksyms)
     RecognizedSymbol recognized_symbols[max_recognized_symbol_count];
     size_t recognized_symbol_count = 0;
     if (use_ksyms) {
-        for (FlatPtr* stack_ptr = (FlatPtr*)base_pointer;
-             (current_process ? current_process->validate_read_from_kernel(VirtualAddress(stack_ptr), sizeof(void*) * 2) : 1) && recognized_symbol_count < max_recognized_symbol_count; stack_ptr = (FlatPtr*)*stack_ptr) {
-            FlatPtr retaddr = stack_ptr[1];
+        FlatPtr copied_stack_ptr[2];
+        for (FlatPtr* stack_ptr = (FlatPtr*)base_pointer; stack_ptr && recognized_symbol_count < max_recognized_symbol_count; stack_ptr = (FlatPtr*)copied_stack_ptr[0]) {
+            if ((FlatPtr)stack_ptr < 0xc0000000)
+                break;
+
+            void* fault_at;
+            if (!safe_memcpy(copied_stack_ptr, stack_ptr, sizeof(copied_stack_ptr), fault_at))
+                break;
+            FlatPtr retaddr = copied_stack_ptr[1];
             recognized_symbols[recognized_symbol_count++] = { retaddr, symbolicate_kernel_address(retaddr) };
         }
     } else {
-        for (FlatPtr* stack_ptr = (FlatPtr*)base_pointer;
-             (current_process ? current_process->validate_read_from_kernel(VirtualAddress(stack_ptr), sizeof(void*) * 2) : 1); stack_ptr = (FlatPtr*)*stack_ptr) {
-            FlatPtr retaddr = stack_ptr[1];
-            dbg() << String::format("%x", retaddr) << " (next: " << String::format("%x", (stack_ptr ? (u32*)*stack_ptr : 0)) << ")";
+        void* fault_at;
+        FlatPtr copied_stack_ptr[2];
+        FlatPtr* stack_ptr = (FlatPtr*)base_pointer;
+        while (stack_ptr && safe_memcpy(copied_stack_ptr, stack_ptr, sizeof(copied_stack_ptr), fault_at)) {
+            FlatPtr retaddr = copied_stack_ptr[1];
+            dbg() << String::format("%x", retaddr) << " (next: " << String::format("%x", (stack_ptr ? (u32*)copied_stack_ptr[0] : 0)) << ")";
+            stack_ptr = (FlatPtr*)copied_stack_ptr[0];
         }
         return;
     }
@@ -161,18 +164,14 @@ NEVER_INLINE void dump_backtrace_impl(FlatPtr base_pointer, bool use_ksyms)
         if (!symbol.address)
             break;
         if (!symbol.symbol) {
-            if (elf_bundle && elf_bundle->elf_loader->has_symbols()) {
-                dbg() << String::format("%p", symbol.address) << "  " << elf_bundle->elf_loader->symbolicate(symbol.address);
-            } else {
-                dbg() << String::format("%p", symbol.address) << " (no ELF symbols for process)";
-            }
+            dbgln("{:p}", symbol.address);
             continue;
         }
         size_t offset = symbol.address - symbol.symbol->address;
         if (symbol.symbol->address == g_highest_kernel_symbol_address && offset > 4096)
-            dbg() << String::format("%p", symbol.address);
+            dbgln("{:p}", symbol.address);
         else
-            dbg() << String::format("%p", symbol.address) << "  " << demangle(symbol.symbol->name) << " +" << offset;
+            dbgln("{:p}  {} +{}", symbol.address, demangle(symbol.symbol->name), offset);
     }
 }
 
@@ -196,7 +195,7 @@ void load_kernel_symbol_table()
     auto description = result.value();
     auto buffer = description->read_entire_file();
     ASSERT(!buffer.is_error());
-    load_kernel_sybols_from_data(buffer.value());
+    load_kernel_sybols_from_data(*buffer.value());
 }
 
 }

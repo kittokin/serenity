@@ -17,6 +17,13 @@ if [ "$(uname -s)" = "Darwin" ]; then
     export PATH="/usr/local/opt/e2fsprogs/bin:$PATH"
     export PATH="/usr/local/opt/e2fsprogs/sbin:$PATH"
 fi
+
+disk_usage() {
+    du -sm "$1" | cut -f1
+}
+
+DISK_SIZE=$(($(disk_usage "$SERENITY_ROOT/Base") + $(disk_usage Root) + 100))
+
 echo "setting up disk image..."
 qemu-img create _disk_image "${DISK_SIZE:-600}"m || die "could not create disk image"
 chown "$SUDO_UID":"$SUDO_GID" _disk_image || die "could not adjust permissions on disk image"
@@ -47,7 +54,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
 elif [ "$(uname -s)" = "OpenBSD" ]; then
     mount -t ext2fs "/dev/${VND}i" mnt/ || die "could not mount filesystem"
 elif [ "$(uname -s)" = "FreeBSD" ]; then
-    fuse-ext2 -o rw+ "/dev/${MD}" mnt/ || die "could not mount filesystem"
+    fuse-ext2 -o rw+,direct_io "/dev/${MD}" mnt/ || die "could not mount filesystem"
 else
     if ! mount _disk_image mnt/ ; then
         if command -v genext2fs 1>/dev/null ; then

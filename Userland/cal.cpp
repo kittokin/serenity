@@ -44,7 +44,7 @@ int target_day;
 int current_year;
 int current_month;
 
-void append_to_print(char* buffer, int row, int column, char* text)
+static void append_to_print(char* buffer, int row, int column, char* text)
 {
     int starting_point = (line_width * row) + (column * column_width);
     for (int i = 0; text[i] != '\0'; i++) {
@@ -52,7 +52,7 @@ void append_to_print(char* buffer, int row, int column, char* text)
     }
 }
 
-void insert_month_to_print(int column, int month, int year)
+static void insert_month_to_print(int column, int month, int year)
 {
     int printing_column = column;
     int printing_row = 0;
@@ -95,7 +95,7 @@ void insert_month_to_print(int column, int month, int year)
     }
 }
 
-void clean_buffers()
+static void clean_buffers()
 {
     for (int i = 1; i < line_width * line_count; ++i) {
         print_buffer[i - 1] = i % line_width == 0 ? '\n' : ' ';
@@ -115,6 +115,7 @@ int main(int argc, char** argv)
     int year = 0;
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Display a nice overview of a month or year, defaulting to the current month.");
     // FIXME: This should ensure two values get parsed as month + year
     args_parser.add_positional_argument(day, "Day of year", "day", Core::ArgsParser::Required::No);
     args_parser.add_positional_argument(month, "Month", "month", Core::ArgsParser::Required::No);
@@ -154,14 +155,12 @@ int main(int argc, char** argv)
             insert_month_to_print(0, i++, year);
             insert_month_to_print(1, i++, year);
             insert_month_to_print(2, i, year);
-            printf(print_buffer);
-            printf("\n");
+            printf("%s\n", print_buffer);
             clean_buffers();
         }
     } else {
         insert_month_to_print(0, month, year);
-        printf(print_buffer);
-        printf("\n\n");
+        printf("%s\n\n", print_buffer);
         clean_buffers();
     }
 

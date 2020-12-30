@@ -25,17 +25,15 @@
  */
 
 #include "Locator.h"
+#include "HackStudio.h"
 #include "Project.h"
 #include <LibGUI/BoxLayout.h>
+#include <LibGUI/FileIconProvider.h>
 #include <LibGUI/TableView.h>
 #include <LibGUI/TextBox.h>
 #include <LibGUI/Window.h>
 
-extern RefPtr<Project> g_project;
-extern void open_file(const String&);
-static RefPtr<Gfx::Bitmap> s_file_icon;
-static RefPtr<Gfx::Bitmap> s_cplusplus_icon;
-static RefPtr<Gfx::Bitmap> s_header_icon;
+namespace HackStudio {
 
 class LocatorSuggestionModel final : public GUI::Model {
 public:
@@ -51,19 +49,14 @@ public:
     };
     virtual int row_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return m_suggestions.size(); }
     virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return Column::__Column_Count; }
-    virtual GUI::Variant data(const GUI::ModelIndex& index, Role role = Role::Display) const override
+    virtual GUI::Variant data(const GUI::ModelIndex& index, GUI::ModelRole role) const override
     {
         auto& suggestion = m_suggestions.at(index.row());
-        if (role == Role::Display) {
+        if (role == GUI::ModelRole::Display) {
             if (index.column() == Column::Name)
                 return suggestion;
-            if (index.column() == Column::Icon) {
-                if (suggestion.ends_with(".cpp"))
-                    return *s_cplusplus_icon;
-                if (suggestion.ends_with(".h"))
-                    return *s_header_icon;
-                return *s_file_icon;
-            }
+            if (index.column() == Column::Icon)
+                return GUI::FileIconProvider::icon_for_path(suggestion);
         }
         return {};
     }
@@ -75,15 +68,8 @@ private:
 
 Locator::Locator()
 {
-    if (!s_cplusplus_icon) {
-        s_file_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-unknown.png");
-        s_cplusplus_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-cplusplus.png");
-        s_header_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-header.png");
-    }
-
     set_layout<GUI::VerticalBoxLayout>();
-    set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    set_preferred_size(0, 20);
+    set_fixed_height(20);
     m_textbox = add<GUI::TextBox>();
     m_textbox->on_change = [this] {
         update_suggestions();
@@ -129,7 +115,7 @@ Locator::Locator()
     m_popup_window->set_rect(0, 0, 500, 200);
 
     m_suggestion_view = m_popup_window->set_main_widget<GUI::TableView>();
-    m_suggestion_view->set_headers_visible(false);
+    m_suggestion_view->set_column_headers_visible(false);
 
     m_suggestion_view->on_activation = [this](auto& index) {
         open_suggestion(index);
@@ -143,7 +129,7 @@ Locator::~Locator()
 void Locator::open_suggestion(const GUI::ModelIndex& index)
 {
     auto filename_index = m_suggestion_view->model()->index(index.row(), LocatorSuggestionModel::Column::Name);
-    auto filename = m_suggestion_view->model()->data(filename_index, GUI::Model::Role::Display).to_string();
+    auto filename = filename_index.data().to_string();
     open_file(filename);
     close();
 }
@@ -166,13 +152,13 @@ void Locator::update_suggestions()
 {
     auto typed_text = m_textbox->text();
     Vector<String> suggestions;
-    g_project->for_each_text_file([&](auto& file) {
-        if (file.name().contains(typed_text))
+    project().for_each_text_file([&](auto& file) {
+        if (file.name().contains(typed_text, CaseSensitivity::CaseInsensitive))
             suggestions.append(file.name());
     });
-    dbg() << "I have " << suggestions.size() << " suggestion(s):";
+    dbgln("I have {} suggestion(s):", suggestions.size());
     for (auto& s : suggestions) {
-        dbg() << "    " << s;
+        dbgln("    {}", s);
     }
 
     bool has_suggestions = !suggestions.is_empty();
@@ -185,6 +171,8 @@ void Locator::update_suggestions()
         m_suggestion_view->selection().set(m_suggestion_view->model()->index(0));
 
     m_popup_window->move_to(screen_relative_rect().top_left().translated(0, -m_popup_window->height()));
-    dbg() << "Popup rect: " << m_popup_window->rect();
+    dbgln("Popup rect: {}", m_popup_window->rect());
     m_popup_window->show();
+}
+
 }

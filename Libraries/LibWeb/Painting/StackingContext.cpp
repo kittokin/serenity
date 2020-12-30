@@ -26,13 +26,13 @@
 
 #include <AK/QuickSort.h>
 #include <LibWeb/DOM/Node.h>
-#include <LibWeb/Layout/LayoutBox.h>
-#include <LibWeb/Layout/LayoutDocument.h>
+#include <LibWeb/Layout/Box.h>
+#include <LibWeb/Layout/InitialContainingBlockBox.h>
 #include <LibWeb/Painting/StackingContext.h>
 
-namespace Web {
+namespace Web::Layout {
 
-StackingContext::StackingContext(LayoutBox& box, StackingContext* parent)
+StackingContext::StackingContext(Box& box, StackingContext* parent)
     : m_box(box)
     , m_parent(parent)
 {
@@ -47,33 +47,33 @@ StackingContext::StackingContext(LayoutBox& box, StackingContext* parent)
     }
 }
 
-void StackingContext::paint(PaintContext& context, LayoutNode::PaintPhase phase)
+void StackingContext::paint(PaintContext& context, PaintPhase phase)
 {
-    if (!m_box.is_root()) {
+    if (!m_box.is_initial_containing_block()) {
         m_box.paint(context, phase);
     } else {
-        // NOTE: LayoutDocument::paint() merely calls StackingContext::paint()
+        // NOTE: InitialContainingBlockBox::paint() merely calls StackingContext::paint()
         //       so we call its base class instead.
-        to<LayoutDocument>(m_box).LayoutBlock::paint(context, phase);
+        downcast<InitialContainingBlockBox>(m_box).BlockBox::paint(context, phase);
     }
     for (auto* child : m_children) {
         child->paint(context, phase);
     }
 }
 
-HitTestResult StackingContext::hit_test(const Gfx::IntPoint& position) const
+HitTestResult StackingContext::hit_test(const Gfx::IntPoint& position, HitTestType type) const
 {
     HitTestResult result;
-    if (!m_box.is_root()) {
-        result = m_box.hit_test(position);
+    if (!m_box.is_initial_containing_block()) {
+        result = m_box.hit_test(position, type);
     } else {
-        // NOTE: LayoutDocument::hit_test() merely calls StackingContext::hit_test()
+        // NOTE: InitialContainingBlockBox::hit_test() merely calls StackingContext::hit_test()
         //       so we call its base class instead.
-        result = to<LayoutDocument>(m_box).LayoutBlock::hit_test(position);
+        result = downcast<InitialContainingBlockBox>(m_box).BlockBox::hit_test(position, type);
     }
 
     for (auto* child : m_children) {
-        auto result_here = child->hit_test(position);
+        auto result_here = child->hit_test(position, type);
         if (result_here.layout_node)
             result = result_here;
     }
@@ -84,7 +84,7 @@ void StackingContext::dump(int indent) const
 {
     for (int i = 0; i < indent; ++i)
         dbgprintf(" ");
-    dbgprintf("SC for %s{%s} %s [children: %zu]\n", m_box.class_name(), m_box.node() ? m_box.node()->node_name().characters() : "(anonymous)", m_box.absolute_rect().to_string().characters(), m_children.size());
+    dbgprintf("SC for %s{%s} %s [children: %zu]\n", m_box.class_name(), m_box.dom_node() ? m_box.dom_node()->node_name().characters() : "(anonymous)", m_box.absolute_rect().to_string().characters(), m_children.size());
     for (auto& child : m_children)
         child->dump(indent + 1);
 }

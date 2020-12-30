@@ -26,6 +26,8 @@
 
 #pragma once
 
+#include "Region.h"
+#include "ValueWithShadow.h"
 #include <AK/HashMap.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/OwnPtr.h>
@@ -34,67 +36,39 @@
 
 namespace UserspaceEmulator {
 
+class Emulator;
 class SharedBufferRegion;
 
 class SoftMMU {
 public:
-    class Region {
-    public:
-        virtual ~Region() { }
+    explicit SoftMMU(Emulator&);
 
-        u32 base() const { return m_base; }
-        u32 size() const { return m_size; }
-        u32 end() const { return m_base + m_size; }
+    ValueWithShadow<u8> read8(X86::LogicalAddress);
+    ValueWithShadow<u16> read16(X86::LogicalAddress);
+    ValueWithShadow<u32> read32(X86::LogicalAddress);
+    ValueWithShadow<u64> read64(X86::LogicalAddress);
 
-        bool contains(u32 address) const { return address >= base() && address < end(); }
+    void write8(X86::LogicalAddress, ValueWithShadow<u8>);
+    void write16(X86::LogicalAddress, ValueWithShadow<u16>);
+    void write32(X86::LogicalAddress, ValueWithShadow<u32>);
+    void write64(X86::LogicalAddress, ValueWithShadow<u64>);
 
-        virtual void write8(u32 offset, u8 value) = 0;
-        virtual void write16(u32 offset, u16 value) = 0;
-        virtual void write32(u32 offset, u32 value) = 0;
+    ALWAYS_INLINE Region* find_region(X86::LogicalAddress address)
+    {
+        if (address.selector() == 0x2b)
+            return m_tls_region.ptr();
 
-        virtual u8 read8(u32 offset) = 0;
-        virtual u16 read16(u32 offset) = 0;
-        virtual u32 read32(u32 offset) = 0;
-
-        virtual u8* cacheable_ptr([[maybe_unused]] u32 offset) { return nullptr; }
-        virtual bool is_shared_buffer() const { return false; }
-        virtual bool is_mmap() const { return false; }
-
-        bool is_stack() const { return m_stack; }
-        void set_stack(bool b) { m_stack = b; }
-
-        bool is_text() const { return m_text; }
-        void set_text(bool b) { m_text = b; }
-
-    protected:
-        Region(u32 base, u32 size)
-            : m_base(base)
-            , m_size(size)
-        {
-        }
-
-    private:
-        u32 m_base { 0 };
-        u32 m_size { 0 };
-
-        bool m_stack { false };
-        bool m_text { false };
-    };
-
-    u8 read8(X86::LogicalAddress);
-    u16 read16(X86::LogicalAddress);
-    u32 read32(X86::LogicalAddress);
-
-    void write8(X86::LogicalAddress, u8);
-    void write16(X86::LogicalAddress, u16);
-    void write32(X86::LogicalAddress, u32);
-
-    Region* find_region(X86::LogicalAddress);
+        size_t page_index = (address.offset() & ~(PAGE_SIZE - 1)) / PAGE_SIZE;
+        return m_page_to_region_map[page_index];
+    }
 
     void add_region(NonnullOwnPtr<Region>);
     void remove_region(Region&);
 
     void set_tls_region(NonnullOwnPtr<Region>);
+
+    bool fast_fill_memory8(X86::LogicalAddress, size_t size, ValueWithShadow<u8>);
+    bool fast_fill_memory32(X86::LogicalAddress, size_t size, ValueWithShadow<u32>);
 
     void copy_to_vm(FlatPtr destination, const void* source, size_t);
     void copy_from_vm(void* destination, const FlatPtr source, size_t);
@@ -116,6 +90,10 @@ public:
     }
 
 private:
+    Emulator& m_emulator;
+
+    Region* m_page_to_region_map[786432];
+
     OwnPtr<Region> m_tls_region;
     NonnullOwnPtrVector<Region> m_regions;
     HashMap<int, Region*> m_shbuf_regions;

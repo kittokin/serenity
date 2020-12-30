@@ -54,7 +54,7 @@ static Gfx::Bitmap& minimize_icon()
 {
     static Gfx::Bitmap* s_icon;
     if (!s_icon)
-        s_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/window-minimize.png").leak_ref();
+        s_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/downward-triangle.png").leak_ref();
     return *s_icon;
 }
 
@@ -62,7 +62,7 @@ static Gfx::Bitmap& maximize_icon()
 {
     static Gfx::Bitmap* s_icon;
     if (!s_icon)
-        s_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/window-maximize.png").leak_ref();
+        s_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/upward-triangle.png").leak_ref();
     return *s_icon;
 }
 
@@ -129,7 +129,7 @@ Window::~Window()
 void Window::destroy()
 {
     m_destroyed = true;
-    invalidate();
+    set_visible(false);
 }
 
 void Window::set_title(const String& title)
@@ -137,21 +137,23 @@ void Window::set_title(const String& title)
     if (m_title == title)
         return;
     m_title = title;
+    frame().invalidate_title_bar();
     WindowManager::the().notify_title_changed(*this);
 }
 
 void Window::set_rect(const Gfx::IntRect& rect)
 {
     ASSERT(!rect.is_empty());
-    Gfx::IntRect old_rect;
     if (m_rect == rect)
         return;
-    old_rect = m_rect;
+    auto old_rect = m_rect;
     m_rect = rect;
     if (!m_client && (!m_backing_store || old_rect.size() != rect.size())) {
         m_backing_store = Gfx::Bitmap::create(Gfx::BitmapFormat::RGB32, m_rect.size());
     }
-    m_frame.notify_window_rect_changed(old_rect, rect);
+
+    invalidate(true);
+    m_frame.notify_window_rect_changed(old_rect, rect); // recomputes occlusions
 }
 
 void Window::set_rect_without_repaint(const Gfx::IntRect& rect)
@@ -170,7 +172,8 @@ void Window::set_rect_without_repaint(const Gfx::IntRect& rect)
         }
     }
 
-    m_frame.notify_window_rect_changed(old_rect, rect);
+    invalidate(true);
+    m_frame.notify_window_rect_changed(old_rect, rect); // recomputes occlusions
 }
 
 void Window::handle_mouse_event(const MouseEvent& event)
@@ -222,11 +225,12 @@ void Window::set_minimized(bool minimized)
         return;
     m_minimized = minimized;
     update_menu_item_text(PopupMenuItem::Minimize);
+    Compositor::the().invalidate_occlusions();
+    Compositor::the().invalidate_screen(frame().rect());
     if (!is_blocked_by_modal_window())
         start_minimize_animation();
     if (!minimized)
         request_update({ {}, size() });
-    invalidate();
     WindowManager::the().notify_minimization_state_changed(*this);
 }
 
@@ -239,11 +243,45 @@ void Window::set_minimizable(bool minimizable)
     // TODO: Hide/show (or alternatively change enabled state of) window minimize button dynamically depending on value of m_minimizable
 }
 
+void Window::set_taskbar_rect(const Gfx::IntRect& rect)
+{
+    m_taskbar_rect = rect;
+    m_have_taskbar_rect = !m_taskbar_rect.is_empty();
+}
+
+void Window::start_minimize_animation()
+{
+    if (!m_have_taskbar_rect) {
+        // If this is a modal window, it may not have its own taskbar
+        // button, so there is no rectangle. In that case, walk the
+        // modal stack until we find a window that may have one
+        WindowManager::the().for_each_window_in_modal_stack(*this, [&](Window& w, bool) {
+            if (w.has_taskbar_rect()) {
+                // We purposely do NOT set m_have_taskbar_rect to true here
+                // because we want to only copy the rectangle from the
+                // window that has it, but since this window wouldn't receive
+                // any updates down the road we want to query it again
+                // next time we want to start the animation
+                m_taskbar_rect = w.taskbar_rect();
+
+                ASSERT(!m_have_taskbar_rect); // should remain unset!
+                return IterationDecision::Break;
+            };
+            return IterationDecision::Continue;
+        });
+    }
+    m_minimize_animation_step = 0;
+}
+
 void Window::set_opacity(float opacity)
 {
     if (m_opacity == opacity)
         return;
+    bool was_opaque = is_opaque();
     m_opacity = opacity;
+    if (was_opaque != is_opaque())
+        Compositor::the().invalidate_occlusions();
+    Compositor::the().invalidate_screen(frame().rect());
     WindowManager::the().notify_opacity_changed(*this);
 }
 
@@ -259,12 +297,11 @@ void Window::set_maximized(bool maximized)
 {
     if (m_maximized == maximized)
         return;
-    if (maximized && !is_resizable())
+    if (maximized && (!is_resizable() || resize_aspect_ratio().has_value()))
         return;
     set_tiled(WindowTileType::None);
     m_maximized = maximized;
     update_menu_item_text(PopupMenuItem::Maximize);
-    auto old_rect = m_rect;
     if (maximized) {
         m_unmaximized_rect = m_rect;
         set_rect(WindowManager::the().maximized_window_rect(*this));
@@ -272,7 +309,8 @@ void Window::set_maximized(bool maximized)
         set_rect(m_unmaximized_rect);
     }
     m_frame.did_set_maximized({}, maximized);
-    Core::EventLoop::current().post_event(*this, make<ResizeEvent>(old_rect, m_rect));
+    Core::EventLoop::current().post_event(*this, make<ResizeEvent>(m_rect));
+    set_default_positioned(false);
 }
 
 void Window::set_resizable(bool resizable)
@@ -337,11 +375,7 @@ void Window::event(Core::Event& event)
         m_client->post_message(Messages::WindowClient::WindowCloseRequest(m_window_id));
         break;
     case Event::WindowResized:
-        m_client->post_message(
-            Messages::WindowClient::WindowResized(
-                m_window_id,
-                static_cast<const ResizeEvent&>(event).old_rect(),
-                static_cast<const ResizeEvent&>(event).rect()));
+        m_client->post_message(Messages::WindowClient::WindowResized(m_window_id, static_cast<const ResizeEvent&>(event).rect()));
         break;
     default:
         break;
@@ -358,31 +392,75 @@ void Window::set_visible(bool b)
     if (m_visible == b)
         return;
     m_visible = b;
-    invalidate();
+
+    Compositor::the().invalidate_occlusions();
+    if (m_visible)
+        invalidate(true);
+    else
+        Compositor::the().invalidate_screen(frame().rect());
 }
 
-void Window::invalidate()
+void Window::invalidate(bool invalidate_frame)
 {
-    Compositor::the().invalidate(frame().rect());
+    m_invalidated = true;
+    m_invalidated_all = true;
+    m_invalidated_frame |= invalidate_frame;
+    m_dirty_rects.clear();
+    Compositor::the().invalidate_window();
 }
 
-void Window::invalidate(const Gfx::IntRect& rect)
+void Window::invalidate(const Gfx::IntRect& rect, bool with_frame)
 {
     if (type() == WindowType::MenuApplet) {
         AppletManager::the().invalidate_applet(*this, rect);
         return;
     }
 
-    if (rect.is_empty()) {
-        invalidate();
-        return;
+    if (invalidate_no_notify(rect, with_frame))
+        Compositor::the().invalidate_window();
+}
+
+bool Window::invalidate_no_notify(const Gfx::IntRect& rect, bool with_frame)
+{
+    if (rect.is_empty())
+        return false;
+    if (m_invalidated_all) {
+        m_invalidated_frame |= with_frame;
+        return false;
     }
+
     auto outer_rect = frame().rect();
     auto inner_rect = rect;
     inner_rect.move_by(position());
     // FIXME: This seems slightly wrong; the inner rect shouldn't intersect the border part of the outer rect.
     inner_rect.intersect(outer_rect);
-    Compositor::the().invalidate(inner_rect);
+    if (inner_rect.is_empty())
+        return false;
+
+    m_invalidated = true;
+    m_invalidated_frame |= with_frame;
+    m_dirty_rects.add(inner_rect.translated(-outer_rect.location()));
+    return true;
+}
+
+void Window::prepare_dirty_rects()
+{
+    if (m_invalidated_all) {
+        if (m_invalidated_frame)
+            m_dirty_rects = frame().rect();
+        else
+            m_dirty_rects = rect();
+    } else {
+        m_dirty_rects.move_by(frame().rect().location());
+    }
+}
+
+void Window::clear_dirty_rects()
+{
+    m_invalidated_all = false;
+    m_invalidated_frame = false;
+    m_invalidated = false;
+    m_dirty_rects.clear_with_capacity();
 }
 
 bool Window::is_active() const
@@ -394,11 +472,11 @@ Window* Window::is_blocked_by_modal_window()
 {
     // A window is blocked if any immediate child, or any child further
     // down the chain is modal
-    for (auto& window: m_child_windows) {
+    for (auto& window : m_child_windows) {
         if (window && !window->is_destroyed()) {
             if (window->is_modal())
                 return window;
-            
+
             if (auto* blocking_modal_window = window->is_blocked_by_modal_window())
                 return blocking_modal_window;
         }
@@ -413,6 +491,8 @@ void Window::set_default_icon()
 
 void Window::request_update(const Gfx::IntRect& rect, bool ignore_occlusion)
 {
+    if (rect.is_empty())
+        return;
     if (m_pending_paint_rects.is_empty()) {
         deferred_invoke([this, ignore_occlusion](auto&) {
             client()->post_paint_message(*this, ignore_occlusion);
@@ -510,26 +590,61 @@ void Window::set_fullscreen(bool fullscreen)
     } else if (!m_saved_nonfullscreen_rect.is_empty()) {
         new_window_rect = m_saved_nonfullscreen_rect;
     }
-    Core::EventLoop::current().post_event(*this, make<ResizeEvent>(m_rect, new_window_rect));
+
+    Core::EventLoop::current().post_event(*this, make<ResizeEvent>(new_window_rect));
     set_rect(new_window_rect);
 }
 
 Gfx::IntRect Window::tiled_rect(WindowTileType tiled) const
 {
     int frame_width = (m_frame.rect().width() - m_rect.width()) / 2;
+    int title_bar_height = m_frame.title_bar_rect().height();
+    int menu_height = WindowManager::the().maximized_window_rect(*this).y();
+    int max_height = WindowManager::the().maximized_window_rect(*this).height();
+
     switch (tiled) {
     case WindowTileType::None:
         return m_untiled_rect;
     case WindowTileType::Left:
         return Gfx::IntRect(0,
-            WindowManager::the().maximized_window_rect(*this).y(),
+            menu_height,
             Screen::the().width() / 2 - frame_width,
-            WindowManager::the().maximized_window_rect(*this).height());
+            max_height);
     case WindowTileType::Right:
         return Gfx::IntRect(Screen::the().width() / 2 + frame_width,
-            WindowManager::the().maximized_window_rect(*this).y(),
+            menu_height,
             Screen::the().width() / 2 - frame_width,
-            WindowManager::the().maximized_window_rect(*this).height());
+            max_height);
+    case WindowTileType::Top:
+        return Gfx::IntRect(0,
+            menu_height,
+            Screen::the().width() - frame_width,
+            (max_height - title_bar_height) / 2 - frame_width);
+    case WindowTileType::Bottom:
+        return Gfx::IntRect(0,
+            menu_height + (title_bar_height + max_height) / 2 + frame_width,
+            Screen::the().width() - frame_width,
+            (max_height - title_bar_height) / 2 - frame_width);
+    case WindowTileType::TopLeft:
+        return Gfx::IntRect(0,
+            menu_height,
+            Screen::the().width() / 2 - frame_width,
+            (max_height - title_bar_height) / 2 - frame_width);
+    case WindowTileType::TopRight:
+        return Gfx::IntRect(Screen::the().width() / 2 + frame_width,
+            menu_height,
+            Screen::the().width() / 2 - frame_width,
+            (max_height - title_bar_height) / 2 - frame_width);
+    case WindowTileType::BottomLeft:
+        return Gfx::IntRect(0,
+            menu_height + (title_bar_height + max_height) / 2 + frame_width,
+            Screen::the().width() / 2 - frame_width,
+            (max_height - title_bar_height) / 2);
+    case WindowTileType::BottomRight:
+        return Gfx::IntRect(Screen::the().width() / 2 + frame_width,
+            menu_height + (title_bar_height + max_height) / 2 + frame_width,
+            Screen::the().width() / 2 - frame_width,
+            (max_height - title_bar_height) / 2);
     default:
         ASSERT_NOT_REACHED();
     }
@@ -540,12 +655,14 @@ void Window::set_tiled(WindowTileType tiled)
     if (m_tiled == tiled)
         return;
 
+    if (resize_aspect_ratio().has_value())
+        return;
+
     m_tiled = tiled;
-    auto old_rect = m_rect;
     if (tiled != WindowTileType::None)
         m_untiled_rect = m_rect;
     set_rect(tiled_rect(tiled));
-    Core::EventLoop::current().post_event(*this, make<ResizeEvent>(old_rect, m_rect));
+    Core::EventLoop::current().post_event(*this, make<ResizeEvent>(m_rect));
 }
 
 void Window::detach_client(Badge<ClientConnection>)
@@ -558,7 +675,6 @@ void Window::recalculate_rect()
     if (!is_resizable())
         return;
 
-    auto old_rect = m_rect;
     bool send_event = true;
     if (m_tiled != WindowTileType::None) {
         set_rect(tiled_rect(m_tiled));
@@ -571,24 +687,24 @@ void Window::recalculate_rect()
     }
 
     if (send_event) {
-        Core::EventLoop::current().post_event(*this, make<ResizeEvent>(old_rect, m_rect));
+        Core::EventLoop::current().post_event(*this, make<ResizeEvent>(m_rect));
     }
 }
 
 void Window::add_child_window(Window& child_window)
 {
-    m_child_windows.append(child_window.make_weak_ptr());
+    m_child_windows.append(child_window);
 }
 
 void Window::add_accessory_window(Window& accessory_window)
 {
-    m_accessory_windows.append(accessory_window.make_weak_ptr());
+    m_accessory_windows.append(accessory_window);
 }
 
 void Window::set_parent_window(Window& parent_window)
 {
     ASSERT(!m_parent_window);
-    m_parent_window = parent_window.make_weak_ptr();
+    m_parent_window = parent_window;
     if (m_accessory)
         parent_window.add_accessory_window(*this);
     else
@@ -601,7 +717,7 @@ bool Window::is_accessory() const
         return false;
     if (parent_window() != nullptr)
         return true;
-    
+
     // If accessory window was unparented, convert to a regular window
     const_cast<Window*>(this)->set_accessory(false);
     return false;

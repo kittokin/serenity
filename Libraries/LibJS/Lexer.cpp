@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@gmx.de>
+ * Copyright (c) 2020, Linus Groh <mail@linusgroh.de>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,6 +31,8 @@
 #include <ctype.h>
 #include <stdio.h>
 
+//#define LEXER_DEBUG
+
 namespace JS {
 
 HashMap<String, TokenType> Lexer::s_keywords;
@@ -39,7 +42,7 @@ HashMap<char, TokenType> Lexer::s_single_char_tokens;
 
 Lexer::Lexer(StringView source)
     : m_source(source)
-    , m_current_token(TokenType::Eof, StringView(nullptr), StringView(nullptr), 0, 0)
+    , m_current_token(TokenType::Eof, {}, StringView(nullptr), StringView(nullptr), 0, 0)
 {
     if (s_keywords.is_empty()) {
         s_keywords.set("await", TokenType::Await);
@@ -89,6 +92,9 @@ Lexer::Lexer(StringView source)
         s_three_char_tokens.set("**=", TokenType::DoubleAsteriskEquals);
         s_three_char_tokens.set("<<=", TokenType::ShiftLeftEquals);
         s_three_char_tokens.set(">>=", TokenType::ShiftRightEquals);
+        s_three_char_tokens.set("&&=", TokenType::DoubleAmpersandEquals);
+        s_three_char_tokens.set("||=", TokenType::DoublePipeEquals);
+        s_three_char_tokens.set("\?\?=", TokenType::DoubleQuestionMarkEquals);
         s_three_char_tokens.set(">>>", TokenType::UnsignedShiftRight);
         s_three_char_tokens.set("...", TokenType::TripleDot);
     }
@@ -149,19 +155,57 @@ Lexer::Lexer(StringView source)
 
 void Lexer::consume()
 {
-    if (m_position > m_source.length())
-        return;
-
-    if (m_position == m_source.length()) {
+    auto did_reach_eof = [this] {
+        if (m_position != m_source.length())
+            return false;
         m_position++;
         m_line_column++;
         m_current_char = EOF;
-        return;
-    }
+        return true;
+    };
 
-    if (m_current_char == '\n') {
-        m_line_number++;
-        m_line_column = 1;
+    if (m_position > m_source.length())
+        return;
+
+    if (did_reach_eof())
+        return;
+
+    if (is_line_terminator()) {
+#ifdef LEXER_DEBUG
+        String type;
+        if (m_current_char == '\n')
+            type = "LINE FEED";
+        else if (m_current_char == '\r')
+            type = "CARRIAGE RETURN";
+        else if (m_source[m_position + 1] == (char)0xa8)
+            type = "LINE SEPARATOR";
+        else
+            type = "PARAGRAPH SEPARATOR";
+        dbgln("Found a line terminator: {}", type);
+#endif
+        // This is a three-char line terminator, we need to increase m_position some more.
+        // We might reach EOF and need to check again.
+        if (m_current_char != '\n' && m_current_char != '\r') {
+            m_position += 2;
+            if (did_reach_eof())
+                return;
+        }
+
+        // If the previous character is \r and the current one \n we already updated line number
+        // and column - don't do it again. From https://tc39.es/ecma262/#sec-line-terminators:
+        //   The sequence <CR><LF> is commonly used as a line terminator.
+        //   It should be considered a single SourceCharacter for the purpose of reporting line numbers.
+        auto second_char_of_crlf = m_position > 1 && m_source[m_position - 2] == '\r' && m_current_char == '\n';
+
+        if (!second_char_of_crlf) {
+            m_line_number++;
+            m_line_column = 1;
+#ifdef LEXER_DEBUG
+            dbgln("Incremented line number, now at: line {}, column 1", m_line_number);
+        } else {
+            dbgln("Previous was CR, this is LF - not incrementing line number again.");
+#endif
+        }
     } else {
         m_line_column++;
     }
@@ -169,14 +213,56 @@ void Lexer::consume()
     m_current_char = m_source[m_position++];
 }
 
-void Lexer::consume_exponent()
+bool Lexer::consume_exponent()
 {
     consume();
     if (m_current_char == '-' || m_current_char == '+')
         consume();
+
+    if (!isdigit(m_current_char))
+        return false;
+
     while (isdigit(m_current_char)) {
         consume();
     }
+    return true;
+}
+
+bool Lexer::consume_octal_number()
+{
+    consume();
+    if (!(m_current_char >= '0' && m_current_char <= '7'))
+        return false;
+
+    while (m_current_char >= '0' && m_current_char <= '7') {
+        consume();
+    }
+
+    return true;
+}
+
+bool Lexer::consume_hexadecimal_number()
+{
+    consume();
+    if (!isxdigit(m_current_char))
+        return false;
+
+    while (isxdigit(m_current_char))
+        consume();
+
+    return true;
+}
+
+bool Lexer::consume_binary_number()
+{
+    consume();
+    if (!(m_current_char == '0' || m_current_char == '1'))
+        return false;
+
+    while (m_current_char == '0' || m_current_char == '1')
+        consume();
+
+    return true;
 }
 
 bool Lexer::match(char a, char b) const
@@ -214,6 +300,17 @@ bool Lexer::is_eof() const
     return m_current_char == EOF;
 }
 
+bool Lexer::is_line_terminator() const
+{
+    if (m_current_char == '\n' || m_current_char == '\r')
+        return true;
+    if (m_position > 0 && m_position + 1 < m_source.length()) {
+        auto three_chars_view = m_source.substring_view(m_position - 1, 3);
+        return (three_chars_view == LINE_SEPARATOR) || (three_chars_view == PARAGRAPH_SEPARATOR);
+    }
+    return false;
+}
+
 bool Lexer::is_identifier_start() const
 {
     return isalpha(m_current_char) || m_current_char == '_' || m_current_char == '$';
@@ -224,9 +321,14 @@ bool Lexer::is_identifier_middle() const
     return is_identifier_start() || isdigit(m_current_char);
 }
 
-bool Lexer::is_line_comment_start() const
+bool Lexer::is_line_comment_start(bool line_has_token_yet) const
 {
-    return match('/', '/') || match('<', '!', '-', '-') || match('-', '-', '>');
+    return match('/', '/')
+        || match('<', '!', '-', '-')
+        // "-->" is considered a line comment start if the current line is only whitespace and/or
+        // other block comment(s); or in other words: the current line does not have a token or
+        // ongoing line comment yet
+        || (match('-', '-', '>') && !line_has_token_yet);
 }
 
 bool Lexer::is_block_comment_start() const
@@ -248,42 +350,53 @@ bool Lexer::slash_means_division() const
 {
     auto type = m_current_token.type();
     return type == TokenType::BigIntLiteral
-           || type == TokenType::BoolLiteral
-           || type == TokenType::BracketClose
-           || type == TokenType::CurlyClose
-           || type == TokenType::Identifier
-           || type == TokenType::NullLiteral
-           || type == TokenType::NumericLiteral
-           || type == TokenType::ParenClose
-           || type == TokenType::RegexLiteral
-           || type == TokenType::StringLiteral
-           || type == TokenType::TemplateLiteralEnd
-           || type == TokenType::This;
+        || type == TokenType::BoolLiteral
+        || type == TokenType::BracketClose
+        || type == TokenType::CurlyClose
+        || type == TokenType::Identifier
+        || type == TokenType::NullLiteral
+        || type == TokenType::NumericLiteral
+        || type == TokenType::ParenClose
+        || type == TokenType::RegexLiteral
+        || type == TokenType::StringLiteral
+        || type == TokenType::TemplateLiteralEnd
+        || type == TokenType::This;
 }
 
 Token Lexer::next()
 {
     size_t trivia_start = m_position;
     auto in_template = !m_template_states.is_empty();
+    bool line_has_token_yet = m_line_column > 1;
+    bool unterminated_comment = false;
 
     if (!in_template || m_template_states.last().in_expr) {
         // consume whitespace and comments
         while (true) {
-            if (isspace(m_current_char)) {
+            if (is_line_terminator()) {
+                line_has_token_yet = false;
+                do {
+                    consume();
+                } while (is_line_terminator());
+            } else if (isspace(m_current_char)) {
                 do {
                     consume();
                 } while (isspace(m_current_char));
-            } else if (is_line_comment_start()) {
+            } else if (is_line_comment_start(line_has_token_yet)) {
                 consume();
                 do {
                     consume();
-                } while (!is_eof() && m_current_char != '\n');
+                } while (!is_eof() && !is_line_terminator());
             } else if (is_block_comment_start()) {
                 consume();
                 do {
                     consume();
                 } while (!is_eof() && !is_block_comment_end());
+                if (is_eof())
+                    unterminated_comment = true;
                 consume(); // consume *
+                if (is_eof())
+                    unterminated_comment = true;
                 consume(); // consume /
             } else {
                 break;
@@ -292,7 +405,13 @@ Token Lexer::next()
     }
 
     size_t value_start = m_position;
+    size_t value_start_line_number = m_line_number;
+    size_t value_start_column_number = m_line_column;
     auto token_type = TokenType::Invalid;
+    // This is being used to communicate info about invalid tokens to the parser, which then
+    // can turn that into more specific error messages - instead of us having to make up a
+    // bunch of Invalid* tokens (bad numeric literals, unterminated comments etc.)
+    String token_message;
 
     if (m_current_token.type() == TokenType::RegexLiteral && !is_eof() && isalpha(m_current_char)) {
         token_type = TokenType::RegexFlags;
@@ -332,8 +451,10 @@ Token Lexer::next()
                     consume();
                 consume();
             }
-
-            token_type = TokenType::TemplateLiteralString;
+            if (is_eof() && !m_template_states.is_empty())
+                token_type = TokenType::UnterminatedTemplateLiteral;
+            else
+                token_type = TokenType::TemplateLiteralString;
         }
     } else if (is_identifier_start()) {
         // identifier or keyword
@@ -342,7 +463,7 @@ Token Lexer::next()
         } while (is_identifier_middle());
 
         StringView value = m_source.substring_view(value_start - 1, m_position - value_start);
-        auto it = s_keywords.find(value);
+        auto it = s_keywords.find(value.hash(), [&](auto& entry) { return entry.key == value; });
         if (it == s_keywords.end()) {
             token_type = TokenType::Identifier;
         } else {
@@ -350,6 +471,7 @@ Token Lexer::next()
         }
     } else if (is_numeric_literal_start()) {
         token_type = TokenType::NumericLiteral;
+        bool is_invalid_numeric_literal = false;
         if (m_current_char == '0') {
             consume();
             if (m_current_char == '.') {
@@ -358,30 +480,23 @@ Token Lexer::next()
                 while (isdigit(m_current_char))
                     consume();
                 if (m_current_char == 'e' || m_current_char == 'E')
-                    consume_exponent();
+                    is_invalid_numeric_literal = !consume_exponent();
             } else if (m_current_char == 'e' || m_current_char == 'E') {
-                consume_exponent();
+                is_invalid_numeric_literal = !consume_exponent();
             } else if (m_current_char == 'o' || m_current_char == 'O') {
                 // octal
-                consume();
-                while (m_current_char >= '0' && m_current_char <= '7')
-                    consume();
+                is_invalid_numeric_literal = !consume_octal_number();
             } else if (m_current_char == 'b' || m_current_char == 'B') {
                 // binary
-                consume();
-                while (m_current_char == '0' || m_current_char == '1')
-                    consume();
+                is_invalid_numeric_literal = !consume_binary_number();
             } else if (m_current_char == 'x' || m_current_char == 'X') {
                 // hexadecimal
-                consume();
-                while (isxdigit(m_current_char))
-                    consume();
+                is_invalid_numeric_literal = !consume_hexadecimal_number();
             } else if (m_current_char == 'n') {
                 consume();
                 token_type = TokenType::BigIntLiteral;
             } else if (isdigit(m_current_char)) {
-                // octal without 'O' prefix. Forbidden in 'strict mode'
-                // FIXME: We need to make sure this produces a syntax error when in strict mode
+                // octal without '0o' prefix. Forbidden in 'strict mode'
                 do {
                     consume();
                 } while (isdigit(m_current_char));
@@ -400,13 +515,18 @@ Token Lexer::next()
                         consume();
                 }
                 if (m_current_char == 'e' || m_current_char == 'E')
-                    consume_exponent();
+                    is_invalid_numeric_literal = !consume_exponent();
             }
+        }
+        if (is_invalid_numeric_literal) {
+            token_type = TokenType::Invalid;
+            token_message = "Invalid numeric literal";
         }
     } else if (m_current_char == '"' || m_current_char == '\'') {
         char stop_char = m_current_char;
         consume();
-        while (m_current_char != stop_char && m_current_char != '\n' && !is_eof()) {
+        // Note: LS/PS line terminators are allowed in string literals.
+        while (m_current_char != stop_char && m_current_char != '\r' && m_current_char != '\n' && !is_eof()) {
             if (m_current_char == '\\') {
                 consume();
             }
@@ -442,7 +562,12 @@ Token Lexer::next()
             consume();
         }
     } else if (m_current_char == EOF) {
-        token_type = TokenType::Eof;
+        if (unterminated_comment) {
+            token_type = TokenType::Invalid;
+            token_message = "Unterminated multi-line comment";
+        } else {
+            token_type = TokenType::Eof;
+        }
     } else {
         // There is only one four-char operator: >>>=
         bool found_four_char_token = false;
@@ -457,10 +582,8 @@ Token Lexer::next()
 
         bool found_three_char_token = false;
         if (!found_four_char_token && m_position + 1 < m_source.length()) {
-            char second_char = m_source[m_position];
-            char third_char = m_source[m_position + 1];
-            char three_chars[] { (char)m_current_char, second_char, third_char, 0 };
-            auto it = s_three_char_tokens.find(three_chars);
+            auto three_chars_view = m_source.substring_view(m_position - 1, 3);
+            auto it = s_three_char_tokens.find(three_chars_view.hash(), [&](auto& entry) { return entry.key == three_chars_view; });
             if (it != s_three_char_tokens.end()) {
                 found_three_char_token = true;
                 consume();
@@ -472,14 +595,16 @@ Token Lexer::next()
 
         bool found_two_char_token = false;
         if (!found_four_char_token && !found_three_char_token && m_position < m_source.length()) {
-            char second_char = m_source[m_position];
-            char two_chars[] { (char)m_current_char, second_char, 0 };
-            auto it = s_two_char_tokens.find(two_chars);
+            auto two_chars_view = m_source.substring_view(m_position - 1, 2);
+            auto it = s_two_char_tokens.find(two_chars_view.hash(), [&](auto& entry) { return entry.key == two_chars_view; });
             if (it != s_two_char_tokens.end()) {
-                found_two_char_token = true;
-                consume();
-                consume();
-                token_type = it->value;
+                // OptionalChainingPunctuator :: ?. [lookahead ∉ DecimalDigit]
+                if (!(it->value == TokenType::QuestionMarkPeriod && m_position + 1 < m_source.length() && isdigit(m_source[m_position + 1]))) {
+                    found_two_char_token = true;
+                    consume();
+                    consume();
+                    token_type = it->value;
+                }
             }
         }
 
@@ -509,10 +634,20 @@ Token Lexer::next()
 
     m_current_token = Token(
         token_type,
+        token_message,
         m_source.substring_view(trivia_start - 1, value_start - trivia_start),
         m_source.substring_view(value_start - 1, m_position - value_start),
-        m_line_number,
-        m_line_column - m_position + value_start);
+        value_start_line_number,
+        value_start_column_number);
+
+#ifdef LEXER_DEBUG
+    dbgln("------------------------------");
+    dbgln("Token: {}", m_current_token.name());
+    dbgln("Trivia: _{}_", m_current_token.trivia());
+    dbgln("Value: _{}_", m_current_token.value());
+    dbgln("Line: {}, Column: {}", m_current_token.line_number(), m_current_token.line_column());
+    dbgln("------------------------------");
+#endif
 
     return m_current_token;
 }

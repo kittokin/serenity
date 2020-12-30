@@ -26,16 +26,16 @@
 
 #include "SnakeGame.h"
 #include <LibCore/ConfigFile.h>
-#include <LibGUI/FontDatabase.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <stdlib.h>
 #include <time.h>
 
 SnakeGame::SnakeGame()
 {
-    set_font(GUI::FontDatabase::the().get_by_name("Liza Regular"));
+    set_font(Gfx::FontDatabase::default_bold_fixed_width_font());
     m_fruit_bitmaps.append(*Gfx::Bitmap::load_from_file("/res/icons/snake/paprika.png"));
     m_fruit_bitmaps.append(*Gfx::Bitmap::load_from_file("/res/icons/snake/eggplant.png"));
     m_fruit_bitmaps.append(*Gfx::Bitmap::load_from_file("/res/icons/snake/cauliflower.png"));
@@ -45,7 +45,7 @@ SnakeGame::SnakeGame()
 
     auto config = Core::ConfigFile::get_for_app("Snake");
     m_high_score = config->read_num_entry("Snake", "HighScore", 0);
-    m_high_score_text = String::format("Best: %u", m_high_score);
+    m_high_score_text = String::formatted("Best: {}", m_high_score);
 }
 
 SnakeGame::~SnakeGame()
@@ -146,10 +146,10 @@ void SnakeGame::timer_event(Core::TimerEvent&)
     if (m_head == m_fruit) {
         ++m_length;
         ++m_score;
-        m_score_text = String::format("Score: %u", m_score);
+        m_score_text = String::formatted("Score: {}", m_score);
         if (m_score > m_high_score) {
             m_high_score = m_score;
-            m_high_score_text = String::format("Best: %u", m_high_score);
+            m_high_score_text = String::formatted("Best: {}", m_high_score);
             update(high_score_rect());
             auto config = Core::ConfigFile::get_for_app("Snake");
             config->write_num_entry("Snake", "HighScore", m_high_score);

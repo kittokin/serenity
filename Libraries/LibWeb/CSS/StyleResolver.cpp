@@ -25,19 +25,19 @@
  */
 
 #include <AK/QuickSort.h>
+#include <LibWeb/CSS/Parser/CSSParser.h>
 #include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleResolver.h>
 #include <LibWeb/CSS/StyleSheet.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/Parser/CSSParser.h>
 #include <ctype.h>
 #include <stdio.h>
 
-namespace Web {
+namespace Web::CSS {
 
-StyleResolver::StyleResolver(Document& document)
+StyleResolver::StyleResolver(DOM::Document& document)
     : m_document(document)
 {
 }
@@ -57,16 +57,29 @@ static StyleSheet& default_stylesheet()
     return *sheet;
 }
 
+static StyleSheet& quirks_mode_stylesheet()
+{
+    static StyleSheet* sheet;
+    if (!sheet) {
+        extern const char quirks_mode_stylesheet_source[];
+        String css = quirks_mode_stylesheet_source;
+        sheet = parse_css(CSS::ParsingContext(), css).leak_ref();
+    }
+    return *sheet;
+}
+
 template<typename Callback>
 void StyleResolver::for_each_stylesheet(Callback callback) const
 {
     callback(default_stylesheet());
+    if (document().in_quirks_mode())
+        callback(quirks_mode_stylesheet());
     for (auto& sheet : document().style_sheets().sheets()) {
         callback(sheet);
     }
 }
 
-Vector<MatchingRule> StyleResolver::collect_matching_rules(const Element& element) const
+Vector<MatchingRule> StyleResolver::collect_matching_rules(const DOM::Element& element) const
 {
     Vector<MatchingRule> matching_rules;
 
@@ -87,14 +100,23 @@ Vector<MatchingRule> StyleResolver::collect_matching_rules(const Element& elemen
         ++style_sheet_index;
     });
 
-#ifdef HTML_DEBUG
-    dbgprintf("Rules matching Element{%p}\n", &element);
-    for (auto& rule : matching_rules) {
-        dump_rule(rule);
-    }
-#endif
-
     return matching_rules;
+}
+
+void StyleResolver::sort_matching_rules(Vector<MatchingRule>& matching_rules) const
+{
+    quick_sort(matching_rules, [&](MatchingRule& a, MatchingRule& b) {
+        auto& a_selector = a.rule->selectors()[a.selector_index];
+        auto& b_selector = b.rule->selectors()[b.selector_index];
+        auto a_specificity = a_selector.specificity();
+        auto b_specificity = b_selector.specificity();
+        if (a_selector.specificity() == b_selector.specificity()) {
+            if (a.style_sheet_index == b.style_sheet_index)
+                return a.rule_index < b.rule_index;
+            return a.style_sheet_index < b.style_sheet_index;
+        }
+        return a_specificity < b_specificity;
+    });
 }
 
 bool StyleResolver::is_inherited_property(CSS::PropertyID property_id)
@@ -124,7 +146,7 @@ bool StyleResolver::is_inherited_property(CSS::PropertyID property_id)
 
         // FIXME: This property is not supposed to be inherited, but we currently
         //        rely on inheritance to propagate decorations into line boxes.
-        inherited_properties.set(CSS::PropertyID::TextDecoration);
+        inherited_properties.set(CSS::PropertyID::TextDecorationLine);
     }
     return inherited_properties.contains(property_id);
 }
@@ -203,15 +225,30 @@ static inline void set_property_border_style(StyleProperties& style, const Style
         style.set_property(CSS::PropertyID::BorderLeftStyle, value);
 }
 
-static void set_property_expanding_shorthands(StyleProperties& style, CSS::PropertyID property_id, const StyleValue& value, Document& document)
+static void set_property_expanding_shorthands(StyleProperties& style, CSS::PropertyID property_id, const StyleValue& value, DOM::Document& document)
 {
     CSS::ParsingContext context(document);
+
+    if (property_id == CSS::PropertyID::TextDecoration) {
+        switch (value.to_identifier()) {
+        case CSS::ValueID::None:
+        case CSS::ValueID::Underline:
+        case CSS::ValueID::Overline:
+        case CSS::ValueID::LineThrough:
+        case CSS::ValueID::Blink:
+            set_property_expanding_shorthands(style, CSS::PropertyID::TextDecorationLine, value, document);
+        default:
+            break;
+        }
+        return;
+    }
 
     if (property_id == CSS::PropertyID::Border) {
         set_property_expanding_shorthands(style, CSS::PropertyID::BorderTop, value, document);
         set_property_expanding_shorthands(style, CSS::PropertyID::BorderRight, value, document);
         set_property_expanding_shorthands(style, CSS::PropertyID::BorderBottom, value, document);
         set_property_expanding_shorthands(style, CSS::PropertyID::BorderLeft, value, document);
+        return;
     }
 
     if (property_id == CSS::PropertyID::BorderTop
@@ -344,7 +381,7 @@ static void set_property_expanding_shorthands(StyleProperties& style, CSS::Prope
             auto right = parse_css_value(context, parts[1]);
             auto bottom = parse_css_value(context, parts[2]);
             auto left = parse_css_value(context, parts[3]);
-            if (top && right && bottom &&left) {
+            if (top && right && bottom && left) {
                 style.set_property(CSS::PropertyID::BorderTopColor, *top);
                 style.set_property(CSS::PropertyID::BorderRightColor, *right);
                 style.set_property(CSS::PropertyID::BorderBottomColor, *bottom);
@@ -360,7 +397,7 @@ static void set_property_expanding_shorthands(StyleProperties& style, CSS::Prope
     }
 
     if (property_id == CSS::PropertyID::Background) {
-        if (value.to_string() == "none") {
+        if (value.is_identifier() && static_cast<const IdentifierStyleValue&>(value).id() == CSS::ValueID::None) {
             style.set_property(CSS::PropertyID::BackgroundColor, ColorStyleValue::create(Color::Transparent));
             return;
         }
@@ -385,19 +422,27 @@ static void set_property_expanding_shorthands(StyleProperties& style, CSS::Prope
             if (!value.is_string())
                 continue;
             auto string = value.to_string();
-            if (!string.starts_with("url("))
-                continue;
-            if (!string.ends_with(')'))
-                continue;
-            auto url = string.substring_view(4, string.length() - 5);
-            if (url.length() >= 2 && url.starts_with('"') && url.ends_with('"'))
-                url = url.substring_view(1, url.length() - 2);
-            else if (url.length() >= 2 && url.starts_with('\'') && url.ends_with('\''))
-                url = url.substring_view(1, url.length() - 2);
-
-            auto background_image_value = ImageStyleValue::create(document.complete_url(url), document);
-            style.set_property(CSS::PropertyID::BackgroundImage, move(background_image_value));
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundImage, value, document);
         }
+        return;
+    }
+
+    if (property_id == CSS::PropertyID::BackgroundImage) {
+        if (!value.is_string())
+            return;
+        auto string = value.to_string();
+        if (!string.starts_with("url("))
+            return;
+        if (!string.ends_with(')'))
+            return;
+        auto url = string.substring_view(4, string.length() - 5);
+        if (url.length() >= 2 && url.starts_with('"') && url.ends_with('"'))
+            url = url.substring_view(1, url.length() - 2);
+        else if (url.length() >= 2 && url.starts_with('\'') && url.ends_with('\''))
+            url = url.substring_view(1, url.length() - 2);
+
+        auto background_image_value = ImageStyleValue::create(document.complete_url(url), document);
+        style.set_property(CSS::PropertyID::BackgroundImage, move(background_image_value));
         return;
     }
 
@@ -519,7 +564,7 @@ static void set_property_expanding_shorthands(StyleProperties& style, CSS::Prope
     style.set_property(property_id, value);
 }
 
-NonnullRefPtr<StyleProperties> StyleResolver::resolve_style(const Element& element, const StyleProperties* parent_style) const
+NonnullRefPtr<StyleProperties> StyleResolver::resolve_style(const DOM::Element& element, const StyleProperties* parent_style) const
 {
     auto style = StyleProperties::create();
 
@@ -533,19 +578,7 @@ NonnullRefPtr<StyleProperties> StyleResolver::resolve_style(const Element& eleme
     element.apply_presentational_hints(*style);
 
     auto matching_rules = collect_matching_rules(element);
-
-    quick_sort(matching_rules, [&](MatchingRule& a, MatchingRule& b) {
-        auto& a_selector = a.rule->selectors()[a.selector_index];
-        auto& b_selector = b.rule->selectors()[b.selector_index];
-        auto a_specificity = a_selector.specificity();
-        auto b_specificity = b_selector.specificity();
-        if (a_selector.specificity() == b_selector.specificity()) {
-            if (a.style_sheet_index == b.style_sheet_index)
-                return a.rule_index < b.rule_index;
-            return a.style_sheet_index < b.style_sheet_index;
-        }
-        return a_specificity < b_specificity;
-    });
+    sort_matching_rules(matching_rules);
 
     for (auto& match : matching_rules) {
         for (auto& property : match.rule->declaration().properties()) {
@@ -553,12 +586,9 @@ NonnullRefPtr<StyleProperties> StyleResolver::resolve_style(const Element& eleme
         }
     }
 
-    auto style_attribute = element.attribute(HTML::AttributeNames::style);
-    if (!style_attribute.is_null()) {
-        if (auto declaration = parse_css_declaration(CSS::ParsingContext(document()), style_attribute)) {
-            for (auto& property : declaration->properties()) {
-                set_property_expanding_shorthands(style, property.property_id, property.value, m_document);
-            }
+    if (auto* inline_style = element.inline_style()) {
+        for (auto& property : inline_style->properties()) {
+            set_property_expanding_shorthands(style, property.property_id, property.value, m_document);
         }
     }
 

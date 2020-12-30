@@ -54,19 +54,29 @@ void Splitter::paint_event(PaintEvent& event)
 
 void Splitter::resize_event(ResizeEvent& event)
 {
-    Frame::resize_event(event);
+    Widget::resize_event(event);
     m_grabbable_rect = {};
 }
 
-void Splitter::enter_event(Core::Event&)
+void Splitter::override_cursor(bool do_override)
 {
-    window()->set_override_cursor(m_orientation == Orientation::Horizontal ? StandardCursor::ResizeColumn : StandardCursor::ResizeRow);
+    if (do_override) {
+        if (!m_overriding_cursor) {
+            set_override_cursor(m_orientation == Orientation::Horizontal ? Gfx::StandardCursor::ResizeColumn : Gfx::StandardCursor::ResizeRow);
+            m_overriding_cursor = true;
+        }
+    } else {
+        if (m_overriding_cursor) {
+            set_override_cursor(Gfx::StandardCursor::None);
+            m_overriding_cursor = false;
+        }
+    }
 }
 
 void Splitter::leave_event(Core::Event&)
 {
     if (!m_resizing)
-        window()->set_override_cursor(StandardCursor::None);
+        override_cursor(false);
     if (!m_grabbable_rect.is_empty()) {
         m_grabbable_rect = {};
         update();
@@ -76,23 +86,31 @@ void Splitter::leave_event(Core::Event&)
 bool Splitter::get_resize_candidates_at(const Gfx::IntPoint& position, Widget*& first, Widget*& second)
 {
     int x_or_y = position.primary_offset_for_orientation(m_orientation);
-
-    auto child_widgets = this->child_widgets();
-    if (child_widgets.size() < 2)
-        return false;
-
-    for (size_t i = 0; i < child_widgets.size() - 1; ++i) {
-        auto* first_candidate = child_widgets[i];
-        auto* second_candidate = child_widgets[i + 1];
-
-        if (x_or_y > first_candidate->content_rect().last_edge_for_orientation(m_orientation)
-            && x_or_y <= second_candidate->content_rect().first_edge_for_orientation(m_orientation)) {
-            first = first_candidate;
-            second = second_candidate;
-            return true;
+    Widget* previous_widget = nullptr;
+    bool found_candidates = false;
+    for_each_child_widget([&](auto& child_widget) {
+        if (!child_widget.is_visible()) {
+            // We need to skip over widgets that are not visible as they
+            // are not necessarily in the correct location (anymore)
+            return IterationDecision::Continue;
         }
-    }
-    return false;
+        if (!previous_widget) {
+            previous_widget = &child_widget;
+            return IterationDecision::Continue;
+        }
+
+        if (x_or_y > previous_widget->content_rect().last_edge_for_orientation(m_orientation)
+            && x_or_y <= child_widget.content_rect().first_edge_for_orientation(m_orientation)) {
+            first = previous_widget;
+            second = &child_widget;
+            found_candidates = true;
+            return IterationDecision::Break;
+        }
+
+        previous_widget = &child_widget;
+        return IterationDecision::Continue;
+    });
+    return found_candidates;
 }
 
 void Splitter::mousedown_event(MouseEvent& event)
@@ -106,8 +124,8 @@ void Splitter::mousedown_event(MouseEvent& event)
     if (!get_resize_candidates_at(event.position(), first, second))
         return;
 
-    m_first_resizee = first->make_weak_ptr();
-    m_second_resizee = second->make_weak_ptr();
+    m_first_resizee = *first;
+    m_second_resizee = *second;
     m_first_resizee_start_size = first->size();
     m_second_resizee_start_size = second->size();
     m_resize_origin = event.position();
@@ -134,9 +152,12 @@ void Splitter::mousemove_event(MouseEvent& event)
     if (!m_resizing) {
         Widget* first { nullptr };
         Widget* second { nullptr };
-        if (!get_resize_candidates_at(event.position(), first, second))
+        if (!get_resize_candidates_at(event.position(), first, second)) {
+            override_cursor(false);
             return;
+        }
         recompute_grabbable_rect(*first, *second);
+        override_cursor(m_grabbable_rect.contains(event.position()));
         return;
     }
     auto delta = event.position() - m_resize_origin;
@@ -162,11 +183,14 @@ void Splitter::mousemove_event(MouseEvent& event)
         new_second_resizee_size.set_primary_size_for_orientation(m_orientation, new_second_resizee_size.primary_size_for_orientation(m_orientation) + correction);
         new_first_resizee_size.set_primary_size_for_orientation(m_orientation, new_first_resizee_size.primary_size_for_orientation(m_orientation) - correction);
     }
-    m_first_resizee->set_preferred_size(new_first_resizee_size);
-    m_second_resizee->set_preferred_size(new_second_resizee_size);
 
-    m_first_resizee->set_size_policy(m_orientation, SizePolicy::Fixed);
-    m_second_resizee->set_size_policy(m_orientation, SizePolicy::Fill);
+    if (m_orientation == Orientation::Horizontal) {
+        m_first_resizee->set_fixed_width(new_first_resizee_size.width());
+        m_second_resizee->set_fixed_width(-1);
+    } else {
+        m_first_resizee->set_fixed_height(new_first_resizee_size.height());
+        m_second_resizee->set_fixed_height(-1);
+    }
 
     invalidate_layout();
 }
@@ -185,7 +209,7 @@ void Splitter::mouseup_event(MouseEvent& event)
     m_first_resizee = nullptr;
     m_second_resizee = nullptr;
     if (!rect().contains(event.position()))
-        window()->set_override_cursor(StandardCursor::None);
+        set_override_cursor(Gfx::StandardCursor::None);
 }
 
 }

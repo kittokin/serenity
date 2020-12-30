@@ -26,7 +26,7 @@
 
 #pragma once
 
-#include <LibWeb/Page.h>
+#include <LibWeb/Page/Page.h>
 
 namespace WebContent {
 
@@ -63,10 +63,12 @@ private:
     virtual void page_did_request_context_menu(const Gfx::IntPoint&) override;
     virtual void page_did_request_link_context_menu(const Gfx::IntPoint&, const URL&, const String& target, unsigned modifiers) override;
     virtual void page_did_start_loading(const URL&) override;
+    virtual void page_did_finish_loading(const URL&) override;
+    virtual void page_did_request_alert(const String&) override;
 
     explicit PageHost(ClientConnection&);
 
-    Web::LayoutDocument* layout_root();
+    Web::Layout::InitialContainingBlockBox* layout_root();
     void setup_palette();
 
     ClientConnection& m_client;

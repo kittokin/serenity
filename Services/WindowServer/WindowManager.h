@@ -100,12 +100,11 @@ public:
 
     const ClientConnection* dnd_client() const { return m_dnd_client.ptr(); }
     const String& dnd_text() const { return m_dnd_text; }
-    const String& dnd_data_type() const { return m_dnd_data_type; }
-    const String& dnd_data() const { return m_dnd_data; }
+    const Core::MimeData& dnd_mime_data() const { return *m_dnd_mime_data; }
     const Gfx::Bitmap* dnd_bitmap() const { return m_dnd_bitmap; }
     Gfx::IntRect dnd_rect() const;
 
-    void start_dnd_drag(ClientConnection&, const String& text, Gfx::Bitmap*, const String& data_type, const String& data);
+    void start_dnd_drag(ClientConnection&, const String& text, Gfx::Bitmap*, const Core::MimeData&);
     void end_dnd_drag();
 
     Window* active_window() { return m_active_window.ptr(); }
@@ -123,7 +122,9 @@ public:
     Gfx::IntRect desktop_rect() const;
 
     const Cursor& active_cursor() const;
+    const Cursor& hidden_cursor() const { return *m_hidden_cursor; }
     const Cursor& arrow_cursor() const { return *m_arrow_cursor; }
+    const Cursor& crosshair_cursor() const { return *m_crosshair_cursor; }
     const Cursor& hand_cursor() const { return *m_hand_cursor; }
     const Cursor& help_cursor() const { return *m_help_cursor; }
     const Cursor& resize_horizontally_cursor() const { return *m_resize_horizontally_cursor; }
@@ -138,15 +139,14 @@ public:
     const Cursor& drag_cursor() const { return *m_drag_cursor; }
     const Cursor& wait_cursor() const { return *m_wait_cursor; }
 
-    void invalidate(const Gfx::IntRect&);
-    void invalidate();
-    void flush(const Gfx::IntRect&);
-
     const Gfx::Font& font() const;
     const Gfx::Font& window_title_font() const;
 
     bool set_resolution(int width, int height);
     Gfx::IntSize resolution() const;
+
+    void set_acceleration_factor(double);
+    void set_scroll_step_size(unsigned);
 
     Window* set_active_input_window(Window*);
     void restore_active_input_window(Window*);
@@ -186,7 +186,7 @@ public:
     void maximize_windows(Window&, bool);
 
     template<typename Function>
-    void for_each_window_in_modal_stack(Window& window, Function f)
+    IterationDecision for_each_window_in_modal_stack(Window& window, Function f)
     {
         auto* blocking_modal_window = window.is_blocked_by_modal_window();
         if (blocking_modal_window || window.is_modal()) {
@@ -202,19 +202,22 @@ public:
             }
             if (!modal_stack.is_empty()) {
                 for (size_t i = modal_stack.size(); i > 0; i--) {
-                    f(*modal_stack[i - 1], false);
+                    IterationDecision decision = f(*modal_stack[i - 1], false);
+                    if (decision != IterationDecision::Continue)
+                        return decision;
                 }
             }
-            f(*modal_stack_top, true);
+            return f(*modal_stack_top, true);
         } else {
             // Not a modal window stack, just "iterate" over this window
-            f(window, true);
+            return f(window, true);
         }
     }
 
+    Gfx::IntPoint get_recommended_window_position(const Gfx::IntPoint& desired);
+
 private:
     NonnullRefPtr<Cursor> get_cursor(const String& name);
-    NonnullRefPtr<Cursor> get_cursor(const String& name, const Gfx::IntPoint& hotspot);
 
     void process_mouse_event(MouseEvent&, Window*& hovered_window);
     void process_event_for_doubleclick(Window& window, MouseEvent& event);
@@ -246,6 +249,7 @@ private:
 
     void do_move_to_front(Window&, bool, bool);
 
+    RefPtr<Cursor> m_hidden_cursor;
     RefPtr<Cursor> m_arrow_cursor;
     RefPtr<Cursor> m_hand_cursor;
     RefPtr<Cursor> m_help_cursor;
@@ -260,6 +264,7 @@ private:
     RefPtr<Cursor> m_move_cursor;
     RefPtr<Cursor> m_drag_cursor;
     RefPtr<Cursor> m_wait_cursor;
+    RefPtr<Cursor> m_crosshair_cursor;
 
     InlineLinkedList<Window> m_windows_in_order;
 
@@ -327,8 +332,7 @@ private:
 
     WeakPtr<ClientConnection> m_dnd_client;
     String m_dnd_text;
-    String m_dnd_data_type;
-    String m_dnd_data;
+    RefPtr<Core::MimeData> m_dnd_mime_data;
     RefPtr<Gfx::Bitmap> m_dnd_bitmap;
 };
 
@@ -366,9 +370,9 @@ IterationDecision WindowManager::for_each_visible_window_from_back_to_front(Call
         return IterationDecision::Break;
     if (for_each_visible_window_of_type_from_back_to_front(WindowType::Taskbar, callback) == IterationDecision::Break)
         return IterationDecision::Break;
-    if (for_each_visible_window_of_type_from_back_to_front(WindowType::Tooltip, callback) == IterationDecision::Break)
-        return IterationDecision::Break;
     if (for_each_visible_window_of_type_from_back_to_front(WindowType::Notification, callback) == IterationDecision::Break)
+        return IterationDecision::Break;
+    if (for_each_visible_window_of_type_from_back_to_front(WindowType::Tooltip, callback) == IterationDecision::Break)
         return IterationDecision::Break;
     if (for_each_visible_window_of_type_from_back_to_front(WindowType::Menubar, callback) == IterationDecision::Break)
         return IterationDecision::Break;
@@ -409,9 +413,9 @@ IterationDecision WindowManager::for_each_visible_window_from_front_to_back(Call
         return IterationDecision::Break;
     if (for_each_visible_window_of_type_from_front_to_back(WindowType::Menubar, callback) == IterationDecision::Break)
         return IterationDecision::Break;
-    if (for_each_visible_window_of_type_from_front_to_back(WindowType::Notification, callback) == IterationDecision::Break)
-        return IterationDecision::Break;
     if (for_each_visible_window_of_type_from_front_to_back(WindowType::Tooltip, callback) == IterationDecision::Break)
+        return IterationDecision::Break;
+    if (for_each_visible_window_of_type_from_front_to_back(WindowType::Notification, callback) == IterationDecision::Break)
         return IterationDecision::Break;
     if (for_each_visible_window_of_type_from_front_to_back(WindowType::Taskbar, callback) == IterationDecision::Break)
         return IterationDecision::Break;

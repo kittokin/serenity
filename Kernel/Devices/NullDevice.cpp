@@ -25,22 +25,26 @@
  */
 
 #include "NullDevice.h"
+#include <AK/Singleton.h>
 #include <AK/StdLibExtras.h>
 
 namespace Kernel {
 
-static NullDevice* s_the;
+static AK::Singleton<NullDevice> s_the;
+
+void NullDevice::initialize()
+{
+    s_the.ensure_instance();
+}
 
 NullDevice& NullDevice::the()
 {
-    ASSERT(s_the);
     return *s_the;
 }
 
 NullDevice::NullDevice()
     : CharacterDevice(1, 3)
 {
-    s_the = this;
 }
 
 NullDevice::~NullDevice()
@@ -52,14 +56,14 @@ bool NullDevice::can_read(const FileDescription&, size_t) const
     return true;
 }
 
-ssize_t NullDevice::read(FileDescription&, size_t, u8*, ssize_t)
+KResultOr<size_t> NullDevice::read(FileDescription&, size_t, UserOrKernelBuffer&, size_t)
 {
     return 0;
 }
 
-ssize_t NullDevice::write(FileDescription&, size_t, const u8*, ssize_t buffer_size)
+KResultOr<size_t> NullDevice::write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t buffer_size)
 {
-    return min(static_cast<ssize_t>(PAGE_SIZE), buffer_size);
+    return min(static_cast<size_t>(PAGE_SIZE), buffer_size);
 }
 
 }

@@ -32,8 +32,8 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
-#include <AK/LexicalPath.h>
 #include <AK/HashMap.h>
+#include <AK/LexicalPath.h>
 #include <AK/RefPtr.h>
 #include <AK/ScopeGuard.h>
 #include <AK/String.h>
@@ -85,7 +85,8 @@ void* dlopen(const char* filename, int flags)
 
     ScopeGuard close_fd_guard([fd]() { close(fd); });
 
-    struct stat file_stats{};
+    struct stat file_stats {
+    };
 
     int ret = fstat(fd, &file_stats);
     if (ret < 0) {
@@ -100,7 +101,9 @@ void* dlopen(const char* filename, int flags)
         return nullptr;
     }
 
-    if (!loader->load_from_image(flags)) {
+    if (!loader->load_from_image(flags,
+            0 // total_tls_size = 0, FIXME: Support TLS when using dlopen()
+            )) {
         g_dlerror_msg = String::format("Failed to load ELF object %s", filename);
         return nullptr;
     }

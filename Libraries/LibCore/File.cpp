@@ -27,10 +27,13 @@
 #ifdef __serenity__
 #    include <Kernel/API/Syscall.h>
 #endif
+#include <AK/ScopeGuard.h>
 #include <LibCore/File.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libgen.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -52,11 +55,11 @@ File::File(const StringView& filename, Object* parent)
 
 File::~File()
 {
-    if (m_should_close_file_descriptor == ShouldCloseFileDescription::Yes && mode() != NotOpen)
+    if (m_should_close_file_descriptor == ShouldCloseFileDescriptor::Yes && mode() != NotOpen)
         close();
 }
 
-bool File::open(int fd, IODevice::OpenMode mode, ShouldCloseFileDescription should_close)
+bool File::open(int fd, IODevice::OpenMode mode, ShouldCloseFileDescriptor should_close)
 {
     set_fd(fd);
     set_mode(mode);
@@ -132,6 +135,37 @@ String File::real_path_for(const String& filename)
     return real_path;
 }
 
+bool File::ensure_parent_directories(const String& path)
+{
+    ASSERT(path.starts_with("/"));
+
+    int saved_errno = 0;
+    ScopeGuard restore_errno = [&saved_errno] { errno = saved_errno; };
+
+    char* parent_buffer = strdup(path.characters());
+    ScopeGuard free_buffer = [parent_buffer] { free(parent_buffer); };
+
+    const char* parent = dirname(parent_buffer);
+
+    int rc = mkdir(parent, 0755);
+    saved_errno = errno;
+
+    if (rc == 0 || errno == EEXIST)
+        return true;
+
+    if (errno != ENOENT)
+        return false;
+
+    bool ok = ensure_parent_directories(parent);
+    saved_errno = errno;
+    if (!ok)
+        return false;
+
+    rc = mkdir(parent, 0755);
+    saved_errno = errno;
+    return rc == 0;
+}
+
 #ifdef __serenity__
 
 String File::read_link(const StringView& link_path)
@@ -203,4 +237,34 @@ String File::read_link(const StringView& link_path)
 
 #endif
 
+static RefPtr<File> stdin_file;
+static RefPtr<File> stdout_file;
+static RefPtr<File> stderr_file;
+
+NonnullRefPtr<File> File::standard_input()
+{
+    if (!stdin_file) {
+        stdin_file = File::construct();
+        stdin_file->open(STDIN_FILENO, IODevice::ReadOnly, ShouldCloseFileDescriptor::No);
+    }
+    return *stdin_file;
+}
+
+NonnullRefPtr<File> File::standard_output()
+{
+    if (!stdout_file) {
+        stdout_file = File::construct();
+        stdout_file->open(STDOUT_FILENO, IODevice::WriteOnly, ShouldCloseFileDescriptor::No);
+    }
+    return *stdout_file;
+}
+
+NonnullRefPtr<File> File::standard_error()
+{
+    if (!stderr_file) {
+        stderr_file = File::construct();
+        stderr_file->open(STDERR_FILENO, IODevice::WriteOnly, ShouldCloseFileDescriptor::No);
+    }
+    return *stderr_file;
+}
 }

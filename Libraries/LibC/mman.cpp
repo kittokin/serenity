@@ -34,8 +34,8 @@ extern "C" {
 
 void* serenity_mmap(void* addr, size_t size, int prot, int flags, int fd, off_t offset, size_t alignment, const char* name)
 {
-    Syscall::SC_mmap_params params { (u32)addr, size, alignment, prot, flags, fd, offset, { name, name ? strlen(name) : 0 } };
-    int rc = syscall(SC_mmap, &params);
+    Syscall::SC_mmap_params params { (uintptr_t)addr, size, alignment, prot, flags, fd, offset, { name, name ? strlen(name) : 0 } };
+    ssize_t rc = syscall(SC_mmap, &params);
     if (rc < 0 && -rc < EMAXERRNO) {
         errno = -rc;
         return MAP_FAILED;
@@ -51,6 +51,17 @@ void* mmap(void* addr, size_t size, int prot, int flags, int fd, off_t offset)
 void* mmap_with_name(void* addr, size_t size, int prot, int flags, int fd, off_t offset, const char* name)
 {
     return serenity_mmap(addr, size, prot, flags, fd, offset, PAGE_SIZE, name);
+}
+
+void* mremap(void* old_address, size_t old_size, size_t new_size, int flags)
+{
+    Syscall::SC_mremap_params params { (uintptr_t)old_address, old_size, new_size, flags };
+    ssize_t rc = syscall(SC_mremap, &params);
+    if (rc < 0 && -rc < EMAXERRNO) {
+        errno = -rc;
+        return MAP_FAILED;
+    }
+    return (void*)rc;
 }
 
 int munmap(void* addr, size_t size)
@@ -86,5 +97,15 @@ int minherit(void* address, size_t size, int inherit)
 {
     int rc = syscall(SC_minherit, address, size, inherit);
     __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
+void* allocate_tls(size_t size)
+{
+    int rc = syscall(SC_allocate_tls, size);
+    if (rc < 0 && -rc < EMAXERRNO) {
+        errno = -rc;
+        return MAP_FAILED;
+    }
+    return (void*)rc;
 }
 }

@@ -28,7 +28,6 @@
 #include <LibCore/ArgsParser.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Clipboard.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 int main(int argc, char* argv[])
@@ -37,6 +36,7 @@ int main(int argc, char* argv[])
     bool no_newline = false;
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Paste from the clipboard to stdout.");
     args_parser.add_option(print_type, "Display the copied type", "print-type", 0);
     args_parser.add_option(no_newline, "Do not append a newline", "no-newline", 'n');
     args_parser.parse(argc, argv);
@@ -46,19 +46,18 @@ int main(int argc, char* argv[])
     auto& clipboard = GUI::Clipboard::the();
     auto data_and_type = clipboard.data_and_type();
 
-    if (data_and_type.type.is_null()) {
-        fprintf(stderr, "Nothing copied\n");
+    if (data_and_type.mime_type.is_null()) {
+        warnln("Nothing copied");
         return 1;
     }
 
     if (!print_type) {
-        printf("%s", data_and_type.data.characters());
-        // Append a newline to text contents, but
-        // only if we're not asked not to do this.
-        if (data_and_type.type.starts_with("text/") && !no_newline)
-            putchar('\n');
+        out("{}", StringView(data_and_type.data));
+        // Append a newline to text contents, unless the caller says otherwise.
+        if (data_and_type.mime_type.starts_with("text/") && !no_newline)
+            outln();
     } else {
-        printf("%s\n", data_and_type.type.characters());
+        outln("{}", data_and_type.mime_type);
     }
 
     return 0;

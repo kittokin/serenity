@@ -24,7 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/BufferStream.h>
+#include <AK/MemoryStream.h>
 #include <Kernel/Devices/BlockDevice.h>
 #include <Kernel/Devices/CharacterDevice.h>
 #include <Kernel/FileSystem/Custody.h>
@@ -70,26 +70,38 @@ FileDescription::~FileDescription()
         socket()->detach(*this);
     if (is_fifo())
         static_cast<FIFO*>(m_file.ptr())->detach(m_fifo_direction);
-    m_file->close();
+    // FIXME: Should this error path be observed somehow?
+    [[maybe_unused]] auto rc = m_file->close();
     m_inode = nullptr;
 }
 
-KResult FileDescription::fstat(stat& buffer)
+Thread::FileBlocker::BlockFlags FileDescription::should_unblock(Thread::FileBlocker::BlockFlags block_flags) const
 {
-    if (is_fifo()) {
-        memset(&buffer, 0, sizeof(buffer));
-        buffer.st_mode = S_IFIFO;
-        return KSuccess;
-    }
-    if (is_socket()) {
-        memset(&buffer, 0, sizeof(buffer));
-        buffer.st_mode = S_IFSOCK;
-        return KSuccess;
-    }
+    u32 unblock_flags = (u32)Thread::FileBlocker::BlockFlags::None;
+    if (((u32)block_flags & (u32)Thread::FileBlocker::BlockFlags::Read) && can_read())
+        unblock_flags |= (u32)Thread::FileBlocker::BlockFlags::Read;
+    if (((u32)block_flags & (u32)Thread::FileBlocker::BlockFlags::Write) && can_write())
+        unblock_flags |= (u32)Thread::FileBlocker::BlockFlags::Write;
+    // TODO: Implement Thread::FileBlocker::BlockFlags::Exception
 
-    if (!m_inode)
-        return KResult(-EBADF);
-    return metadata().stat(buffer);
+    if ((u32)block_flags & (u32)Thread::FileBlocker::BlockFlags::SocketFlags) {
+        auto* sock = socket();
+        ASSERT(sock);
+        if (((u32)block_flags & (u32)Thread::FileBlocker::BlockFlags::Accept) && sock->can_accept())
+            unblock_flags |= (u32)Thread::FileBlocker::BlockFlags::Accept;
+        if (((u32)block_flags & (u32)Thread::FileBlocker::BlockFlags::Connect) && sock->setup_state() == Socket::SetupState::Completed)
+            unblock_flags |= (u32)Thread::FileBlocker::BlockFlags::Connect;
+    }
+    return (Thread::FileBlocker::BlockFlags)unblock_flags;
+}
+
+KResult FileDescription::stat(::stat& buffer)
+{
+    LOCKER(m_lock);
+    // FIXME: This is a little awkward, why can't we always forward to File::stat()?
+    if (m_inode)
+        return metadata().stat(buffer);
+    return m_file->stat(buffer);
 }
 
 off_t FileDescription::seek(off_t offset, int whence)
@@ -121,31 +133,40 @@ off_t FileDescription::seek(off_t offset, int whence)
     // FIXME: Return -EINVAL if attempting to seek past the end of a seekable device.
 
     m_current_offset = new_offset;
+    evaluate_block_conditions();
     return m_current_offset;
 }
 
-ssize_t FileDescription::read(u8* buffer, ssize_t count)
+KResultOr<size_t> FileDescription::read(UserOrKernelBuffer& buffer, size_t count)
 {
     LOCKER(m_lock);
-    if ((m_current_offset + count) < 0)
+    Checked<size_t> new_offset = m_current_offset;
+    new_offset += count;
+    if (new_offset.has_overflow())
         return -EOVERFLOW;
-    SmapDisabler disabler;
-    int nread = m_file->read(*this, offset(), buffer, count);
-    if (nread > 0 && m_file->is_seekable())
-        m_current_offset += nread;
-    return nread;
+    auto nread_or_error = m_file->read(*this, offset(), buffer, count);
+    if (!nread_or_error.is_error()) {
+        if (m_file->is_seekable())
+            m_current_offset += nread_or_error.value();
+        evaluate_block_conditions();
+    }
+    return nread_or_error;
 }
 
-ssize_t FileDescription::write(const u8* data, ssize_t size)
+KResultOr<size_t> FileDescription::write(const UserOrKernelBuffer& data, size_t size)
 {
     LOCKER(m_lock);
-    if ((m_current_offset + size) < 0)
+    Checked<size_t> new_offset = m_current_offset;
+    new_offset += size;
+    if (new_offset.has_overflow())
         return -EOVERFLOW;
-    SmapDisabler disabler;
-    int nwritten = m_file->write(*this, offset(), data, size);
-    if (nwritten > 0 && m_file->is_seekable())
-        m_current_offset += nwritten;
-    return nwritten;
+    auto nwritten_or_error = m_file->write(*this, offset(), data, size);
+    if (!nwritten_or_error.is_error()) {
+        if (m_file->is_seekable())
+            m_current_offset += nwritten_or_error.value();
+        evaluate_block_conditions();
+    }
+    return nwritten_or_error;
 }
 
 bool FileDescription::can_write() const
@@ -158,7 +179,7 @@ bool FileDescription::can_read() const
     return m_file->can_read(*this, offset());
 }
 
-KResultOr<ByteBuffer> FileDescription::read_entire_file()
+KResultOr<NonnullOwnPtr<KBuffer>> FileDescription::read_entire_file()
 {
     // HACK ALERT: (This entire function)
     ASSERT(m_file->is_inode());
@@ -166,7 +187,7 @@ KResultOr<ByteBuffer> FileDescription::read_entire_file()
     return m_inode->read_entire(this);
 }
 
-ssize_t FileDescription::get_dir_entries(u8* buffer, ssize_t size)
+ssize_t FileDescription::get_dir_entries(UserOrKernelBuffer& buffer, ssize_t size)
 {
     LOCKER(m_lock, Lock::Mode::Shared);
     if (!is_directory())
@@ -182,21 +203,26 @@ ssize_t FileDescription::get_dir_entries(u8* buffer, ssize_t size)
     size_t size_to_allocate = max(static_cast<size_t>(PAGE_SIZE), static_cast<size_t>(metadata.size));
 
     auto temp_buffer = ByteBuffer::create_uninitialized(size_to_allocate);
-    BufferStream stream(temp_buffer);
-    VFS::the().traverse_directory_inode(*m_inode, [&stream](auto& entry) {
+    OutputMemoryStream stream { temp_buffer };
+
+    KResult result = VFS::the().traverse_directory_inode(*m_inode, [&stream, this](auto& entry) {
         stream << (u32)entry.inode.index();
-        stream << (u8)entry.file_type;
-        stream << (u32)entry.name_length;
-        stream << entry.name;
+        stream << m_inode->fs().internal_file_type_to_directory_entry_type(entry);
+        stream << (u32)entry.name.length();
+        stream << entry.name.bytes();
         return true;
     });
-    stream.snip();
 
-    if (static_cast<size_t>(size) < temp_buffer.size())
+    if (result.is_error())
+        return result;
+
+    if (stream.handle_recoverable_error())
         return -EINVAL;
 
-    copy_to_user(buffer, temp_buffer.data(), temp_buffer.size());
-    return stream.offset();
+    if (!buffer.write(stream.bytes()))
+        return -EFAULT;
+
+    return stream.size();
 }
 
 bool FileDescription::is_device() const
@@ -339,6 +365,11 @@ KResult FileDescription::chown(uid_t uid, gid_t gid)
 {
     LOCKER(m_lock);
     return m_file->chown(*this, uid, gid);
+}
+
+FileBlockCondition& FileDescription::block_condition()
+{
+    return m_file->block_condition();
 }
 
 }

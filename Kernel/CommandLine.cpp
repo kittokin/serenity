@@ -25,10 +25,23 @@
  */
 
 #include <Kernel/CommandLine.h>
+#include <Kernel/StdLib.h>
 
 namespace Kernel {
 
+static char s_cmd_line[1024];
 static CommandLine* s_the;
+
+void CommandLine::early_initialize(const char* cmd_line)
+{
+    if (!cmd_line)
+        return;
+    size_t length = strlen(cmd_line);
+    if (length >= sizeof(s_cmd_line))
+        length = sizeof(s_cmd_line) - 1;
+    memcpy(s_cmd_line, cmd_line, length);
+    s_cmd_line[length] = '\0';
+}
 
 const CommandLine& kernel_command_line()
 {
@@ -36,9 +49,10 @@ const CommandLine& kernel_command_line()
     return *s_the;
 }
 
-void CommandLine::initialize(const String& string)
+void CommandLine::initialize()
 {
-    s_the = new CommandLine(string);
+    ASSERT(!s_the);
+    s_the = new CommandLine(s_cmd_line);
 }
 
 CommandLine::CommandLine(const String& string)
@@ -46,7 +60,9 @@ CommandLine::CommandLine(const String& string)
 {
     s_the = this;
 
-    for (auto str : m_string.split(' ')) {
+    const auto& args = m_string.split(' ');
+    m_params.ensure_capacity(args.size());
+    for (auto&& str : args) {
         if (str == "") {
             continue;
         }
@@ -54,9 +70,9 @@ CommandLine::CommandLine(const String& string)
         auto pair = str.split_limit('=', 2);
 
         if (pair.size() == 1) {
-            m_params.set(pair[0], "");
+            m_params.set(move(pair[0]), "");
         } else {
-            m_params.set(pair[0], pair[1]);
+            m_params.set(move(pair[0]), move(pair[1]));
         }
     }
 }

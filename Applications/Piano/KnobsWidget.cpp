@@ -47,8 +47,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
 
     m_labels_container = add<GUI::Widget>();
     m_labels_container->set_layout<GUI::HorizontalBoxLayout>();
-    m_labels_container->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_labels_container->set_preferred_size(0, 20);
+    m_labels_container->set_fixed_height(20);
 
     m_octave_label = m_labels_container->add<GUI::Label>("Octave");
     m_wave_label = m_labels_container->add<GUI::Label>("Wave");
@@ -60,8 +59,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
 
     m_values_container = add<GUI::Widget>();
     m_values_container->set_layout<GUI::HorizontalBoxLayout>();
-    m_values_container->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_values_container->set_preferred_size(0, 10);
+    m_values_container->set_fixed_height(10);
 
     m_octave_value = m_values_container->add<GUI::Label>(String::number(m_track_manager.octave()));
     m_wave_value = m_values_container->add<GUI::Label>(wave_strings[m_track_manager.current_track().wave()]);
@@ -80,7 +78,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
     m_octave_knob->set_tooltip("Z: octave down, X: octave up");
     m_octave_knob->set_range(octave_min - 1, octave_max - 1);
     m_octave_knob->set_value((octave_max - 1) - (m_track_manager.octave() - 1));
-    m_octave_knob->on_value_changed = [this](int value) {
+    m_octave_knob->on_change = [this](int value) {
         int new_octave = octave_max - value;
         if (m_change_underlying)
             m_main_widget.set_octave_and_ensure_note_change(new_octave);
@@ -92,7 +90,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
     m_wave_knob->set_tooltip("C: cycle through waveforms");
     m_wave_knob->set_range(0, last_wave);
     m_wave_knob->set_value(last_wave - m_track_manager.current_track().wave());
-    m_wave_knob->on_value_changed = [this](int value) {
+    m_wave_knob->on_change = [this](int value) {
         int new_wave = last_wave - value;
         if (m_change_underlying)
             m_track_manager.current_track().set_wave(new_wave);
@@ -104,7 +102,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
     m_attack_knob->set_range(0, max_attack);
     m_attack_knob->set_value(max_attack - m_track_manager.current_track().attack());
     m_attack_knob->set_step(100);
-    m_attack_knob->on_value_changed = [this](int value) {
+    m_attack_knob->on_change = [this](int value) {
         int new_attack = max_attack - value;
         if (m_change_underlying)
             m_track_manager.current_track().set_attack(new_attack);
@@ -116,7 +114,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
     m_decay_knob->set_range(0, max_decay);
     m_decay_knob->set_value(max_decay - m_track_manager.current_track().decay());
     m_decay_knob->set_step(100);
-    m_decay_knob->on_value_changed = [this](int value) {
+    m_decay_knob->on_change = [this](int value) {
         int new_decay = max_decay - value;
         if (m_change_underlying)
             m_track_manager.current_track().set_decay(new_decay);
@@ -128,7 +126,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
     m_sustain_knob->set_range(0, max_sustain);
     m_sustain_knob->set_value(max_sustain - m_track_manager.current_track().sustain());
     m_sustain_knob->set_step(100);
-    m_sustain_knob->on_value_changed = [this](int value) {
+    m_sustain_knob->on_change = [this](int value) {
         int new_sustain = max_sustain - value;
         if (m_change_underlying)
             m_track_manager.current_track().set_sustain(new_sustain);
@@ -140,7 +138,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
     m_release_knob->set_range(0, max_release);
     m_release_knob->set_value(max_release - m_track_manager.current_track().release());
     m_release_knob->set_step(100);
-    m_release_knob->on_value_changed = [this](int value) {
+    m_release_knob->on_change = [this](int value) {
         int new_release = max_release - value;
         if (m_change_underlying)
             m_track_manager.current_track().set_release(new_release);
@@ -151,7 +149,7 @@ KnobsWidget::KnobsWidget(TrackManager& track_manager, MainWidget& main_widget)
     m_delay_knob = m_knobs_container->add<GUI::VerticalSlider>();
     m_delay_knob->set_range(0, max_delay);
     m_delay_knob->set_value(max_delay - m_track_manager.current_track().delay());
-    m_delay_knob->on_value_changed = [this](int value) {
+    m_delay_knob->on_change = [this](int value) {
         int new_delay = max_delay - value;
         if (m_change_underlying)
             m_track_manager.current_track().set_delay(new_delay);

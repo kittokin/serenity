@@ -26,8 +26,10 @@
 
 #include <AK/StringBuilder.h>
 #include <LibGUI/Action.h>
+#include <LibGUI/HeaderView.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Model.h>
+#include <LibGUI/ModelEditingDelegate.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/ScrollBar.h>
 #include <LibGUI/TableView.h>
@@ -64,8 +66,11 @@ void TableView::paint_event(PaintEvent& event)
     if (!model())
         return;
 
+    auto selection_color = is_focused() ? palette().selection() : palette().inactive_selection();
+
     int exposed_width = max(content_size().width(), width());
-    int y_offset = header_height();
+    int x_offset = row_header().is_visible() ? row_header().width() : 0;
+    int y_offset = column_header().is_visible() ? column_header().height() : 0;
 
     bool dummy;
     int first_visible_row = index_at_event_position(frame_inner_rect().top_left(), dummy).row();
@@ -80,13 +85,13 @@ void TableView::paint_event(PaintEvent& event)
 
     for (int row_index = first_visible_row; row_index <= last_visible_row; ++row_index) {
         bool is_selected_row = selection().contains_row(row_index);
-        int y = y_offset + painted_item_index * item_height();
+        int y = y_offset + painted_item_index * row_height();
 
         Color background_color;
         Color key_column_background_color;
-        if (is_selected_row) {
-            background_color = is_focused() ? palette().selection() : palette().inactive_selection();
-            key_column_background_color = is_focused() ? palette().selection() : palette().inactive_selection();
+        if (is_selected_row && highlight_selected_rows()) {
+            background_color = selection_color;
+            key_column_background_color = selection_color;
         } else {
             if (alternating_row_colors() && (painted_item_index % 2)) {
                 background_color = widget_background_color.darkened(0.8f);
@@ -96,103 +101,149 @@ void TableView::paint_event(PaintEvent& event)
                 key_column_background_color = widget_background_color.darkened(0.9f);
             }
         }
-        painter.fill_rect(row_rect(painted_item_index), background_color);
 
-        int x_offset = 0;
+        auto row_rect = this->row_rect(painted_item_index);
+        painter.fill_rect(row_rect, background_color);
+
+        int x = x_offset;
         for (int column_index = 0; column_index < model()->column_count(); ++column_index) {
-            if (is_column_hidden(column_index))
+            if (!column_header().is_section_visible(column_index))
                 continue;
             int column_width = this->column_width(column_index);
-            bool is_key_column = model()->key_column() == column_index;
-            Gfx::IntRect cell_rect(horizontal_padding() + x_offset, y, column_width, item_height());
+            bool is_key_column = m_key_column == column_index;
+            Gfx::IntRect cell_rect(horizontal_padding() + x, y, column_width, row_height());
             auto cell_rect_for_fill = cell_rect.inflated(horizontal_padding() * 2, 0);
             if (is_key_column)
                 painter.fill_rect(cell_rect_for_fill, key_column_background_color);
             auto cell_index = model()->index(row_index, column_index);
 
-            if (auto* delegate = column_data(column_index).cell_painting_delegate.ptr()) {
-                delegate->paint(painter, cell_rect, palette(), *model(), cell_index);
+            if (auto* delegate = column_painting_delegate(column_index)) {
+                delegate->paint(painter, cell_rect, palette(), cell_index);
             } else {
-                auto data = model()->data(cell_index);
+                auto data = cell_index.data();
                 if (data.is_bitmap()) {
                     painter.blit(cell_rect.location(), data.as_bitmap(), data.as_bitmap().rect());
                 } else if (data.is_icon()) {
                     if (auto bitmap = data.as_icon().bitmap_for_size(16)) {
-                        if (m_hovered_index.is_valid() && cell_index.row() == m_hovered_index.row())
+                        if (is_selected_row) {
+                            auto tint = selection_color.with_alpha(100);
+                            painter.blit_filtered(cell_rect.location(), *bitmap, bitmap->rect(), [&](auto src) { return src.blend(tint); });
+                        } else if (m_hovered_index.is_valid() && cell_index.row() == m_hovered_index.row()) {
                             painter.blit_brightened(cell_rect.location(), *bitmap, bitmap->rect());
-                        else
+                        } else {
                             painter.blit(cell_rect.location(), *bitmap, bitmap->rect());
+                        }
                     }
                 } else {
-                    Color text_color;
-                    if (is_selected_row)
-                        text_color = is_focused() ? palette().selection_text() : palette().inactive_selection_text();
-                    else
-                        text_color = model()->data(cell_index, Model::Role::ForegroundColor).to_color(palette().color(foreground_role()));
                     if (!is_selected_row) {
-                        auto cell_background_color = model()->data(cell_index, Model::Role::BackgroundColor);
+                        auto cell_background_color = cell_index.data(ModelRole::BackgroundColor);
                         if (cell_background_color.is_valid())
                             painter.fill_rect(cell_rect_for_fill, cell_background_color.to_color(background_color));
                     }
-                    auto text_alignment = model()->data(cell_index, Model::Role::TextAlignment).to_text_alignment(Gfx::TextAlignment::CenterLeft);
-                    painter.draw_text(cell_rect, data.to_string(), font_for_index(cell_index), text_alignment, text_color, Gfx::TextElision::Right);
+
+                    auto text_alignment = cell_index.data(ModelRole::TextAlignment).to_text_alignment(Gfx::TextAlignment::CenterLeft);
+                    draw_item_text(painter, cell_index, is_selected_row, cell_rect, data.to_string(), font_for_index(cell_index), text_alignment, Gfx::TextElision::Right);
                 }
             }
-            x_offset += column_width + horizontal_padding() * 2;
+
+            if (m_grid_style == GridStyle::Horizontal || m_grid_style == GridStyle::Both)
+                painter.draw_line(cell_rect_for_fill.bottom_left(), cell_rect_for_fill.bottom_right(), palette().ruler());
+            if (m_grid_style == GridStyle::Vertical || m_grid_style == GridStyle::Both)
+                painter.draw_line(cell_rect_for_fill.top_right(), cell_rect_for_fill.bottom_right(), palette().ruler());
+
+            if (selection_behavior() == SelectionBehavior::SelectItems && cell_index == cursor_index())
+                painter.draw_rect(cell_rect_for_fill, palette().text_cursor());
+
+            x += column_width + horizontal_padding() * 2;
+        }
+
+        if (is_focused() && selection_behavior() == SelectionBehavior::SelectRows && row_index == cursor_index().row()) {
+            painter.draw_rect(row_rect, widget_background_color);
+            painter.draw_focus_rect(row_rect, palette().focus_outline());
         }
         ++painted_item_index;
     };
 
-    Gfx::IntRect unpainted_rect(0, header_height() + painted_item_index * item_height(), exposed_width, height());
+    Gfx::IntRect unpainted_rect(0, column_header().height() + painted_item_index * row_height(), exposed_width, height());
     if (fill_with_background_color())
         painter.fill_rect(unpainted_rect, widget_background_color);
-
-    // Untranslate the painter vertically and do the column headers.
-    painter.translate(0, vertical_scrollbar().value());
-    if (headers_visible())
-        paint_headers(painter);
 }
 
 void TableView::keydown_event(KeyEvent& event)
 {
     if (!model())
+        return AbstractTableView::keydown_event(event);
+
+    AbstractTableView::keydown_event(event);
+
+    if (event.is_accepted())
+        return;
+
+    auto is_delete = event.key() == Key_Delete || event.key() == Key_Backspace;
+    if (is_editable() && edit_triggers() & EditTrigger::AnyKeyPressed && (event.code_point() != 0 || is_delete)) {
+        begin_editing(cursor_index());
+        if (m_editing_delegate) {
+            if (is_delete)
+                m_editing_delegate->set_value(event.key() == Key_Delete ? String {} : String::empty());
+            else
+                m_editing_delegate->set_value(event.text());
+        }
+    }
+}
+
+void TableView::move_cursor(CursorMovement movement, SelectionUpdate selection_update)
+{
+    if (!model())
         return;
     auto& model = *this->model();
-    if (event.key() == KeyCode::Key_Return) {
-        activate_selected();
-        return;
+    switch (movement) {
+    case CursorMovement::Left:
+        move_cursor_relative(0, -1, selection_update);
+        break;
+    case CursorMovement::Right:
+        move_cursor_relative(0, 1, selection_update);
+        break;
+    case CursorMovement::Up:
+        move_cursor_relative(-1, 0, selection_update);
+        break;
+    case CursorMovement::Down:
+        move_cursor_relative(1, 0, selection_update);
+        break;
+    case CursorMovement::Home: {
+        auto index = model.index(0, 0);
+        set_cursor(index, selection_update);
+        break;
     }
-    if (event.key() == KeyCode::Key_Up) {
-        move_selection(-1);
-        return;
+    case CursorMovement::End: {
+        auto index = model.index(model.row_count() - 1, 0);
+        set_cursor(index, selection_update);
+        break;
     }
-    if (event.key() == KeyCode::Key_Down) {
-        move_selection(1);
-        return;
-    }
-    if (event.key() == KeyCode::Key_PageUp) {
-        int items_per_page = visible_content_rect().height() / item_height();
+    case CursorMovement::PageUp: {
+        int items_per_page = visible_content_rect().height() / row_height();
         auto old_index = selection().first();
         auto new_index = model.index(max(0, old_index.row() - items_per_page), old_index.column());
-        if (model.is_valid(new_index)) {
-            selection().set(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
+        if (model.is_valid(new_index))
+            set_cursor(new_index, selection_update);
+        break;
     }
-    if (event.key() == KeyCode::Key_PageDown) {
-        int items_per_page = visible_content_rect().height() / item_height();
+    case CursorMovement::PageDown: {
+        int items_per_page = visible_content_rect().height() / row_height();
         auto old_index = selection().first();
         auto new_index = model.index(min(model.row_count() - 1, old_index.row() + items_per_page), old_index.column());
-        if (model.is_valid(new_index)) {
-            selection().set(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
+        if (model.is_valid(new_index))
+            set_cursor(new_index, selection_update);
+        break;
     }
-    return Widget::keydown_event(event);
+    }
+}
+
+void TableView::set_grid_style(GridStyle style)
+{
+    if (m_grid_style == style)
+        return;
+    m_grid_style = style;
+    update();
 }
 
 }

@@ -61,20 +61,25 @@ public:
 
     KResult append(int type, FlatPtr arg1, FlatPtr arg2);
 
-    size_t capacity() const { return m_buffer.size() / sizeof(PerformanceEvent); }
+    size_t capacity() const
+    {
+        if (!m_buffer)
+            return 0;
+        return m_buffer->size() / sizeof(PerformanceEvent);
+    }
     size_t count() const { return m_count; }
     const PerformanceEvent& at(size_t index) const
     {
         return const_cast<PerformanceEventBuffer&>(*this).at(index);
     }
 
-    KBuffer to_json(pid_t, const String& executable_path) const;
+    OwnPtr<KBuffer> to_json(ProcessID, const String& executable_path) const;
 
 private:
     PerformanceEvent& at(size_t index);
 
     size_t m_count { 0 };
-    KBuffer m_buffer;
+    OwnPtr<KBuffer> m_buffer;
 };
 
 }

@@ -27,6 +27,7 @@
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
@@ -34,10 +35,27 @@
 int main(int argc, char** argv)
 {
     auto app = GUI::Application::construct(argc, argv);
+    auto app_icon = GUI::Icon::default_icon("app-hello-world");
+
+    if (pledge("stdio rpath shared_buffer", nullptr) < 0) {
+        perror("pledge");
+        return 1;
+    }
+
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(nullptr, nullptr) < 0) {
+        perror("unveil");
+        return 1;
+    }
 
     auto window = GUI::Window::construct();
-    window->set_rect(100, 100, 240, 160);
+    window->resize(240, 160);
     window->set_title("Hello World!");
+    window->set_icon(app_icon.bitmap_for_size(16));
 
     auto& main_widget = window->set_main_widget<GUI::Widget>();
     main_widget.set_fill_with_background_color(true);
@@ -50,8 +68,6 @@ int main(int argc, char** argv)
 
     auto& button = main_widget.add<GUI::Button>();
     button.set_text("Good-bye");
-    button.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    button.set_preferred_size(0, 20);
     button.on_click = [&](auto) {
         app->quit();
     };

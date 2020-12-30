@@ -90,7 +90,7 @@ void WindowServerConnection::handle(const Messages::WindowClient::Paint& message
 void WindowServerConnection::handle(const Messages::WindowClient::WindowResized& message)
 {
     if (auto* window = Window::from_window_id(message.window_id())) {
-        Core::EventLoop::current().post_event(*window, make<ResizeEvent>(message.old_rect().size(), message.new_rect().size()));
+        Core::EventLoop::current().post_event(*window, make<ResizeEvent>(message.new_rect().size()));
     }
 }
 
@@ -165,16 +165,21 @@ void WindowServerConnection::handle(const Messages::WindowClient::KeyDown& messa
 #endif
     }
 
-    if (!action) {
+    // NOTE: Application-global shortcuts are ignored while a modal window is up.
+    if (!action && !window->is_modal()) {
         action = Application::the()->action_for_key_event(*key_event);
 #ifdef KEYBOARD_SHORTCUTS_DEBUG
         dbg() << "  > Asked application, got action: " << action;
 #endif
     }
 
-    if (action && action->is_enabled()) {
-        action->activate();
-        return;
+    if (action) {
+        if (action->is_enabled()) {
+            action->activate();
+            return;
+        }
+        if (action->swallow_key_event_when_disabled())
+            return;
     }
 
     bool focused_widget_accepts_emoji_input = window->focused_widget() && window->focused_widget()->accepts_emoji_input();
@@ -204,7 +209,7 @@ void WindowServerConnection::handle(const Messages::WindowClient::KeyUp& message
     Core::EventLoop::current().post_event(*window, move(key_event));
 }
 
-MouseButton to_gmousebutton(u32 button)
+static MouseButton to_gmousebutton(u32 button)
 {
     switch (button) {
     case 0:
@@ -307,8 +312,7 @@ void WindowServerConnection::handle(const Messages::WindowClient::AsyncSetWallpa
 void WindowServerConnection::handle(const Messages::WindowClient::DragDropped& message)
 {
     if (auto* window = Window::from_window_id(message.window_id())) {
-        auto mime_data = Core::MimeData::construct();
-        mime_data->set_data(message.data_type(), message.data().to_byte_buffer());
+        auto mime_data = Core::MimeData::construct(message.mime_data());
         Core::EventLoop::current().post_event(*window, make<DropEvent>(message.mouse_position(), message.text(), mime_data));
     }
 }

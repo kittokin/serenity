@@ -1,0 +1,11 @@
+interface HTMLElement : Element {
+
+    [Reflect] attribute DOMString title;
+    [Reflect] attribute DOMString lang;
+
+    [Reflect] attribute boolean hidden;
+
+    attribute DOMString contentEditable;
+
+    [LegacyNullToEmptyString] attribute DOMString innerText;
+};

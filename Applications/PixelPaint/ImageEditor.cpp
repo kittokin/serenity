@@ -28,14 +28,17 @@
 #include "Image.h"
 #include "Layer.h"
 #include "Tool.h"
+#include <LibGUI/Command.h>
 #include <LibGUI/Painter.h>
-#include <LibGfx/FloatRect.h>
 #include <LibGfx/Palette.h>
+#include <LibGfx/Rect.h>
 
 namespace PixelPaint {
 
 ImageEditor::ImageEditor()
+    : m_undo_stack(make<GUI::UndoStack>())
 {
+    set_focus_policy(GUI::FocusPolicy::StrongFocus);
 }
 
 ImageEditor::~ImageEditor()
@@ -50,10 +53,46 @@ void ImageEditor::set_image(RefPtr<Image> image)
         m_image->remove_client(*this);
 
     m_image = move(image);
+    m_active_layer = nullptr;
+    m_undo_stack = make<GUI::UndoStack>();
+    m_undo_stack->push(make<ImageUndoCommand>(*m_image));
     update();
+    relayout();
 
     if (m_image)
         m_image->add_client(*this);
+}
+
+void ImageEditor::did_complete_action()
+{
+    if (!m_image)
+        return;
+    m_undo_stack->finalize_current_combo();
+    m_undo_stack->push(make<ImageUndoCommand>(*m_image));
+}
+
+bool ImageEditor::undo()
+{
+    if (!m_image)
+        return false;
+    if (m_undo_stack->can_undo()) {
+        m_undo_stack->undo();
+        layers_did_change();
+        return true;
+    }
+    return false;
+}
+
+bool ImageEditor::redo()
+{
+    if (!m_image)
+        return false;
+    if (m_undo_stack->can_redo()) {
+        m_undo_stack->redo();
+        layers_did_change();
+        return true;
+    }
+    return false;
 }
 
 void ImageEditor::paint_event(GUI::PaintEvent& event)
@@ -64,7 +103,7 @@ void ImageEditor::paint_event(GUI::PaintEvent& event)
     painter.add_clip_rect(event.rect());
     painter.add_clip_rect(frame_inner_rect());
 
-    painter.fill_rect_with_checkerboard(rect(), { 8, 8 }, palette().base().darkened(0.9), palette().base());
+    Gfx::StylePainter::paint_transparency_grid(painter, rect(), palette());
 
     if (m_image) {
         painter.draw_rect(m_editor_image_rect.inflated(2, 2), Color::Black);
@@ -338,6 +377,8 @@ Layer* ImageEditor::layer_at_editor_position(const Gfx::IntPoint& editor_positio
     auto image_position = editor_position_to_image_position(editor_position);
     for (ssize_t i = m_image->layer_count() - 1; i >= 0; --i) {
         auto& layer = m_image->layer(i);
+        if (!layer.is_visible())
+            continue;
         if (layer.relative_rect().contains(Gfx::IntPoint(image_position.x(), image_position.y())))
             return const_cast<Layer*>(&layer);
     }
@@ -366,6 +407,11 @@ void ImageEditor::relayout()
 void ImageEditor::image_did_change()
 {
     update();
+}
+
+void ImageEditor::image_select_layer(Layer* layer)
+{
+    set_active_layer(layer);
 }
 
 }

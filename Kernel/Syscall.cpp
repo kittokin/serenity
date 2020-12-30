@@ -24,10 +24,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <Kernel/API/Syscall.h>
 #include <Kernel/Arch/i386/CPU.h>
 #include <Kernel/Process.h>
 #include <Kernel/Random.h>
-#include <Kernel/API/Syscall.h>
 #include <Kernel/ThreadTracer.h>
 #include <Kernel/VM/MemoryManager.h>
 
@@ -36,6 +36,7 @@ namespace Kernel {
 extern "C" void syscall_handler(TrapFrame*);
 extern "C" void syscall_asm_entry();
 
+// clang-format off
 asm(
     ".globl syscall_asm_entry\n"
     "syscall_asm_entry:\n"
@@ -63,6 +64,7 @@ asm(
     "    call syscall_handler \n"
     "    movl %ebx, 0(%esp) \n" // push pointer to TrapFrame
     "    jmp common_trap_exit \n");
+// clang-format on
 
 namespace Syscall {
 
@@ -76,13 +78,11 @@ void initialize()
 
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 typedef int (Process::*Handler)(u32, u32, u32);
-#define __ENUMERATE_REMOVED_SYSCALL(x) nullptr,
 #define __ENUMERATE_SYSCALL(x) reinterpret_cast<Handler>(&Process::sys$##x),
 static Handler s_syscall_table[] = {
-    ENUMERATE_SYSCALLS
+    ENUMERATE_SYSCALLS(__ENUMERATE_SYSCALL)
 };
 #undef __ENUMERATE_SYSCALL
-#undef __ENUMERATE_REMOVED_SYSCALL
 
 int handle(RegisterState& regs, u32 function, u32 arg1, u32 arg2, u32 arg3)
 {
@@ -93,11 +93,18 @@ int handle(RegisterState& regs, u32 function, u32 arg1, u32 arg2, u32 arg3)
 
     if (function == SC_exit || function == SC_exit_thread) {
         // These syscalls need special handling since they never return to the caller.
+
+        if (auto* tracer = process.tracer(); tracer && tracer->is_tracing_syscalls()) {
+            regs.eax = 0;
+            tracer->set_trace_syscalls(false);
+            process.tracer_trap(*current_thread, regs); // this triggers SIGTRAP and stops the thread!
+        }
+
         cli();
         if (function == SC_exit)
             process.sys$exit((int)arg1);
         else
-            process.sys$exit_thread((void*)arg1);
+            process.sys$exit_thread(arg1);
         ASSERT_NOT_REACHED();
         return 0;
     }
@@ -109,12 +116,12 @@ int handle(RegisterState& regs, u32 function, u32 arg1, u32 arg2, u32 arg3)
         return process.sys$sigreturn(regs);
 
     if (function >= Function::__Count) {
-        dbg() << process << ": Unknown syscall %u requested (" << arg1 << ", " << arg2 << ", " << arg3 << ")";
+        dbgln("Unknown syscall {} requested ({:08x}, {:08x}, {:08x})", function, arg1, arg2, arg3);
         return -ENOSYS;
     }
 
     if (s_syscall_table[function] == nullptr) {
-        dbg() << process << ": Null syscall " << function << " requested: \"" << to_string((Function)function) << "\", you probably need to rebuild this program.";
+        dbgln("Null syscall {} requested, you probably need to rebuild this program!", function);
         return -ENOSYS;
     }
     return (process.*(s_syscall_table[function]))(arg1, arg2, arg3);
@@ -122,48 +129,61 @@ int handle(RegisterState& regs, u32 function, u32 arg1, u32 arg2, u32 arg3)
 
 }
 
+constexpr int RandomByteBufferSize = 256;
+u8 g_random_byte_buffer[RandomByteBufferSize];
+int g_random_byte_buffer_offset = RandomByteBufferSize;
+
 void syscall_handler(TrapFrame* trap)
 {
     auto& regs = *trap->regs;
-    // Special handling of the "gettid" syscall since it's extremely hot.
-    // FIXME: Remove this hack once userspace locks stop calling it so damn much.
     auto current_thread = Thread::current();
     auto& process = current_thread->process();
-    if (regs.eax == SC_gettid) {
-        regs.eax = process.sys$gettid();
-        current_thread->did_syscall();
-        return;
+
+    if (auto tracer = process.tracer(); tracer && tracer->is_tracing_syscalls()) {
+        tracer->set_trace_syscalls(false);
+        process.tracer_trap(*current_thread, regs); // this triggers SIGTRAP and stops the thread!
     }
 
-    if (current_thread->tracer() && current_thread->tracer()->is_tracing_syscalls()) {
-        current_thread->tracer()->set_trace_syscalls(false);
-        current_thread->tracer_trap(regs);
-    }
+    current_thread->yield_if_stopped();
 
     // Make sure SMAP protection is enabled on syscall entry.
     clac();
 
     // Apply a random offset in the range 0-255 to the stack pointer,
     // to make kernel stacks a bit less deterministic.
-    auto* ptr = (char*)__builtin_alloca(get_fast_random<u8>());
+    // Since this is very hot code, request random data in chunks instead of
+    // one byte at a time. This is a noticeable speedup.
+    if (g_random_byte_buffer_offset == RandomByteBufferSize) {
+        get_fast_random_bytes(g_random_byte_buffer, RandomByteBufferSize);
+        g_random_byte_buffer_offset = 0;
+    }
+    auto* ptr = (char*)__builtin_alloca(g_random_byte_buffer[g_random_byte_buffer_offset++]);
     asm volatile(""
                  : "=m"(*ptr));
 
+    static constexpr u32 iopl_mask = 3u << 12;
+
+    if ((regs.eflags & (iopl_mask)) != 0) {
+        dbgln("Syscall from process with IOPL != 0");
+        handle_crash(regs, "Non-zero IOPL on syscall entry", SIGSEGV);
+        ASSERT_NOT_REACHED();
+    }
+
     if (!MM.validate_user_stack(process, VirtualAddress(regs.userspace_esp))) {
-        dbg() << "Invalid stack pointer: " << String::format("%p", regs.userspace_esp);
+        dbgln("Invalid stack pointer: {:p}", regs.userspace_esp);
         handle_crash(regs, "Bad stack on syscall entry", SIGSTKFLT);
         ASSERT_NOT_REACHED();
     }
 
-    auto* calling_region = MM.region_from_vaddr(process, VirtualAddress(regs.eip));
+    auto* calling_region = MM.find_region_from_vaddr(process, VirtualAddress(regs.eip));
     if (!calling_region) {
-        dbg() << "Syscall from " << String::format("%p", regs.eip) << " which has no region";
+        dbgln("Syscall from {:p} which has no associated region", regs.eip);
         handle_crash(regs, "Syscall from unknown region", SIGSEGV);
         ASSERT_NOT_REACHED();
     }
 
     if (calling_region->is_writable()) {
-        dbg() << "Syscall from writable memory at " << String::format("%p", regs.eip);
+        dbgln("Syscall from writable memory at {:p}", regs.eip);
         handle_crash(regs, "Syscall from writable memory", SIGSEGV);
         ASSERT_NOT_REACHED();
     }
@@ -173,20 +193,23 @@ void syscall_handler(TrapFrame* trap)
     u32 arg1 = regs.edx;
     u32 arg2 = regs.ecx;
     u32 arg3 = regs.ebx;
-    regs.eax = (u32)Syscall::handle(regs, function, arg1, arg2, arg3);
-
-    if (current_thread->tracer() && current_thread->tracer()->is_tracing_syscalls()) {
-        current_thread->tracer()->set_trace_syscalls(false);
-        current_thread->tracer_trap(regs);
-    }
+    regs.eax = Syscall::handle(regs, function, arg1, arg2, arg3);
 
     process.big_lock().unlock();
+
+    if (auto tracer = process.tracer(); tracer && tracer->is_tracing_syscalls()) {
+        tracer->set_trace_syscalls(false);
+        process.tracer_trap(*current_thread, regs); // this triggers SIGTRAP and stops the thread!
+    }
+
+    current_thread->yield_if_stopped();
+
+    current_thread->check_dispatch_pending_signal();
 
     // Check if we're supposed to return to userspace or just die.
     current_thread->die_if_needed();
 
-    if (current_thread->has_unmasked_pending_signals())
-        (void)current_thread->block<Thread::SemiPermanentBlocker>(Thread::SemiPermanentBlocker::Reason::Signal);
+    ASSERT(!g_scheduler_lock.own_lock());
 }
 
 }

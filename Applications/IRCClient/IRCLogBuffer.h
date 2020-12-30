@@ -47,13 +47,12 @@ public:
 
     void add_message(char prefix, const String& name, const String& text, Color = Color::Black);
     void add_message(const String& text, Color = Color::Black);
-    void dump() const;
 
-    const Web::Document& document() const { return *m_document; }
-    Web::Document& document() { return *m_document; }
+    const Web::DOM::Document& document() const { return *m_document; }
+    Web::DOM::Document& document() { return *m_document; }
 
 private:
     IRCLogBuffer();
-    RefPtr<Web::Document> m_document;
-    RefPtr<Web::Element> m_container_element;
+    RefPtr<Web::DOM::Document> m_document;
+    RefPtr<Web::DOM::Element> m_container_element;
 };

@@ -28,44 +28,59 @@
 #include <LibGUI/AboutDialog.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/MenuBar.h>
 #include <LibGUI/Window.h>
 #include <stdio.h>
+#include <unistd.h>
 
 int main(int argc, char** argv)
 {
     auto app = GUI::Application::construct(argc, argv);
+    auto app_icon = GUI::Icon::default_icon("app-solitaire");
 
     if (pledge("stdio rpath shared_buffer", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(nullptr, nullptr) < 0) {
+        perror("unveil");
+        return 1;
+    }
+
     auto window = GUI::Window::construct();
 
     window->set_resizable(false);
-    window->set_rect(300, 100, SolitaireWidget::width, SolitaireWidget::height);
+    window->resize(SolitaireWidget::width, SolitaireWidget::height);
 
     auto widget = SolitaireWidget::construct(window, [&](uint32_t score) {
-        window->set_title(String::format("Score: %u - Solitaire", score));
+        window->set_title(String::formatted("Score: {} - Solitaire", score));
     });
 
     auto menubar = GUI::MenuBar::construct();
     auto& app_menu = menubar->add_menu("Solitaire");
 
-    app_menu.add_action(GUI::Action::create("Restart game", [&](auto&) { widget->setup(); }));
+    app_menu.add_action(GUI::Action::create("New game", { Mod_None, Key_F2 }, [&](auto&) {
+        widget->setup();
+    }));
     app_menu.add_separator();
     app_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); }));
 
     auto& help_menu = menubar->add_menu("Help");
     help_menu.add_action(GUI::Action::create("About", [&](auto&) {
-        GUI::AboutDialog::show("Solitaire", Gfx::Bitmap::load_from_file("/res/icons/32x32/app-solitaire.png"), window);
+        GUI::AboutDialog::show("Solitaire", app_icon.bitmap_for_size(32), window);
     }));
 
     app->set_menubar(move(menubar));
     window->set_main_widget(widget);
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-solitaire.png"));
+    window->set_icon(app_icon.bitmap_for_size(16));
     window->show();
     widget->setup();
 

@@ -30,6 +30,7 @@
 #include "Parser.h"
 #include <AK/CircularQueue.h>
 #include <AK/HashMap.h>
+#include <AK/NonnullOwnPtrVector.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/Types.h>
@@ -44,8 +45,10 @@
     __ENUMERATE_SHELL_BUILTIN(cd)      \
     __ENUMERATE_SHELL_BUILTIN(cdh)     \
     __ENUMERATE_SHELL_BUILTIN(pwd)     \
+    __ENUMERATE_SHELL_BUILTIN(exec)    \
     __ENUMERATE_SHELL_BUILTIN(exit)    \
     __ENUMERATE_SHELL_BUILTIN(export)  \
+    __ENUMERATE_SHELL_BUILTIN(glob)    \
     __ENUMERATE_SHELL_BUILTIN(unset)   \
     __ENUMERATE_SHELL_BUILTIN(history) \
     __ENUMERATE_SHELL_BUILTIN(umask)   \
@@ -53,15 +56,19 @@
     __ENUMERATE_SHELL_BUILTIN(pushd)   \
     __ENUMERATE_SHELL_BUILTIN(popd)    \
     __ENUMERATE_SHELL_BUILTIN(setopt)  \
+    __ENUMERATE_SHELL_BUILTIN(shift)   \
     __ENUMERATE_SHELL_BUILTIN(time)    \
     __ENUMERATE_SHELL_BUILTIN(jobs)    \
     __ENUMERATE_SHELL_BUILTIN(disown)  \
     __ENUMERATE_SHELL_BUILTIN(fg)      \
-    __ENUMERATE_SHELL_BUILTIN(bg)
+    __ENUMERATE_SHELL_BUILTIN(bg)      \
+    __ENUMERATE_SHELL_BUILTIN(wait)
 
 #define ENUMERATE_SHELL_OPTIONS()                                                                                    \
     __ENUMERATE_SHELL_OPTION(inline_exec_keep_empty_segments, false, "Keep empty segments in inline execute $(...)") \
     __ENUMERATE_SHELL_OPTION(verbose, false, "Announce every command that is about to be executed")
+
+namespace Shell {
 
 class Shell;
 
@@ -72,13 +79,20 @@ public:
     constexpr static auto local_init_file_path = "~/.shellrc";
     constexpr static auto global_init_file_path = "/etc/shellrc";
 
+    bool should_format_live() const { return m_should_format_live; }
+    void set_live_formatting(bool value) { m_should_format_live = value; }
+
+    void setup_signals();
+
     int run_command(const StringView&);
+    bool is_runnable(const StringView&);
     RefPtr<Job> run_command(const AST::Command&);
-    Vector<RefPtr<Job>> run_commands(Vector<AST::Command>&);
+    NonnullRefPtrVector<Job> run_commands(Vector<AST::Command>&);
     bool run_file(const String&, bool explicitly_invoked = true);
-    bool run_builtin(int argc, const char** argv, int& retval);
+    bool run_builtin(const AST::Command&, const NonnullRefPtrVector<AST::Rewiring>&, int& retval);
     bool has_builtin(const StringView&) const;
     void block_on_job(RefPtr<Job>);
+    void block_on_pipeline(RefPtr<AST::Pipeline>);
     String prompt() const;
 
     static String expand_tilde(const String&);
@@ -88,17 +102,33 @@ public:
     String resolve_path(String) const;
     String resolve_alias(const String&) const;
 
+    RefPtr<AST::Value> get_argument(size_t);
     RefPtr<AST::Value> lookup_local_variable(const String&);
     String local_variable_or(const String&, const String&);
-    void set_local_variable(const String&, RefPtr<AST::Value>);
-    void unset_local_variable(const String&);
+    void set_local_variable(const String&, RefPtr<AST::Value>, bool only_in_current_frame = false);
+    void unset_local_variable(const String&, bool only_in_current_frame = false);
+
+    void define_function(String name, Vector<String> argnames, RefPtr<AST::Node> body);
+    bool has_function(const String&);
+    bool invoke_function(const AST::Command&, int& retval);
+
+    String format(const StringView&, ssize_t& cursor) const;
+
+    RefPtr<Line::Editor> editor() const { return m_editor; }
 
     struct LocalFrame {
+        LocalFrame(const String& name, HashMap<String, RefPtr<AST::Value>> variables)
+            : name(name)
+            , local_variables(move(variables))
+        {
+        }
+
+        String name;
         HashMap<String, RefPtr<AST::Value>> local_variables;
     };
 
     struct Frame {
-        Frame(Vector<LocalFrame>& frames, const LocalFrame& frame)
+        Frame(NonnullOwnPtrVector<LocalFrame>& frames, const LocalFrame& frame)
             : frames(frames)
             , frame(frame)
         {
@@ -108,12 +138,12 @@ public:
         void leak_frame() { should_destroy_frame = false; }
 
     private:
-        Vector<LocalFrame>& frames;
+        NonnullOwnPtrVector<LocalFrame>& frames;
         const LocalFrame& frame;
         bool should_destroy_frame { true };
     };
 
-    [[nodiscard]] Frame push_frame();
+    [[nodiscard]] Frame push_frame(String name);
     void pop_frame();
 
     static String escape_token(const String& token);
@@ -123,14 +153,14 @@ public:
     static Vector<StringView> split_path(const StringView&);
 
     void highlight(Line::Editor&) const;
-    Vector<Line::CompletionSuggestion> complete(const Line::Editor&);
+    Vector<Line::CompletionSuggestion> complete();
     Vector<Line::CompletionSuggestion> complete_path(const String& base, const String&, size_t offset);
     Vector<Line::CompletionSuggestion> complete_program_name(const String&, size_t offset);
     Vector<Line::CompletionSuggestion> complete_variable(const String&, size_t offset);
     Vector<Line::CompletionSuggestion> complete_user(const String&, size_t offset);
     Vector<Line::CompletionSuggestion> complete_option(const String&, const String&, size_t offset);
 
-    void restore_stdin();
+    void restore_ios();
 
     u64 find_last_job_id() const;
     const Job* find_job(u64 id);
@@ -138,11 +168,11 @@ public:
     void kill_job(const Job*, int sig);
 
     String get_history_path();
-    void load_history();
-    void save_history();
     void print_path(const String& path);
 
     bool read_single_line();
+
+    void notify_child_event();
 
     struct termios termios;
     struct termios default_termios;
@@ -163,12 +193,39 @@ public:
     int last_return_code { 0 };
     Vector<String> directory_stack;
     CircularQueue<String, 8> cd_history; // FIXME: have a configurable cd history length
-    HashMap<u64, RefPtr<Job>> jobs;
+    HashMap<u64, NonnullRefPtr<Job>> jobs;
     Vector<String, 256> cached_path;
+
+    String current_script;
 
     enum ShellEventType {
         ReadLine,
     };
+
+    enum class ShellError {
+        None,
+        InternalControlFlowBreak,
+        InternalControlFlowContinue,
+        EvaluatedSyntaxError,
+        NonExhaustiveMatchRules,
+        InvalidGlobError,
+    };
+
+    void raise_error(ShellError kind, String description)
+    {
+        m_error = kind;
+        m_error_description = move(description);
+    }
+    bool has_error(ShellError err) const { return m_error == err; }
+    const String& error_description() const { return m_error_description; }
+    ShellError take_error()
+    {
+        auto err = m_error;
+        m_error = ShellError::None;
+        m_error_description = {};
+        return err;
+    }
+    void possibly_print_error() const;
 
 #define __ENUMERATE_SHELL_OPTION(name, default_, description) \
     bool name { default_ };
@@ -180,16 +237,24 @@ public:
 #undef __ENUMERATE_SHELL_OPTION
 
 private:
+    Shell(Line::Editor&);
     Shell();
     virtual ~Shell() override;
 
-    // ^Core::Object
-    virtual void save_to(JsonObject&) override;
+    // FIXME: Port to Core::Property
+    void save_to(JsonObject&);
+    void bring_cursor_to_beginning_of_a_line() const;
 
     void cache_path();
+    void add_entry_to_cache(const String&);
     void stop_all_jobs();
     const Job* m_current_job { nullptr };
     LocalFrame* find_frame_containing_local_variable(const String& name);
+
+    void run_tail(RefPtr<Job>);
+    void run_tail(const AST::Command&, const AST::NodeWithAction&, int head_exit_code);
+
+    [[noreturn]] void execute_process(Vector<const char*>&& argv);
 
     virtual void custom_event(Core::CustomEvent&) override;
 
@@ -208,16 +273,39 @@ private:
 #undef __ENUMERATE_SHELL_BUILTIN
     };
 
-    StringBuilder m_complete_line_builder;
     bool m_should_ignore_jobs_on_next_exit { false };
     pid_t m_pid { 0 };
 
-    Vector<LocalFrame> m_local_frames;
+    struct ShellFunction {
+        String name;
+        Vector<String> arguments;
+        RefPtr<AST::Node> body;
+    };
+
+    HashMap<String, ShellFunction> m_functions;
+    NonnullOwnPtrVector<LocalFrame> m_local_frames;
+    NonnullRefPtrVector<AST::Redirection> m_global_redirections;
 
     HashMap<String, String> m_aliases;
+    bool m_is_interactive { true };
+    bool m_is_subshell { false };
+    bool m_should_reinstall_signal_handlers { true };
+
+    ShellError m_error { ShellError::None };
+    String m_error_description;
+
+    bool m_should_format_live { false };
+
+    RefPtr<Line::Editor> m_editor;
+
+    bool m_default_constructed { false };
+
+    mutable bool m_last_continuation_state { false }; // false == not needed.
 };
 
 static constexpr bool is_word_character(char c)
 {
     return c == '_' || (c <= 'Z' && c >= 'A') || (c <= 'z' && c >= 'a');
+}
+
 }

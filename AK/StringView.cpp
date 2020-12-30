@@ -147,17 +147,9 @@ bool StringView::starts_with(char ch) const
     return ch == characters_without_null_termination()[0];
 }
 
-bool StringView::starts_with(const StringView& str) const
+bool StringView::starts_with(const StringView& str, CaseSensitivity case_sensitivity) const
 {
-    if (str.is_empty())
-        return true;
-    if (is_empty())
-        return false;
-    if (str.length() > length())
-        return false;
-    if (characters_without_null_termination() == str.characters_without_null_termination())
-        return true;
-    return !memcmp(characters_without_null_termination(), str.characters_without_null_termination(), str.length());
+    return StringUtils::starts_with(*this, str, case_sensitivity);
 }
 
 bool StringView::ends_with(char ch) const
@@ -170,6 +162,11 @@ bool StringView::ends_with(char ch) const
 bool StringView::ends_with(const StringView& str, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::ends_with(*this, str, case_sensitivity);
+}
+
+bool StringView::matches(const StringView& mask, Vector<MaskSpan>& mask_spans, CaseSensitivity case_sensitivity) const
+{
+    return StringUtils::matches(*this, mask, case_sensitivity, &mask_spans);
 }
 
 bool StringView::matches(const StringView& mask, CaseSensitivity case_sensitivity) const
@@ -186,6 +183,11 @@ bool StringView::contains(char needle) const
     return false;
 }
 
+bool StringView::contains(const StringView& needle, CaseSensitivity case_sensitivity) const
+{
+    return StringUtils::contains(*this, needle, case_sensitivity);
+}
+
 bool StringView::equals_ignoring_case(const StringView& other) const
 {
     return StringUtils::equals_ignoring_case(*this, other);
@@ -195,6 +197,11 @@ StringView StringView::substring_view(size_t start, size_t length) const
 {
     ASSERT(start + length <= m_length);
     return { m_characters + start, length };
+}
+StringView StringView::substring_view(size_t start) const
+{
+    ASSERT(start <= m_length);
+    return { m_characters + start, length() - start };
 }
 
 StringView StringView::substring_view_starting_from_substring(const StringView& substring) const
@@ -215,15 +222,27 @@ StringView StringView::substring_view_starting_after_substring(const StringView&
     return { remaining_characters, remaining_length };
 }
 
-Optional<int> StringView::to_int() const
+template<typename T>
+Optional<T> StringView::to_int() const
 {
-    return StringUtils::convert_to_int(*this);
+    return StringUtils::convert_to_int<T>(*this);
 }
 
-Optional<unsigned> StringView::to_uint() const
+template Optional<i8> StringView::to_int() const;
+template Optional<i16> StringView::to_int() const;
+template Optional<i32> StringView::to_int() const;
+template Optional<i64> StringView::to_int() const;
+
+template<typename T>
+Optional<T> StringView::to_uint() const
 {
-    return StringUtils::convert_to_uint(*this);
+    return StringUtils::convert_to_uint<T>(*this);
 }
+
+template Optional<u8> StringView::to_uint() const;
+template Optional<u16> StringView::to_uint() const;
+template Optional<u32> StringView::to_uint() const;
+template Optional<u64> StringView::to_uint() const;
 
 unsigned StringView::hash() const
 {

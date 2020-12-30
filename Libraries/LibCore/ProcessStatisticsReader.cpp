@@ -24,6 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/ByteBuffer.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
@@ -63,6 +64,7 @@ HashMap<pid_t, Core::ProcessStatistics> ProcessStatisticsReader::get_all()
         process.ppid = process_object.get("ppid").to_u32();
         process.nfds = process_object.get("nfds").to_u32();
         process.name = process_object.get("name").to_string();
+        process.executable = process_object.get("executable").to_string();
         process.tty = process_object.get("tty").to_string();
         process.pledge = process_object.get("pledge").to_string();
         process.veil = process_object.get("veil").to_string();
@@ -73,7 +75,6 @@ HashMap<pid_t, Core::ProcessStatistics> ProcessStatisticsReader::get_all()
         process.amount_clean_inode = process_object.get("amount_clean_inode").to_u32();
         process.amount_purgeable_volatile = process_object.get("amount_purgeable_volatile").to_u32();
         process.amount_purgeable_nonvolatile = process_object.get("amount_purgeable_nonvolatile").to_u32();
-        process.icon_id = process_object.get("icon_id").to_int();
 
         auto& thread_array = process_object.get_ptr("threads")->as_array();
         process.threads.ensure_capacity(thread_array.size());
@@ -84,7 +85,8 @@ HashMap<pid_t, Core::ProcessStatistics> ProcessStatisticsReader::get_all()
             thread.times_scheduled = thread_object.get("times_scheduled").to_u32();
             thread.name = thread_object.get("name").to_string();
             thread.state = thread_object.get("state").to_string();
-            thread.ticks = thread_object.get("ticks").to_u32();
+            thread.ticks_user = thread_object.get("ticks_user").to_u32();
+            thread.ticks_kernel = thread_object.get("ticks_kernel").to_u32();
             thread.cpu = thread_object.get("cpu").to_u32();
             thread.priority = thread_object.get("priority").to_u32();
             thread.effective_priority = thread_object.get("effective_priority").to_u32();

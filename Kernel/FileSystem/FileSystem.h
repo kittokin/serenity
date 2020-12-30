@@ -29,10 +29,12 @@
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
 #include <AK/String.h>
+#include <AK/StringView.h>
 #include <Kernel/FileSystem/InodeIdentifier.h>
 #include <Kernel/KResult.h>
 #include <Kernel/Lock.h>
 #include <Kernel/UnixTypes.h>
+#include <Kernel/UserOrKernelBuffer.h>
 
 namespace Kernel {
 
@@ -68,12 +70,10 @@ public:
 
     virtual KResult prepare_to_unmount() const { return KSuccess; }
 
-    // FIXME: This data structure is very clunky and unpleasant. Replace it with something nicer.
-    struct DirectoryEntry {
-        DirectoryEntry(const char* name, InodeIdentifier, u8 file_type);
-        DirectoryEntry(const char* name, size_t name_length, InodeIdentifier, u8 file_type);
-        char name[256];
-        size_t name_length { 0 };
+    struct DirectoryEntryView {
+        DirectoryEntryView(const StringView& name, InodeIdentifier, u8 file_type);
+
+        StringView name;
         InodeIdentifier inode;
         u8 file_type { 0 };
     };
@@ -83,6 +83,9 @@ public:
     size_t block_size() const { return m_block_size; }
 
     virtual bool is_file_backed() const { return false; }
+
+    // Converts file types that are used internally by the filesystem to DT_* types
+    virtual u8 internal_file_type_to_directory_entry_type(const DirectoryEntryView& entry) const { return entry.file_type; }
 
 protected:
     FS();

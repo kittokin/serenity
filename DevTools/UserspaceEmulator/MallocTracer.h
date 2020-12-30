@@ -26,47 +26,87 @@
 
 #pragma once
 
+#include "MmapRegion.h"
+#include "SoftMMU.h"
 #include <AK/Badge.h>
+#include <AK/HashMap.h>
+#include <AK/OwnPtr.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
 
 namespace UserspaceEmulator {
 
+class Emulator;
 class SoftCPU;
+
+struct Mallocation {
+    bool contains(FlatPtr a) const
+    {
+        return a >= address && a < (address + size);
+    }
+
+    FlatPtr address { 0 };
+    size_t size { 0 };
+    bool used { false };
+    bool freed { false };
+
+    Vector<FlatPtr> malloc_backtrace;
+    Vector<FlatPtr> free_backtrace;
+};
+
+class MallocRegionMetadata {
+public:
+    FlatPtr address { 0 };
+    size_t chunk_size { 0 };
+
+    size_t chunk_index_for_address(FlatPtr) const;
+    Mallocation& mallocation_for_address(FlatPtr) const;
+
+    Vector<Mallocation> mallocations;
+};
 
 class MallocTracer {
 public:
-    MallocTracer();
+    explicit MallocTracer(Emulator&);
 
     void target_did_malloc(Badge<SoftCPU>, FlatPtr address, size_t);
     void target_did_free(Badge<SoftCPU>, FlatPtr address);
+    void target_did_realloc(Badge<SoftCPU>, FlatPtr address, size_t);
 
-    void audit_read(FlatPtr address, size_t);
-    void audit_write(FlatPtr address, size_t);
+    void audit_read(const Region&, FlatPtr address, size_t);
+    void audit_write(const Region&, FlatPtr address, size_t);
 
     void dump_leak_report();
 
 private:
-    struct Mallocation {
-        bool contains(FlatPtr a) const
-        {
-            return a >= address && a < (address + size);
-        }
+    template<typename Callback>
+    void for_each_mallocation(Callback callback) const;
 
-        FlatPtr address { 0 };
-        size_t size { 0 };
-        bool freed { false };
-
-        Vector<FlatPtr> malloc_backtrace;
-        Vector<FlatPtr> free_backtrace;
-    };
-
+    Mallocation* find_mallocation(const Region&, FlatPtr);
     Mallocation* find_mallocation(FlatPtr);
+    Mallocation* find_mallocation_before(FlatPtr);
+    Mallocation* find_mallocation_after(FlatPtr);
     bool is_reachable(const Mallocation&) const;
 
-    Vector<Mallocation> m_mallocations;
+    Emulator& m_emulator;
 
     bool m_auditing_enabled { true };
 };
+
+ALWAYS_INLINE Mallocation* MallocTracer::find_mallocation(const Region& region, FlatPtr address)
+{
+    if (!region.is_mmap())
+        return nullptr;
+    if (!static_cast<const MmapRegion&>(region).is_malloc_block())
+        return nullptr;
+    auto* malloc_data = static_cast<MmapRegion&>(const_cast<Region&>(region)).malloc_metadata();
+    if (!malloc_data)
+        return nullptr;
+    auto& mallocation = malloc_data->mallocation_for_address(address);
+    if (!mallocation.used)
+        return nullptr;
+    ASSERT(mallocation.contains(address));
+    return &mallocation;
+}
 
 }

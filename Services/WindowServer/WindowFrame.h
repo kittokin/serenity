@@ -29,6 +29,7 @@
 #include <AK/Forward.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <LibGfx/Forward.h>
+#include <LibGfx/WindowTheme.h>
 
 namespace WindowServer {
 
@@ -46,6 +47,7 @@ public:
     void on_mouse_event(const MouseEvent&);
     void notify_window_rect_changed(const Gfx::IntRect& old_rect, const Gfx::IntRect& new_rect);
     void invalidate_title_bar();
+    void invalidate(Gfx::IntRect relative_rect);
 
     Gfx::IntRect title_bar_rect() const;
     Gfx::IntRect title_bar_icon_rect() const;
@@ -53,20 +55,18 @@ public:
 
     void did_set_maximized(Badge<Window>, bool);
 
+    void layout_buttons();
+    void set_button_icons();
+
 private:
     void paint_notification_frame(Gfx::Painter&);
     void paint_normal_frame(Gfx::Painter&);
 
-    struct FrameColors {
-        Color title_color;
-        Color border_color;
-        Color border_color2;
-    };
-
-    FrameColors compute_frame_colors() const;
+    Gfx::WindowTheme::WindowState window_state_for_theme() const;
 
     Window& m_window;
     NonnullOwnPtrVector<Button> m_buttons;
+    Button* m_close_button { nullptr };
     Button* m_maximize_button { nullptr };
     Button* m_minimize_button { nullptr };
 };

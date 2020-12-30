@@ -26,8 +26,8 @@
 
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/ImageWidget.h>
 #include <LibGUI/Label.h>
-#include <LibGUI/Image.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGfx/Font.h>
 #include <stdio.h>
@@ -116,28 +116,25 @@ void MessageBox::build()
     message_container.layout()->set_spacing(8);
 
     if (m_type != Type::None) {
-        auto& icon_image = message_container.add<Image>();
+        auto& icon_image = message_container.add<ImageWidget>();
         icon_image.set_bitmap(icon());
         if (icon())
             icon_width = icon()->width();
     }
 
     auto& label = message_container.add<Label>(m_text);
-    label.set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    label.set_preferred_size(text_width, 16);
+    label.set_fixed_height(16);
     if (m_type != Type::None)
         label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
 
     auto& button_container = widget.add<Widget>();
     button_container.set_layout<HorizontalBoxLayout>();
-    button_container.set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    button_container.set_preferred_size(0, 24);
+    button_container.set_fixed_height(24);
     button_container.layout()->set_spacing(8);
 
     auto add_button = [&](String label, Dialog::ExecResult result) {
         auto& button = button_container.add<Button>();
-        button.set_size_policy(SizePolicy::Fixed, SizePolicy::Fill);
-        button.set_preferred_size(96, 0);
+        button.set_fixed_width(96);
         button.set_text(label);
         button.on_click = [this, label, result](auto) {
             done(result);

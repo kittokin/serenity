@@ -31,6 +31,7 @@
 #include <AK/WeakPtr.h>
 #include <LibCore/Object.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Forward.h>
 #include <LibGfx/Rect.h>
 #include <WindowServer/Cursor.h>
@@ -83,7 +84,7 @@ public:
     Window& ensure_menu_window();
 
     Window* window_menu_of() { return m_window_menu_of; }
-    void set_window_menu_of(Window& window) { m_window_menu_of = window.make_weak_ptr(); }
+    void set_window_menu_of(Window& window) { m_window_menu_of = window; }
     bool is_window_menu_open() { return m_is_window_menu_open; }
     void set_window_menu_open(bool is_open) { m_is_window_menu_open = is_open; }
 
@@ -135,7 +136,7 @@ public:
 private:
     virtual void event(Core::Event&) override;
 
-    RefPtr<Gfx::Font> m_title_font { &Gfx::Font::default_font() };
+    RefPtr<Gfx::Font> m_title_font { &Gfx::FontDatabase::default_font() };
 
     void handle_mouse_move_event(const MouseEvent&);
     int visible_item_count() const;

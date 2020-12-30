@@ -4,8 +4,9 @@ set(SOURCES
     Heading.cpp
     List.cpp
     Paragraph.cpp
+    Table.cpp
     Text.cpp
 )
 
 serenity_lib(LibMarkdown markdown)
-target_link_libraries(LibMarkdown LibC)
+target_link_libraries(LibMarkdown LibJS)

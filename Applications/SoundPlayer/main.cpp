@@ -26,7 +26,6 @@
 
 #include "SoundPlayerWidget.h"
 #include <LibAudio/ClientConnection.h>
-#include <LibGfx/CharacterBitmap.h>
 #include <LibGUI/AboutDialog.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
@@ -34,18 +33,19 @@
 #include <LibGUI/Menu.h>
 #include <LibGUI/MenuBar.h>
 #include <LibGUI/Window.h>
+#include <LibGfx/CharacterBitmap.h>
 #include <stdio.h>
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio shared_buffer accept rpath unix cpath fattr", nullptr) < 0) {
+    if (pledge("stdio shared_buffer accept rpath thread unix cpath fattr", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
     auto app = GUI::Application::construct(argc, argv);
 
-    if (pledge("stdio shared_buffer accept rpath unix", nullptr) < 0) {
+    if (pledge("stdio shared_buffer accept rpath thread unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -53,16 +53,18 @@ int main(int argc, char** argv)
     auto audio_client = Audio::ClientConnection::construct();
     audio_client->handshake();
 
-    if (pledge("stdio shared_buffer accept rpath", nullptr) < 0) {
+    if (pledge("stdio shared_buffer accept rpath thread", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
+    auto app_icon = GUI::Icon::default_icon("app-sound-player");
+
     auto window = GUI::Window::construct();
     window->set_title("SoundPlayer");
     window->set_resizable(false);
-    window->set_rect(300, 300, 350, 140);
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-sound-player.png"));
+    window->resize(350, 140);
+    window->set_icon(app_icon.bitmap_for_size(16));
 
     auto menubar = GUI::MenuBar::construct();
     auto& app_menu = menubar->add_menu("SoundPlayer");
@@ -79,7 +81,7 @@ int main(int argc, char** argv)
     });
 
     app_menu.add_action(GUI::CommonActions::make_open_action([&](auto&) {
-        Optional<String> path = GUI::FilePicker::get_open_filepath(window, "Open wav file...");
+        Optional<String> path = GUI::FilePicker::get_open_filepath(window, "Open sound file...");
         if (path.has_value()) {
             player.open_file(path.value());
         }
@@ -90,9 +92,17 @@ int main(int argc, char** argv)
         app->quit();
     }));
 
+    auto& playback_menu = menubar->add_menu("Playback");
+
+    auto loop = GUI::Action::create_checkable("Loop", { Mod_Ctrl, Key_R }, [&](auto& action) {
+        player.manager().loop(action.is_checked());
+    });
+
+    playback_menu.add_action(move(loop));
+
     auto& help_menu = menubar->add_menu("Help");
     help_menu.add_action(GUI::Action::create("About", [&](auto&) {
-        GUI::AboutDialog::show("SoundPlayer", Gfx::Bitmap::load_from_file("/res/icons/32x32/app-sound-player.png"), window);
+        GUI::AboutDialog::show("SoundPlayer", app_icon.bitmap_for_size(32), window);
     }));
 
     app->set_menubar(move(menubar));

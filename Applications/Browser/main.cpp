@@ -24,17 +24,21 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/StringBuilder.h>
 #include "BookmarksBarWidget.h"
+#include "Browser.h"
 #include "InspectorWidget.h"
 #include "Tab.h"
 #include "WindowActions.h"
+#include <AK/StringBuilder.h>
+#include <Applications/Browser/BrowserWindowGML.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/File.h>
+#include <LibCore/StandardPaths.h>
 #include <LibGUI/AboutDialog.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/TabWidget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
@@ -44,21 +48,27 @@
 
 namespace Browser {
 
-static const char* bookmarks_filename = "/home/anon/bookmarks.json";
 String g_home_url;
-URL url_from_user_input(const String& input);
 bool g_multi_process = false;
+
+static String bookmarks_file_path()
+{
+    StringBuilder builder;
+    builder.append(Core::StandardPaths::config_directory());
+    builder.append("/bookmarks.json");
+    return builder.to_string();
+}
 
 }
 
 int main(int argc, char** argv)
 {
     if (getuid() == 0) {
-        fprintf(stderr, "Refusing to run as root\n");
+        warnln("Refusing to run as root");
         return 1;
     }
 
-    if (pledge("stdio shared_buffer accept unix cpath rpath wpath fattr", nullptr) < 0) {
+    if (pledge("stdio shared_buffer accept unix cpath rpath wpath fattr sendfd recvfd", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -76,7 +86,7 @@ int main(int argc, char** argv)
     Web::ResourceLoader::the();
 
     // FIXME: Once there is a standalone Download Manager, we can drop the "unix" pledge.
-    if (pledge("stdio shared_buffer accept unix cpath rpath wpath", nullptr) < 0) {
+    if (pledge("stdio shared_buffer accept unix cpath rpath wpath sendfd recvfd", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -114,33 +124,30 @@ int main(int argc, char** argv)
 
     unveil(nullptr, nullptr);
 
+    auto app_icon = GUI::Icon::default_icon("app-browser");
+
     auto m_config = Core::ConfigFile::get_for_app("Browser");
     Browser::g_home_url = m_config->read_entry("Preferences", "Home", "about:blank");
 
     bool bookmarksbar_enabled = true;
-    auto bookmarks_bar = Browser::BookmarksBarWidget::construct(Browser::bookmarks_filename, bookmarksbar_enabled);
+    auto bookmarks_bar = Browser::BookmarksBarWidget::construct(Browser::bookmarks_file_path(), bookmarksbar_enabled);
 
     auto window = GUI::Window::construct();
-    window->set_rect(100, 100, 640, 480);
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-browser.png"));
+    window->resize(640, 480);
+    window->set_icon(app_icon.bitmap_for_size(16));
     window->set_title("Browser");
 
     auto& widget = window->set_main_widget<GUI::Widget>();
-    widget.set_fill_with_background_color(true);
-    widget.set_layout<GUI::VerticalBoxLayout>();
-    widget.layout()->set_spacing(2);
+    widget.load_from_gml(browser_window_gml);
 
-    auto& tab_widget = widget.add<GUI::TabWidget>();
-    tab_widget.set_text_alignment(Gfx::TextAlignment::CenterLeft);
-    tab_widget.set_container_padding(0);
-    tab_widget.set_uniform_tabs(true);
+    auto& tab_widget = static_cast<GUI::TabWidget&>(*widget.find_descendant_by_name("tab_widget"));
 
     auto default_favicon = Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-html.png");
     ASSERT(default_favicon);
 
     tab_widget.on_change = [&](auto& active_widget) {
         auto& tab = static_cast<Browser::Tab&>(active_widget);
-        window->set_title(String::format("%s - Browser", tab.title().characters()));
+        window->set_title(String::formatted("{} - Browser", tab.title()));
         tab.did_become_active();
     };
 
@@ -167,7 +174,7 @@ int main(int argc, char** argv)
         new_tab.on_title_change = [&](auto title) {
             tab_widget.set_tab_title(new_tab, title);
             if (tab_widget.active_widget() == &new_tab)
-                window->set_title(String::format("%s - Browser", title.characters()));
+                window->set_title(String::formatted("{} - Browser", title));
         };
 
         new_tab.on_favicon_change = [&](auto& bitmap) {
@@ -189,7 +196,7 @@ int main(int argc, char** argv)
 
         new_tab.load(url);
 
-        dbg() << "Added new tab " << &new_tab << ", loading " << url;
+        dbgln("Added new tab {:p}, loading {}", &new_tab, url);
 
         if (activate)
             tab_widget.set_active_widget(&new_tab);
@@ -217,7 +224,7 @@ int main(int argc, char** argv)
     };
 
     window_actions.on_about = [&] {
-        GUI::AboutDialog::show("Browser", Gfx::Bitmap::load_from_file("/res/icons/32x32/app-browser.png"), window);
+        GUI::AboutDialog::show("Browser", app_icon.bitmap_for_size(32), window);
     };
 
     window_actions.on_show_bookmarks_bar = [&](auto& action) {

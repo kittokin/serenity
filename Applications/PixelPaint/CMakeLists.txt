@@ -1,5 +1,7 @@
 set(SOURCES
+    BrushTool.cpp
     BucketTool.cpp
+    CreateNewImageDialog.cpp
     CreateNewLayerDialog.cpp
     EllipseTool.cpp
     EraseTool.cpp
@@ -7,6 +9,7 @@ set(SOURCES
     ImageEditor.cpp
     Layer.cpp
     LayerListWidget.cpp
+    LayerPropertiesWidget.cpp
     LineTool.cpp
     main.cpp
     MoveTool.cpp
@@ -16,8 +19,9 @@ set(SOURCES
     RectangleTool.cpp
     SprayTool.cpp
     ToolboxWidget.cpp
+    ToolPropertiesWidget.cpp
     Tool.cpp
 )
 
-serenity_bin(PixelPaint)
+serenity_app(PixelPaint ICON app-pixel-paint)
 target_link_libraries(PixelPaint LibGUI LibGfx)

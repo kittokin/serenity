@@ -26,35 +26,33 @@
 
 #include "EditorWrapper.h"
 #include "Editor.h"
+#include "HackStudio.h"
 #include <LibGUI/Action.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/InputBox.h>
 #include <LibGUI/Label.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 
-extern RefPtr<EditorWrapper> g_current_editor_wrapper;
-extern Function<void(String)> g_open_file;
+namespace HackStudio {
 
-EditorWrapper::EditorWrapper(BreakpointChangeCallback breakpoint_change_callback)
+EditorWrapper::EditorWrapper()
 {
     set_layout<GUI::VerticalBoxLayout>();
 
     auto& label_wrapper = add<GUI::Widget>();
-    label_wrapper.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    label_wrapper.set_preferred_size(0, 14);
+    label_wrapper.set_fixed_height(14);
     label_wrapper.set_fill_with_background_color(true);
     label_wrapper.set_layout<GUI::HorizontalBoxLayout>();
     label_wrapper.layout()->set_margins({ 2, 0, 2, 0 });
 
     m_filename_label = label_wrapper.add<GUI::Label>("(Untitled)");
     m_filename_label->set_text_alignment(Gfx::TextAlignment::CenterLeft);
-    m_filename_label->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_filename_label->set_preferred_size(0, 14);
+    m_filename_label->set_fixed_height(14);
 
     m_cursor_label = label_wrapper.add<GUI::Label>("(Cursor)");
     m_cursor_label->set_text_alignment(Gfx::TextAlignment::CenterRight);
-    m_cursor_label->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_cursor_label->set_preferred_size(0, 14);
+    m_cursor_label->set_fixed_height(14);
 
     m_editor = add<Editor>();
     m_editor->set_ruler_visible(true);
@@ -62,18 +60,16 @@ EditorWrapper::EditorWrapper(BreakpointChangeCallback breakpoint_change_callback
     m_editor->set_automatic_indentation_enabled(true);
 
     m_editor->on_cursor_change = [this] {
-        m_cursor_label->set_text(String::format("Line: %d, Column: %d", m_editor->cursor().line() + 1, m_editor->cursor().column()));
+        m_cursor_label->set_text(String::formatted("Line: {}, Column: {}", m_editor->cursor().line() + 1, m_editor->cursor().column()));
     };
 
     m_editor->on_focus = [this] {
-        g_current_editor_wrapper = this;
+        set_current_editor_wrapper(this);
     };
 
-    m_editor->on_open = [this](String path) {
-        g_open_file(path);
+    m_editor->on_open = [](String path) {
+        open_file(path);
     };
-
-    m_editor->on_breakpoint_change = move(breakpoint_change_callback);
 }
 
 EditorWrapper::~EditorWrapper()
@@ -82,5 +78,7 @@ EditorWrapper::~EditorWrapper()
 
 void EditorWrapper::set_editor_has_focus(Badge<Editor>, bool focus)
 {
-    m_filename_label->set_font(focus ? Gfx::Font::default_bold_font() : Gfx::Font::default_font());
+    m_filename_label->set_font(focus ? Gfx::FontDatabase::default_bold_font() : Gfx::FontDatabase::default_font());
+}
+
 }

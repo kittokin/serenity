@@ -133,6 +133,10 @@ static void buffer_putch(char*& bufptr, char ch)
     *bufptr++ = ch;
 }
 
+// Declare it, so that the symbol is exported, because libstdc++ uses it.
+// However, *only* libstdc++ uses it, and none of the rest of the Kernel.
+extern "C" int sprintf(char* buffer, const char* fmt, ...);
+
 int sprintf(char* buffer, const char* fmt, ...)
 {
     ScopedSpinLock lock(s_log_lock);
@@ -140,6 +144,34 @@ int sprintf(char* buffer, const char* fmt, ...)
     va_start(ap, fmt);
     int ret = printf_internal(buffer_putch, buffer, fmt, ap);
     buffer[ret] = '\0';
+    va_end(ap);
+    return ret;
+}
+
+static size_t __vsnprintf_space_remaining;
+ALWAYS_INLINE void sized_buffer_putch(char*& bufptr, char ch)
+{
+    if (__vsnprintf_space_remaining) {
+        *bufptr++ = ch;
+        --__vsnprintf_space_remaining;
+    }
+}
+
+int snprintf(char* buffer, size_t size, const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    if (size) {
+        __vsnprintf_space_remaining = size - 1;
+    } else {
+        __vsnprintf_space_remaining = 0;
+    }
+    int ret = printf_internal(sized_buffer_putch, buffer, fmt, ap);
+    if (__vsnprintf_space_remaining) {
+        buffer[ret] = '\0';
+    } else if (size > 0) {
+        buffer[size - 1] = '\0';
+    }
     va_end(ap);
     return ret;
 }
@@ -176,14 +208,20 @@ extern "C" int kernelputstr(const char* characters, int length)
     return 0;
 }
 
-extern "C" int dbgprintf(const char* fmt, ...)
+static int vdbgprintf(const char* fmt, va_list ap)
 {
     ScopedSpinLock lock(s_log_lock);
     color_on();
+    int ret = printf_internal(debugger_putch, nullptr, fmt, ap);
+    color_off();
+    return ret;
+}
+
+extern "C" int dbgprintf(const char* fmt, ...)
+{
     va_list ap;
     va_start(ap, fmt);
-    int ret = printf_internal(debugger_putch, nullptr, fmt, ap);
+    int ret = vdbgprintf(fmt, ap);
     va_end(ap);
-    color_off();
     return ret;
 }

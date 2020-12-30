@@ -62,6 +62,9 @@ public:
         Prototype,
     };
 
+    enum class ShapeWithoutGlobalObjectTag { Tag };
+
+    explicit Shape(ShapeWithoutGlobalObjectTag);
     explicit Shape(GlobalObject&);
     Shape(Shape& previous_shape, const StringOrSymbol& property_name, PropertyAttributes attributes, TransitionType);
     Shape(Shape& previous_shape, Object* new_prototype);
@@ -70,10 +73,12 @@ public:
     Shape* create_configure_transition(const StringOrSymbol&, PropertyAttributes attributes);
     Shape* create_prototype_transition(Object* new_prototype);
 
+    void add_property_without_transition(const StringOrSymbol&, PropertyAttributes);
+
     bool is_unique() const { return m_unique; }
     Shape* create_unique_clone() const;
 
-    GlobalObject& global_object() const { return m_global_object; }
+    GlobalObject* global_object() const { return m_global_object; }
 
     Object* prototype() { return m_prototype; }
     const Object* prototype() const { return m_prototype; }
@@ -97,21 +102,23 @@ public:
 
 private:
     virtual const char* class_name() const override { return "Shape"; }
-    virtual void visit_children(Visitor&) override;
+    virtual void visit_edges(Visitor&) override;
 
     void ensure_property_table() const;
 
-    GlobalObject& m_global_object;
+    PropertyAttributes m_attributes { 0 };
+    TransitionType m_transition_type : 6 { TransitionType::Invalid };
+    bool m_unique : 1 { false };
+
+    GlobalObject* m_global_object { nullptr };
 
     mutable OwnPtr<HashMap<StringOrSymbol, PropertyMetadata>> m_property_table;
 
     HashMap<TransitionKey, Shape*> m_forward_transitions;
     Shape* m_previous { nullptr };
     StringOrSymbol m_property_name;
-    PropertyAttributes m_attributes { 0 };
-    bool m_unique { false };
     Object* m_prototype { nullptr };
-    TransitionType m_transition_type { TransitionType::Invalid };
+    size_t m_property_count { 0 };
 };
 
 }

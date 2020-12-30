@@ -28,47 +28,11 @@
 #include <AK/JsonObject.h>
 #include <AK/JsonParser.h>
 #include <AK/Memory.h>
+#include <ctype.h>
 
 namespace AK {
 
-static inline bool is_whitespace(char ch)
-{
-    return ch == ' ' || ch == '\n' || ch == '\t' || ch == '\v' || ch == '\r';
-}
-
-char JsonParser::peek() const
-{
-    if (m_index < m_input.length())
-        return m_input[m_index];
-    return '\0';
-}
-
-char JsonParser::consume()
-{
-    if (m_index < m_input.length())
-        return m_input[m_index++];
-    return '\0';
-}
-
-template<typename C>
-void JsonParser::consume_while(C condition)
-{
-    while (condition(peek()))
-        consume();
-}
-
-void JsonParser::consume_whitespace()
-{
-    consume_while([](char ch) { return is_whitespace(ch); });
-}
-
-bool JsonParser::consume_specific(char expected_ch)
-{
-    char consumed_ch = consume();
-    return consumed_ch == expected_ch;
-}
-
-String JsonParser::consume_quoted_string()
+String JsonParser::consume_and_unescape_string()
 {
     if (!consume_specific('"'))
         return {};
@@ -86,11 +50,9 @@ String JsonParser::consume_quoted_string()
             ++peek_index;
         }
 
-        if (peek_index != m_index) {
-            while (peek_index != m_index) {
-                final_sb.append(m_input.characters_without_null_termination()[m_index]);
-                m_index++;
-            }
+        while (peek_index != m_index) {
+            final_sb.append(m_input[m_index]);
+            m_index++;
         }
 
         if (m_index == m_input.length())
@@ -101,7 +63,7 @@ String JsonParser::consume_quoted_string()
             final_sb.append(consume());
             continue;
         }
-        consume();
+        ignore();
         char escaped_ch = consume();
         switch (escaped_ch) {
         case 'n':
@@ -120,18 +82,11 @@ String JsonParser::consume_quoted_string()
             final_sb.append('\f');
             break;
         case 'u': {
-            StringBuilder sb;
-            sb.append(consume());
-            sb.append(consume());
-            sb.append(consume());
-            sb.append(consume());
-
-            auto codepoint = AK::StringUtils::convert_to_uint_from_hex(sb.to_string());
-            if (codepoint.has_value()) {
-                final_sb.append_codepoint(codepoint.value());
-            } else {
+            auto code_point = AK::StringUtils::convert_to_uint_from_hex(consume(4));
+            if (code_point.has_value())
+                final_sb.append_code_point(code_point.value());
+            else
                 final_sb.append('?');
-            }
         } break;
         default:
             final_sb.append(escaped_ch);
@@ -150,27 +105,27 @@ Optional<JsonValue> JsonParser::parse_object()
     if (!consume_specific('{'))
         return {};
     for (;;) {
-        consume_whitespace();
+        ignore_while(isspace);
         if (peek() == '}')
             break;
-        consume_whitespace();
-        auto name = consume_quoted_string();
+        ignore_while(isspace);
+        auto name = consume_and_unescape_string();
         if (name.is_null())
             return {};
-        consume_whitespace();
+        ignore_while(isspace);
         if (!consume_specific(':'))
             return {};
-        consume_whitespace();
+        ignore_while(isspace);
         auto value = parse_helper();
         if (!value.has_value())
             return {};
         object.set(name, move(value.value()));
-        consume_whitespace();
+        ignore_while(isspace);
         if (peek() == '}')
             break;
         if (!consume_specific(','))
             return {};
-        consume_whitespace();
+        ignore_while(isspace);
         if (peek() == '}')
             return {};
     }
@@ -185,23 +140,23 @@ Optional<JsonValue> JsonParser::parse_array()
     if (!consume_specific('['))
         return {};
     for (;;) {
-        consume_whitespace();
+        ignore_while(isspace);
         if (peek() == ']')
             break;
         auto element = parse_helper();
         if (!element.has_value())
             return {};
         array.append(element.value());
-        consume_whitespace();
+        ignore_while(isspace);
         if (peek() == ']')
             break;
         if (!consume_specific(','))
             return {};
-        consume_whitespace();
+        ignore_while(isspace);
         if (peek() == ']')
             return {};
     }
-    consume_whitespace();
+    ignore_while(isspace);
     if (!consume_specific(']'))
         return {};
     return array;
@@ -209,7 +164,7 @@ Optional<JsonValue> JsonParser::parse_array()
 
 Optional<JsonValue> JsonParser::parse_string()
 {
-    auto result = consume_quoted_string();
+    auto result = consume_and_unescape_string();
     if (result.is_null())
         return {};
     return JsonValue(result);
@@ -257,7 +212,10 @@ Optional<JsonValue> JsonParser::parse_number()
             whole = number.value();
         }
 
-        int fraction = fraction_string.to_uint().value();
+        auto fraction_string_uint = fraction_string.to_uint();
+        if (!fraction_string_uint.has_value())
+            return {};
+        int fraction = fraction_string_uint.value();
         fraction *= (whole < 0) ? -1 : 1;
 
         auto divider = 1;
@@ -271,10 +229,14 @@ Optional<JsonValue> JsonParser::parse_number()
         if (to_unsigned_result.has_value()) {
             value = JsonValue(to_unsigned_result.value());
         } else {
-            auto number = number_string.to_int();
+            auto number = number_string.to_int<i64>();
             if (!number.has_value())
                 return {};
-            value = JsonValue(number.value());
+            if (number.value() <= AK::NumericLimits<i32>::max()) {
+                value = JsonValue((i32)number.value());
+            } else {
+                value = JsonValue(number.value());
+            }
         }
 #ifndef KERNEL
     }
@@ -283,39 +245,30 @@ Optional<JsonValue> JsonParser::parse_number()
     return value;
 }
 
-bool JsonParser::consume_string(const char* str)
-{
-    for (size_t i = 0, length = strlen(str); i < length; ++i) {
-        if (!consume_specific(str[i]))
-            return false;
-    }
-    return true;
-}
-
 Optional<JsonValue> JsonParser::parse_true()
 {
-    if (!consume_string("true"))
+    if (!consume_specific("true"))
         return {};
     return JsonValue(true);
 }
 
 Optional<JsonValue> JsonParser::parse_false()
 {
-    if (!consume_string("false"))
+    if (!consume_specific("false"))
         return {};
     return JsonValue(false);
 }
 
 Optional<JsonValue> JsonParser::parse_null()
 {
-    if (!consume_string("null"))
+    if (!consume_specific("null"))
         return {};
     return JsonValue(JsonValue::Type::Null);
 }
 
 Optional<JsonValue> JsonParser::parse_helper()
 {
-    consume_whitespace();
+    ignore_while(isspace);
     auto type_hint = peek();
     switch (type_hint) {
     case '{':
@@ -347,12 +300,13 @@ Optional<JsonValue> JsonParser::parse_helper()
     return {};
 }
 
-Optional<JsonValue> JsonParser::parse() {
+Optional<JsonValue> JsonParser::parse()
+{
     auto result = parse_helper();
     if (!result.has_value())
         return {};
-    consume_whitespace();
-    if (m_index != m_input.length())
+    ignore_while(isspace);
+    if (!is_eof())
         return {};
     return result;
 }

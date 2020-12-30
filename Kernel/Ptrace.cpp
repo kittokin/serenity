@@ -35,22 +35,23 @@ namespace Ptrace {
 
 KResultOr<u32> handle_syscall(const Kernel::Syscall::SC_ptrace_params& params, Process& caller)
 {
+    ScopedSpinLock scheduler_lock(g_scheduler_lock);
     if (params.request == PT_TRACE_ME) {
-        if (Thread::current()->tracer())
+        if (Process::current()->tracer())
             return KResult(-EBUSY);
 
         caller.set_wait_for_tracer_at_next_execve(true);
         return KSuccess;
     }
 
-    if (params.pid == caller.pid())
+    // FIXME: PID/TID BUG
+    // This bug allows to request PT_ATTACH (or anything else) the same process, as
+    // long it is not the main thread. Alternatively, if this is desired, then the
+    // bug is that this prevents PT_ATTACH to the main thread from another thread.
+    if (params.tid == caller.pid().value())
         return KResult(-EINVAL);
 
-    Thread* peer = nullptr;
-    {
-        InterruptDisabler disabler;
-        peer = Thread::from_tid(params.pid);
-    }
+    auto peer = Thread::from_tid(params.tid);
     if (!peer)
         return KResult(-ESRCH);
 
@@ -58,17 +59,23 @@ KResultOr<u32> handle_syscall(const Kernel::Syscall::SC_ptrace_params& params, P
         || (peer->process().uid() != peer->process().euid())) // Disallow tracing setuid processes
         return KResult(-EACCES);
 
+    if (!peer->process().is_dumpable())
+        return KResult(-EACCES);
+
+    auto& peer_process = peer->process();
     if (params.request == PT_ATTACH) {
-        if (peer->tracer()) {
+        if (peer_process.tracer()) {
             return KResult(-EBUSY);
         }
-        peer->start_tracing_from(caller.pid());
-        if (peer->state() != Thread::State::Stopped && !(peer->has_blocker() && peer->blocker().is_reason_signal()))
+        peer_process.start_tracing_from(caller.pid());
+        ScopedSpinLock lock(peer->get_lock());
+        if (peer->state() != Thread::State::Stopped) {
             peer->send_signal(SIGSTOP, &caller);
+        }
         return KSuccess;
     }
 
-    auto* tracer = peer->tracer();
+    auto* tracer = peer_process.tracer();
 
     if (!tracer)
         return KResult(-EPERM);
@@ -85,7 +92,7 @@ KResultOr<u32> handle_syscall(const Kernel::Syscall::SC_ptrace_params& params, P
         break;
 
     case PT_DETACH:
-        peer->stop_tracing();
+        peer_process.stop_tracing();
         peer->send_signal(SIGCONT, &caller);
         break;
 
@@ -97,11 +104,9 @@ KResultOr<u32> handle_syscall(const Kernel::Syscall::SC_ptrace_params& params, P
     case PT_GETREGS: {
         if (!tracer->has_regs())
             return KResult(-EINVAL);
-
         auto* regs = reinterpret_cast<PtraceRegisters*>(params.addr);
-        if (!caller.validate_write_typed(regs))
+        if (!copy_to_user(regs, &tracer->regs()))
             return KResult(-EFAULT);
-        copy_to_user(regs, &tracer->regs());
         break;
     }
 
@@ -110,7 +115,7 @@ KResultOr<u32> handle_syscall(const Kernel::Syscall::SC_ptrace_params& params, P
             return KResult(-EINVAL);
 
         PtraceRegisters regs;
-        if (!caller.validate_read_and_copy_typed(&regs, (const PtraceRegisters*)params.addr))
+        if (!copy_from_user(&regs, (const PtraceRegisters*)params.addr))
             return KResult(-EFAULT);
 
         auto& peer_saved_registers = peer->get_register_dump_from_stack();
@@ -125,29 +130,28 @@ KResultOr<u32> handle_syscall(const Kernel::Syscall::SC_ptrace_params& params, P
 
     case PT_PEEK: {
         Kernel::Syscall::SC_ptrace_peek_params peek_params;
-        if (!caller.validate_read_and_copy_typed(&peek_params, reinterpret_cast<Kernel::Syscall::SC_ptrace_peek_params*>(params.addr)))
-            return -EFAULT;
-        // read validation is done inside 'peek_user_data'
-        auto result = peer->process().peek_user_data(peek_params.address);
+        if (!copy_from_user(&peek_params, reinterpret_cast<Kernel::Syscall::SC_ptrace_peek_params*>(params.addr)))
+            return KResult(-EFAULT);
+        if (!is_user_address(VirtualAddress { peek_params.address }))
+            return KResult(-EFAULT);
+        auto result = peer->process().peek_user_data(Userspace<const u32*> { (FlatPtr)peek_params.address });
         if (result.is_error())
-            return -EFAULT;
-        if (!caller.validate_write(peek_params.out_data, sizeof(u32)))
-            return -EFAULT;
-        copy_to_user(peek_params.out_data, &result.value());
+            return result.error();
+        if (!copy_to_user(peek_params.out_data, &result.value()))
+            return KResult(-EFAULT);
         break;
     }
 
-    case PT_POKE: {
-        u32* addr = reinterpret_cast<u32*>(params.addr);
-        // write validation is done inside 'poke_user_data'
-        return peer->process().poke_user_data(addr, params.data);
-    }
+    case PT_POKE:
+        if (!is_user_address(VirtualAddress { params.addr }))
+            return KResult(-EFAULT);
+        return peer->process().poke_user_data(Userspace<u32*> { (FlatPtr)params.addr }, params.data);
 
     default:
-        return -EINVAL;
+        return KResult(-EINVAL);
     }
 
-    return 0;
+    return KSuccess;
 }
 
 void copy_kernel_registers_into_ptrace_registers(PtraceRegisters& ptrace_regs, const RegisterState& kernel_regs)
@@ -181,7 +185,8 @@ void copy_ptrace_registers_into_kernel_registers(RegisterState& kernel_regs, con
     kernel_regs.esi = ptrace_regs.esi;
     kernel_regs.edi = ptrace_regs.edi;
     kernel_regs.eip = ptrace_regs.eip;
-    kernel_regs.eflags = ptrace_regs.eflags;
+
+    kernel_regs.eflags = (kernel_regs.eflags & ~safe_eflags_mask) | (ptrace_regs.eflags & safe_eflags_mask);
 }
 
 }

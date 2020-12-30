@@ -53,9 +53,10 @@ int main(int argc, char** argv)
 
     StringView preview_mode_view = preview_mode;
 
+    auto app_icon = GUI::Icon::default_icon("app-text-editor");
+
     auto window = GUI::Window::construct();
-    window->set_title("Text Editor");
-    window->set_rect(20, 200, 640, 400);
+    window->resize(640, 400);
 
     auto& text_widget = window->set_main_widget<TextEditorWidget>();
 
@@ -76,15 +77,17 @@ int main(int argc, char** argv)
     } else if (preview_mode_view == "none") {
         text_widget.set_preview_mode(TextEditorWidget::PreviewMode::None);
     } else {
-        fprintf(stderr, "Invalid mode '%s'\n", preview_mode);
+        warnln("Invalid mode '{}'", preview_mode);
         return 1;
     }
 
     if (file_to_edit)
         text_widget.open_sesame(file_to_edit);
+    else
+        text_widget.update_title();
 
     window->show();
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-text-editor.png"));
+    window->set_icon(app_icon.bitmap_for_size(16));
 
     return app->exec();
 }

@@ -93,12 +93,14 @@ bool URL::parse(const StringView& string)
 
             if (m_protocol == "data") {
                 buffer.clear();
+                m_host = "";
                 state = State::InDataMimeType;
                 continue;
             }
 
             if (m_protocol == "about") {
                 buffer.clear();
+                m_host = "";
                 state = State::InPath;
                 continue;
             }
@@ -109,12 +111,6 @@ bool URL::parse(const StringView& string)
                 return false;
             if (buffer.is_empty())
                 return false;
-            if (m_protocol == "http")
-                m_port = 80;
-            else if (m_protocol == "https")
-                m_port = 443;
-            else if (m_protocol == "gemini")
-                m_port = 1965;
             state = State::InHostname;
             buffer.clear();
             continue;
@@ -240,11 +236,21 @@ bool URL::parse(const StringView& string)
         m_fragment = String::copy(buffer);
     if (state == State::InDataPayload)
         m_data_payload = urldecode(String::copy(buffer));
+    if (state == State::InPort) {
+        auto port_opt = String::copy(buffer).to_uint();
+        if (port_opt.has_value())
+            m_port = port_opt.value();
+    }
+
     if (m_query.is_null())
         m_query = "";
     if (m_fragment.is_null())
         m_fragment = "";
-    return true;
+
+    if (!m_port && protocol_requires_port(m_protocol))
+        set_port(default_port_for_protocol(m_protocol));
+
+    return compute_validity();
 }
 
 URL::URL(const StringView& string)
@@ -275,12 +281,11 @@ String URL::to_string() const
 
     builder.append("://");
     builder.append(m_host);
-    if (protocol() != "file") {
-        if (!(protocol() == "http" && port() == 80) && !(protocol() == "https" && port() == 443) && !(protocol() == "gemini" && port() == 1965)) {
-            builder.append(':');
-            builder.append(String::number(m_port));
-        }
+    if (default_port_for_protocol(protocol()) != port()) {
+        builder.append(':');
+        builder.append(String::number(m_port));
     }
+
     builder.append(m_path);
     if (!m_query.is_empty()) {
         builder.append('?');
@@ -306,7 +311,7 @@ URL URL::complete_url(const String& string) const
         return {};
 
     if (string.starts_with("//")) {
-        URL url(String::format("%s:%s", m_protocol.characters(), string.characters()));
+        URL url(String::formatted("{}:{}", m_protocol, string));
         if (url.is_valid())
             return url;
     }
@@ -364,6 +369,12 @@ void URL::set_host(const String& host)
     m_valid = compute_validity();
 }
 
+void URL::set_port(u16 port)
+{
+    m_port = port;
+    m_valid = compute_validity();
+}
+
 void URL::set_path(const String& path)
 {
     m_path = path;
@@ -385,14 +396,52 @@ bool URL::compute_validity() const
     // FIXME: This is by no means complete.
     if (m_protocol.is_empty())
         return false;
+
+    if (m_protocol == "about") {
+        if (m_path.is_empty())
+            return false;
+        return true;
+    }
+
     if (m_protocol == "file") {
         if (m_path.is_empty())
             return false;
-    } else {
-        if (m_host.is_empty())
-            return false;
+        return true;
     }
+
+    if (m_protocol == "data") {
+        if (m_data_mime_type.is_empty())
+            return false;
+        return true;
+    }
+
+    if (m_host.is_empty())
+        return false;
+
+    if (!m_port && protocol_requires_port(m_protocol))
+        return false;
+
     return true;
+}
+
+bool URL::protocol_requires_port(const String& protocol)
+{
+    return (default_port_for_protocol(protocol) != 0);
+}
+
+u16 URL::default_port_for_protocol(const String& protocol)
+{
+    if (protocol == "http")
+        return 80;
+    if (protocol == "https")
+        return 443;
+    if (protocol == "gemini")
+        return 1965;
+    if (protocol == "irc")
+        return 6667;
+    if (protocol == "ircs")
+        return 6697;
+    return 0;
 }
 
 URL URL::create_with_file_protocol(const String& path)
@@ -411,6 +460,18 @@ URL URL::create_with_url_or_path(const String& url_or_path)
 
     String path = LexicalPath::canonicalized_path(url_or_path);
     return URL::create_with_file_protocol(path);
+}
+
+URL URL::create_with_data(const StringView& mime_type, const StringView& payload, bool is_base64)
+{
+    URL url;
+    url.set_protocol("data");
+    url.m_valid = true;
+    url.m_data_payload = payload;
+    url.m_data_mime_type = mime_type;
+    url.m_data_payload_is_base64 = is_base64;
+
+    return url;
 }
 
 String URL::basename() const

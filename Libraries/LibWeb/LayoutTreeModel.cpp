@@ -29,13 +29,13 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Text.h>
-#include <LibWeb/Layout/LayoutText.h>
+#include <LibWeb/Layout/TextNode.h>
 #include <ctype.h>
 #include <stdio.h>
 
 namespace Web {
 
-LayoutTreeModel::LayoutTreeModel(Document& document)
+LayoutTreeModel::LayoutTreeModel(DOM::Document& document)
     : m_document(document)
 {
     m_document_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-html.png"));
@@ -51,7 +51,7 @@ GUI::ModelIndex LayoutTreeModel::index(int row, int column, const GUI::ModelInde
 {
     if (!parent.is_valid())
         return create_index(row, column, m_document->layout_node());
-    auto& parent_node = *static_cast<LayoutNode*>(parent.internal_data());
+    auto& parent_node = *static_cast<Layout::Node*>(parent.internal_data());
     return create_index(row, column, parent_node.child_at_index(row));
 }
 
@@ -59,7 +59,7 @@ GUI::ModelIndex LayoutTreeModel::parent_index(const GUI::ModelIndex& index) cons
 {
     if (!index.is_valid())
         return {};
-    auto& node = *static_cast<LayoutNode*>(index.internal_data());
+    auto& node = *static_cast<Layout::Node*>(index.internal_data());
     if (!node.parent())
         return {};
 
@@ -85,7 +85,7 @@ int LayoutTreeModel::row_count(const GUI::ModelIndex& index) const
 {
     if (!index.is_valid())
         return 1;
-    auto& node = *static_cast<LayoutNode*>(index.internal_data());
+    auto& node = *static_cast<Layout::Node*>(index.internal_data());
     return node.child_count();
 }
 
@@ -115,30 +115,30 @@ static String with_whitespace_collapsed(const StringView& string)
     return builder.to_string();
 }
 
-GUI::Variant LayoutTreeModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant LayoutTreeModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
-    auto& node = *static_cast<LayoutNode*>(index.internal_data());
-    if (role == Role::Icon) {
-        if (node.is_root())
+    auto& node = *static_cast<Layout::Node*>(index.internal_data());
+    if (role == GUI::ModelRole::Icon) {
+        if (node.is_initial_containing_block())
             return m_document_icon;
         if (node.is_text())
             return m_text_icon;
         return m_element_icon;
     }
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Display) {
         if (node.is_text())
-            return String::format("LayoutText: %s", with_whitespace_collapsed(to<LayoutText>(node).text_for_rendering()).characters());
+            return String::format("TextNode: %s", with_whitespace_collapsed(downcast<Layout::TextNode>(node).text_for_rendering()).characters());
         StringBuilder builder;
         builder.append(node.class_name());
         builder.append(' ');
         if (node.is_anonymous()) {
             builder.append("[anonymous]");
-        } else if (!node.node()->is_element()) {
-            builder.append(node.node()->node_name());
+        } else if (!node.dom_node()->is_element()) {
+            builder.append(node.dom_node()->node_name());
         } else {
-            auto& element = to<Element>(*node.node());
+            auto& element = downcast<DOM::Element>(*node.dom_node());
             builder.append('<');
-            builder.append(element.tag_name());
+            builder.append(element.local_name());
             element.for_each_attribute([&](auto& name, auto& value) {
                 builder.append(' ');
                 builder.append(name);

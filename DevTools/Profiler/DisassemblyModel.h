@@ -33,12 +33,12 @@ class Profile;
 class ProfileNode;
 
 struct InstructionData {
-     X86::Instruction insn;
-     String disassembly;
-     StringView bytes;
-     FlatPtr address { 0 };
-     u32 event_count { 0 };
-     float percent { 0 };
+    X86::Instruction insn;
+    String disassembly;
+    StringView bytes;
+    FlatPtr address { 0 };
+    u32 event_count { 0 };
+    float percent { 0 };
 };
 
 class DisassemblyModel final : public GUI::Model {
@@ -61,7 +61,7 @@ public:
     virtual int row_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override;
     virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return Column::__Count; }
     virtual String column_name(int) const override;
-    virtual GUI::Variant data(const GUI::ModelIndex&, Role = Role::Display) const override;
+    virtual GUI::Variant data(const GUI::ModelIndex&, GUI::ModelRole) const override;
     virtual void update() override;
 
 private:

@@ -43,6 +43,14 @@ class MemoryManager;
 class PageDirectory;
 class PageTableEntry;
 
+static constexpr u32 safe_eflags_mask = 0xdff;
+static constexpr u32 iopl_mask = 3u << 12;
+
+inline u32 get_iopl_from_eflags(u32 eflags)
+{
+    return (eflags & iopl_mask) >> 12;
+}
+
 struct [[gnu::packed]] DescriptorTablePointer
 {
     u16 limit;
@@ -140,6 +148,7 @@ public:
         m_raw |= value & 0xfffff000;
     }
 
+    bool is_null() const { return m_raw == 0; }
     void clear() { m_raw = 0; }
 
     u64 raw() const { return m_raw; }
@@ -234,6 +243,7 @@ public:
     bool is_execute_disabled() const { return raw() & NoExecute; }
     void set_execute_disabled(bool b) { set_bit(NoExecute, b); }
 
+    bool is_null() const { return m_raw == 0; }
     void clear() { m_raw = 0; }
 
     void set_bit(u64 bit, bool value)
@@ -276,6 +286,10 @@ void unregister_generic_interrupt_handler(u8 number, GenericInterruptHandler&);
 void flush_idt();
 void load_task_register(u16 selector);
 void handle_crash(RegisterState&, const char* description, int signal, bool out_of_memory = false);
+
+[[nodiscard]] bool safe_memcpy(void* dest_ptr, const void* src_ptr, size_t n, void*& fault_at);
+[[nodiscard]] ssize_t safe_strnlen(const char* str, size_t max_n, void*& fault_at);
+[[nodiscard]] bool safe_memset(void* dest_ptr, int c, size_t n, void*& fault_at);
 
 #define LSW(x) ((u32)(x)&0xFFFF)
 #define MSW(x) (((u32)(x) >> 16) & 0xFFFF)
@@ -493,7 +507,7 @@ struct [[gnu::aligned(16)]] FPUState
     u8 buffer[512];
 };
 
-inline constexpr FlatPtr page_base_of(FlatPtr address)
+constexpr FlatPtr page_base_of(FlatPtr address)
 {
     return address & PAGE_MASK;
 }
@@ -503,7 +517,7 @@ inline FlatPtr page_base_of(const void* address)
     return page_base_of((FlatPtr)address);
 }
 
-inline constexpr FlatPtr offset_in_page(FlatPtr address)
+constexpr FlatPtr offset_in_page(FlatPtr address)
 {
     return address & (~PAGE_MASK);
 }
@@ -589,6 +603,7 @@ private:
     SplitQword m_start;
 };
 
+// FIXME: This can't hold every CPU feature as-is.
 enum class CPUFeature : u32 {
     NX = (1 << 0),
     PAE = (1 << 1),
@@ -599,9 +614,18 @@ enum class CPUFeature : u32 {
     SMEP = (1 << 6),
     SSE = (1 << 7),
     TSC = (1 << 8),
-    UMIP = (1 << 9),
-    SEP = (1 << 10),
-    SYSCALL = (1 << 11)
+    RDTSCP = (1 << 9),
+    CONSTANT_TSC = (1 << 10),
+    NONSTOP_TSC = (1 << 11),
+    UMIP = (1 << 12),
+    SEP = (1 << 13),
+    SYSCALL = (1 << 14),
+    MMX = (1 << 15),
+    SSE2 = (1 << 16),
+    SSE3 = (1 << 17),
+    SSSE3 = (1 << 18),
+    SSE4_1 = (1 << 19),
+    SSE4_2 = (1 << 20),
 };
 
 class Thread;
@@ -623,6 +647,7 @@ static_assert(GDT_SELECTOR_CODE0 + 16 == GDT_SELECTOR_CODE3); // CS3 = CS0 + 16
 static_assert(GDT_SELECTOR_CODE0 + 24 == GDT_SELECTOR_DATA3); // SS3 = CS0 + 32
 
 class ProcessorInfo;
+class SchedulerPerProcessorData;
 struct MemoryManagerData;
 struct ProcessorMessageEntry;
 
@@ -660,6 +685,22 @@ struct ProcessorMessageEntry {
     ProcessorMessage* msg;
 };
 
+struct DeferredCallEntry {
+    DeferredCallEntry* next;
+    union {
+        struct {
+            void (*handler)();
+        } callback;
+        struct {
+            void* data;
+            void (*handler)(void*);
+            void (*free)(void*);
+        } callback_with_data;
+    };
+    bool have_data;
+    bool was_allocated;
+};
+
 class Processor {
     friend class ProcessorInfo;
 
@@ -680,9 +721,11 @@ class Processor {
     static FPUState s_clean_fpu_state;
     CPUFeature m_features;
     static volatile u32 g_total_processors; // atomic
+    u8 m_physical_address_bit_width;
 
     ProcessorInfo* m_info;
     MemoryManagerData* m_mm_data;
+    SchedulerPerProcessorData* m_scheduler_data;
     Thread* m_current_thread;
     Thread* m_idle_thread;
 
@@ -690,7 +733,11 @@ class Processor {
 
     bool m_invoke_scheduler_async;
     bool m_scheduler_initialized;
-    bool m_halt_requested;
+    Atomic<bool> m_halt_requested;
+
+    DeferredCallEntry* m_pending_deferred_calls; // in reverse order
+    DeferredCallEntry* m_free_deferred_call_pool_entry;
+    DeferredCallEntry m_deferred_call_pool[5];
 
     void gdt_init();
     void write_raw_gdt_entry(u16 selector, u32 low, u32 high);
@@ -701,8 +748,16 @@ class Processor {
     static ProcessorMessage& smp_get_from_pool();
     static void smp_cleanup_message(ProcessorMessage& msg);
     bool smp_queue_message(ProcessorMessage& msg);
-    static void smp_broadcast_message(ProcessorMessage& msg, bool async);
+    static void smp_unicast_message(u32 cpu, ProcessorMessage& msg, bool async);
+    static void smp_broadcast_message(ProcessorMessage& msg);
+    static void smp_broadcast_wait_sync(ProcessorMessage& msg);
     static void smp_broadcast_halt();
+
+    void deferred_call_pool_init();
+    void deferred_call_execute_pending();
+    DeferredCallEntry* deferred_call_get_free();
+    void deferred_call_return_to_pool(DeferredCallEntry*);
+    void deferred_call_queue_entry(DeferredCallEntry*);
 
     void cpu_detect();
     void cpu_setup();
@@ -758,6 +813,8 @@ public:
         return IterationDecision::Continue;
     }
 
+    ALWAYS_INLINE u8 physical_address_bit_width() const { return m_physical_address_bit_width; }
+
     ALWAYS_INLINE ProcessorInfo& info() { return *m_info; }
 
     ALWAYS_INLINE static Processor& current()
@@ -768,6 +825,16 @@ public:
     ALWAYS_INLINE static bool is_initialized()
     {
         return get_fs() == GDT_SELECTOR_PROC && read_fs_u32(0) != 0;
+    }
+
+    ALWAYS_INLINE void set_scheduler_data(SchedulerPerProcessorData& scheduler_data)
+    {
+        m_scheduler_data = &scheduler_data;
+    }
+
+    ALWAYS_INLINE SchedulerPerProcessorData& get_scheduler_data() const
+    {
+        return *m_scheduler_data;
     }
 
     ALWAYS_INLINE void set_mm_data(MemoryManagerData& mm_data)
@@ -815,7 +882,19 @@ public:
     ALWAYS_INLINE void restore_irq(u32 prev_irq)
     {
         ASSERT(prev_irq <= m_in_irq);
-        m_in_irq = prev_irq;
+        if (!prev_irq) {
+            if (m_in_critical == 0) {
+                auto prev_critical = m_in_critical++;
+                m_in_irq = prev_irq;
+                deferred_call_execute_pending();
+                ASSERT(m_in_critical == prev_critical + 1);
+                m_in_critical = prev_critical;
+            }
+            if (!m_in_critical)
+                check_invoke_scheduler();
+        } else {
+            m_in_irq = prev_irq;
+        }
     }
 
     ALWAYS_INLINE u32& in_irq()
@@ -832,10 +911,18 @@ public:
 
     ALWAYS_INLINE void leave_critical(u32 prev_flags)
     {
+        cli(); // Need to prevent IRQs from interrupting us here!
         ASSERT(m_in_critical > 0);
-        if (--m_in_critical == 0) {
+        if (m_in_critical == 1) {
+            if (!m_in_irq) {
+                deferred_call_execute_pending();
+                ASSERT(m_in_critical == 1);
+            }
+            m_in_critical--;
             if (!m_in_irq)
                 check_invoke_scheduler();
+        } else {
+            m_in_critical--;
         }
         if (prev_flags & 0x200)
             sti();
@@ -891,7 +978,40 @@ public:
     }
     static void smp_broadcast(void (*callback)(), bool async);
     static void smp_broadcast(void (*callback)(void*), void* data, void (*free_data)(void*), bool async);
+    template<typename Callback>
+    static void smp_unicast(u32 cpu, Callback callback, bool async)
+    {
+        auto* data = new Callback(move(callback));
+        smp_unicast(
+            cpu,
+            [](void* data) {
+                (*reinterpret_cast<Callback*>(data))();
+            },
+            data,
+            [](void* data) {
+                delete reinterpret_cast<Callback*>(data);
+            },
+            async);
+    }
+    static void smp_unicast(u32 cpu, void (*callback)(), bool async);
+    static void smp_unicast(u32 cpu, void (*callback)(void*), void* data, void (*free_data)(void*), bool async);
     static void smp_broadcast_flush_tlb(VirtualAddress vaddr, size_t page_count);
+
+    template<typename Callback>
+    static void deferred_call_queue(Callback callback)
+    {
+        auto* data = new Callback(move(callback));
+        deferred_call_queue(
+            [](void* data) {
+                (*reinterpret_cast<Callback*>(data))();
+            },
+            data,
+            [](void* data) {
+                delete reinterpret_cast<Callback*>(data);
+            });
+    }
+    static void deferred_call_queue(void (*callback)());
+    static void deferred_call_queue(void (*callback)(void*), void* data, void (*free_data)(void*));
 
     ALWAYS_INLINE bool has_feature(CPUFeature f) const
     {
@@ -909,7 +1029,7 @@ public:
     void switch_context(Thread*& from_thread, Thread*& to_thread);
     [[noreturn]] static void assume_context(Thread& thread, u32 flags);
     u32 init_context(Thread& thread, bool leave_crit);
-    static bool get_context_frame_ptr(Thread& thread, u32& frame_ptr, u32& eip);
+    static Vector<FlatPtr> capture_stack_trace(Thread& thread, size_t max_frames = 0);
 
     void set_thread_specific(u8* data, size_t len);
 };
@@ -920,16 +1040,13 @@ class ScopedCritical {
 public:
     ScopedCritical()
     {
-        m_valid = true;
-        Processor::current().enter_critical(m_prev_flags);
+        enter();
     }
 
     ~ScopedCritical()
     {
-        if (m_valid) {
-            m_valid = false;
-            Processor::current().leave_critical(m_prev_flags);
-        }
+        if (m_valid)
+            leave();
     }
 
     ScopedCritical(ScopedCritical&& from)
@@ -947,12 +1064,18 @@ public:
         return *this;
     }
 
-    void set_interrupt_flag_on_destruction(bool flag)
+    void leave()
     {
-        if (flag)
-            m_prev_flags |= 0x200;
-        else
-            m_prev_flags &= ~0x200;
+        ASSERT(m_valid);
+        m_valid = false;
+        Processor::current().leave_critical(m_prev_flags);
+    }
+
+    void enter()
+    {
+        ASSERT(!m_valid);
+        m_valid = true;
+        Processor::current().enter_critical(m_prev_flags);
     }
 
 private:

@@ -25,6 +25,7 @@
  */
 
 #include "ToolboxWidget.h"
+#include "BrushTool.h"
 #include "BucketTool.h"
 #include "EllipseTool.h"
 #include "EraseTool.h"
@@ -38,6 +39,7 @@
 #include <LibGUI/Action.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/Window.h>
 
 namespace PixelPaint {
 
@@ -55,12 +57,14 @@ public:
         builder.append(")");
         set_tooltip(builder.to_string());
 
-        m_action = GUI::Action::create_checkable(name, shortcut, [this](auto& action) {
-            if (action.is_checked())
-                m_toolbox.on_tool_selection(m_tool);
-            else
-                m_toolbox.on_tool_selection(nullptr);
-        });
+        m_action = GUI::Action::create_checkable(
+            name, shortcut, [this](auto& action) {
+                if (action.is_checked())
+                    m_toolbox.on_tool_selection(m_tool);
+                else
+                    m_toolbox.on_tool_selection(nullptr);
+            },
+            toolbox.window());
 
         m_tool->set_action(m_action);
         set_action(*m_action);
@@ -92,8 +96,7 @@ ToolboxWidget::ToolboxWidget()
     set_frame_shape(Gfx::FrameShape::Panel);
     set_frame_shadow(Gfx::FrameShadow::Raised);
 
-    set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    set_preferred_size(48, 0);
+    set_fixed_width(48);
 
     set_layout<GUI::VerticalBoxLayout>();
     layout()->set_margins({ 4, 4, 4, 4 });
@@ -101,18 +104,29 @@ ToolboxWidget::ToolboxWidget()
     m_action_group.set_exclusive(true);
     m_action_group.set_unchecking_allowed(false);
 
+    deferred_invoke([this](auto&) {
+        setup_tools();
+    });
+}
+
+ToolboxWidget::~ToolboxWidget()
+{
+}
+
+void ToolboxWidget::setup_tools()
+{
     auto add_tool = [&](const StringView& name, const StringView& icon_name, const GUI::Shortcut& shortcut, NonnullOwnPtr<Tool> tool) -> ToolButton& {
         m_tools.append(tool.ptr());
         auto& button = add<ToolButton>(*this, name, shortcut, move(tool));
-        button.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-        button.set_preferred_size(0, 32);
+        button.set_fixed_height(32);
         button.set_checkable(true);
-        button.set_icon(Gfx::Bitmap::load_from_file(String::format("/res/icons/paintbrush/%s.png", icon_name.to_string().characters())));
+        button.set_icon(Gfx::Bitmap::load_from_file(String::formatted("/res/icons/pixelpaint/{}.png", icon_name)));
         return button;
     };
 
     add_tool("Move", "move", { 0, Key_M }, make<MoveTool>());
     add_tool("Pen", "pen", { 0, Key_N }, make<PenTool>());
+    add_tool("Brush", "brush", { 0, Key_P }, make<BrushTool>());
     add_tool("Bucket Fill", "bucket", { Mod_Shift, Key_B }, make<BucketTool>());
     add_tool("Spray", "spray", { Mod_Shift, Key_S }, make<SprayTool>());
     add_tool("Color Picker", "picker", { 0, Key_O }, make<PickerTool>());
@@ -120,10 +134,6 @@ ToolboxWidget::ToolboxWidget()
     add_tool("Line", "line", { Mod_Ctrl | Mod_Shift, Key_L }, make<LineTool>());
     add_tool("Rectangle", "rectangle", { Mod_Ctrl | Mod_Shift, Key_R }, make<RectangleTool>());
     add_tool("Ellipse", "circle", { Mod_Ctrl | Mod_Shift, Key_E }, make<EllipseTool>());
-}
-
-ToolboxWidget::~ToolboxWidget()
-{
 }
 
 }

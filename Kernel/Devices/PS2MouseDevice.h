@@ -27,28 +27,42 @@
 #pragma once
 
 #include <AK/CircularQueue.h>
-#include <Kernel/Devices/CharacterDevice.h>
-#include <Kernel/Interrupts/IRQHandler.h>
 #include <Kernel/API/MousePacket.h>
+#include <Kernel/Devices/CharacterDevice.h>
+#include <Kernel/Devices/I8042Controller.h>
+#include <Kernel/Interrupts/IRQHandler.h>
 #include <Kernel/Random.h>
 
 namespace Kernel {
 
 class PS2MouseDevice final : public IRQHandler
-    , public CharacterDevice {
+    , public CharacterDevice
+    , public I8042Device {
 public:
     PS2MouseDevice();
     virtual ~PS2MouseDevice() override;
 
     static PS2MouseDevice& the();
 
+    bool initialize();
+
     // ^CharacterDevice
     virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) override;
-    virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) override;
+    virtual KResultOr<size_t> read(FileDescription&, size_t, UserOrKernelBuffer&, size_t) override;
+    virtual KResultOr<size_t> write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t) override;
     virtual bool can_write(const FileDescription&, size_t) const override { return true; }
 
     virtual const char* purpose() const override { return class_name(); }
+
+    // ^I8042Device
+    virtual void irq_handle_byte_read(u8 byte) override;
+    virtual void enable_interrupts() override
+    {
+        enable_irq();
+    }
+
+    // ^Device
+    virtual mode_t required_mode() const override { return 0440; }
 
 private:
     // ^IRQHandler
@@ -58,24 +72,25 @@ private:
     // ^CharacterDevice
     virtual const char* class_name() const override { return "PS2MouseDevice"; }
 
-    void initialize();
-    void check_device_presence();
-    void initialize_device();
-    void prepare_for_input();
-    void prepare_for_output();
-    void mouse_write(u8);
-    u8 mouse_read();
-    void wait_then_write(u8 port, u8 data);
-    u8 wait_then_read(u8 port);
-    void parse_data_packet();
-    void expect_ack();
+    struct RawPacket {
+        union {
+            u32 dword;
+            u8 bytes[4];
+        };
+    };
+
+    u8 read_from_device();
+    u8 send_command(u8 command);
+    u8 send_command(u8 command, u8 data);
+    MousePacket parse_data_packet(const RawPacket&);
     void set_sample_rate(u8);
     u8 get_device_id();
 
-    bool m_device_present { false };
+    I8042Controller& m_controller;
+    mutable SpinLock<u8> m_queue_lock;
     CircularQueue<MousePacket, 100> m_queue;
     u8 m_data_state { 0 };
-    u8 m_data[4];
+    RawPacket m_data;
     bool m_has_wheel { false };
     bool m_has_five_buttons { false };
     EntropySource m_entropy_source;

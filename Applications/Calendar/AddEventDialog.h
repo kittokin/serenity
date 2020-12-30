@@ -26,7 +26,7 @@
 
 #pragma once
 
-#include "Calendar.h"
+#include <LibGUI/Calendar.h>
 #include <LibGUI/Dialog.h>
 #include <LibGUI/Model.h>
 #include <LibGUI/Window.h>
@@ -36,14 +36,14 @@ class AddEventDialog final : public GUI::Dialog {
 public:
     virtual ~AddEventDialog() override;
 
-    static void show(RefPtr<Calendar> calendar, Core::DateTime date_time, Window* parent_window = nullptr)
+    static void show(Core::DateTime date_time, Window* parent_window = nullptr)
     {
-        auto dialog = AddEventDialog::construct(calendar, date_time, parent_window);
+        auto dialog = AddEventDialog::construct(date_time, parent_window);
         dialog->exec();
     }
 
 private:
-    AddEventDialog(RefPtr<Calendar> calendar, Core::DateTime date_time, Window* parent_window = nullptr);
+    AddEventDialog(Core::DateTime date_time, Window* parent_window = nullptr);
 
     class MonthListModel final : public GUI::Model {
     public:
@@ -58,13 +58,12 @@ private:
         virtual int row_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override;
         virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return Column::__Count; }
         virtual String column_name(int) const override;
-        virtual GUI::Variant data(const GUI::ModelIndex&, Role = Role::Display) const override;
+        virtual GUI::Variant data(const GUI::ModelIndex&, GUI::ModelRole) const override;
         virtual void update() override;
 
     private:
         MonthListModel();
     };
 
-    RefPtr<Calendar> m_calendar;
     Core::DateTime m_date_time;
 };

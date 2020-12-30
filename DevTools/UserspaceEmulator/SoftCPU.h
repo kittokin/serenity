@@ -26,12 +26,15 @@
 
 #pragma once
 
+#include "Region.h"
+#include "ValueWithShadow.h"
 #include <LibX86/Instruction.h>
 #include <LibX86/Interpreter.h>
 
 namespace UserspaceEmulator {
 
 class Emulator;
+class Region;
 
 union PartAddressableRegister {
     struct {
@@ -52,15 +55,21 @@ class SoftCPU final
     : public X86::Interpreter
     , public X86::InstructionStream {
 public:
+    using ValueWithShadowType8 = ValueWithShadow<u8>;
+    using ValueWithShadowType16 = ValueWithShadow<u16>;
+    using ValueWithShadowType32 = ValueWithShadow<u32>;
+    using ValueWithShadowType64 = ValueWithShadow<u64>;
+
     explicit SoftCPU(Emulator&);
     void dump() const;
+
+    u32 base_eip() const { return m_base_eip; }
+    void save_base_eip() { m_base_eip = m_eip; }
 
     u32 eip() const { return m_eip; }
     void set_eip(u32 eip)
     {
         m_eip = eip;
-        m_cached_code_ptr = nullptr;
-        m_cached_code_end = nullptr;
     }
 
     struct Flags {
@@ -77,119 +86,227 @@ public:
         };
     };
 
-    void push32(u32);
-    u32 pop32();
+    void push32(ValueWithShadow<u32>);
+    ValueWithShadow<u32> pop32();
+
+    void push16(ValueWithShadow<u16>);
+    ValueWithShadow<u16> pop16();
 
     void push_string(const StringView&);
+    void push_buffer(const u8* data, size_t);
 
     u16 segment(X86::SegmentRegister seg) const { return m_segment[(int)seg]; }
     u16& segment(X86::SegmentRegister seg) { return m_segment[(int)seg]; }
 
-    u8& gpr8(X86::RegisterIndex8 reg)
+    ValueAndShadowReference<u8> gpr8(X86::RegisterIndex8 reg)
     {
         switch (reg) {
         case X86::RegisterAL:
-            return m_gpr[X86::RegisterEAX].low_u8;
+            return { m_gpr[X86::RegisterEAX].low_u8, m_gpr_shadow[X86::RegisterEAX].low_u8 };
         case X86::RegisterAH:
-            return m_gpr[X86::RegisterEAX].high_u8;
+            return { m_gpr[X86::RegisterEAX].high_u8, m_gpr_shadow[X86::RegisterEAX].high_u8 };
         case X86::RegisterBL:
-            return m_gpr[X86::RegisterEBX].low_u8;
+            return { m_gpr[X86::RegisterEBX].low_u8, m_gpr_shadow[X86::RegisterEBX].low_u8 };
         case X86::RegisterBH:
-            return m_gpr[X86::RegisterEBX].high_u8;
+            return { m_gpr[X86::RegisterEBX].high_u8, m_gpr_shadow[X86::RegisterEBX].high_u8 };
         case X86::RegisterCL:
-            return m_gpr[X86::RegisterECX].low_u8;
+            return { m_gpr[X86::RegisterECX].low_u8, m_gpr_shadow[X86::RegisterECX].low_u8 };
         case X86::RegisterCH:
-            return m_gpr[X86::RegisterECX].high_u8;
+            return { m_gpr[X86::RegisterECX].high_u8, m_gpr_shadow[X86::RegisterECX].high_u8 };
         case X86::RegisterDL:
-            return m_gpr[X86::RegisterEDX].low_u8;
+            return { m_gpr[X86::RegisterEDX].low_u8, m_gpr_shadow[X86::RegisterEDX].low_u8 };
         case X86::RegisterDH:
-            return m_gpr[X86::RegisterEDX].high_u8;
+            return { m_gpr[X86::RegisterEDX].high_u8, m_gpr_shadow[X86::RegisterEDX].high_u8 };
         }
         ASSERT_NOT_REACHED();
     }
 
-    u8 gpr8(X86::RegisterIndex8 reg) const
+    ValueWithShadow<u8> const_gpr8(X86::RegisterIndex8 reg) const
     {
         switch (reg) {
         case X86::RegisterAL:
-            return m_gpr[X86::RegisterEAX].low_u8;
+            return { m_gpr[X86::RegisterEAX].low_u8, m_gpr_shadow[X86::RegisterEAX].low_u8 };
         case X86::RegisterAH:
-            return m_gpr[X86::RegisterEAX].high_u8;
+            return { m_gpr[X86::RegisterEAX].high_u8, m_gpr_shadow[X86::RegisterEAX].high_u8 };
         case X86::RegisterBL:
-            return m_gpr[X86::RegisterEBX].low_u8;
+            return { m_gpr[X86::RegisterEBX].low_u8, m_gpr_shadow[X86::RegisterEBX].low_u8 };
         case X86::RegisterBH:
-            return m_gpr[X86::RegisterEBX].high_u8;
+            return { m_gpr[X86::RegisterEBX].high_u8, m_gpr_shadow[X86::RegisterEBX].high_u8 };
         case X86::RegisterCL:
-            return m_gpr[X86::RegisterECX].low_u8;
+            return { m_gpr[X86::RegisterECX].low_u8, m_gpr_shadow[X86::RegisterECX].low_u8 };
         case X86::RegisterCH:
-            return m_gpr[X86::RegisterECX].high_u8;
+            return { m_gpr[X86::RegisterECX].high_u8, m_gpr_shadow[X86::RegisterECX].high_u8 };
         case X86::RegisterDL:
-            return m_gpr[X86::RegisterEDX].low_u8;
+            return { m_gpr[X86::RegisterEDX].low_u8, m_gpr_shadow[X86::RegisterEDX].low_u8 };
         case X86::RegisterDH:
-            return m_gpr[X86::RegisterEDX].high_u8;
+            return { m_gpr[X86::RegisterEDX].high_u8, m_gpr_shadow[X86::RegisterEDX].high_u8 };
         }
         ASSERT_NOT_REACHED();
     }
 
-    u16 gpr16(X86::RegisterIndex16 reg) const { return m_gpr[reg].low_u16; }
-    u16& gpr16(X86::RegisterIndex16 reg) { return m_gpr[reg].low_u16; }
+    ValueWithShadow<u16> const_gpr16(X86::RegisterIndex16 reg) const
+    {
+        return { m_gpr[reg].low_u16, m_gpr_shadow[reg].low_u16 };
+    }
 
-    u32 gpr32(X86::RegisterIndex32 reg) const { return m_gpr[reg].full_u32; }
-    u32& gpr32(X86::RegisterIndex32 reg) { return m_gpr[reg].full_u32; }
+    ValueAndShadowReference<u16> gpr16(X86::RegisterIndex16 reg)
+    {
+        return { m_gpr[reg].low_u16, m_gpr_shadow[reg].low_u16 };
+    }
 
-    u32 eax() const { return gpr32(X86::RegisterEAX); }
-    u32 ebx() const { return gpr32(X86::RegisterEBX); }
-    u32 ecx() const { return gpr32(X86::RegisterECX); }
-    u32 edx() const { return gpr32(X86::RegisterEDX); }
-    u32 esp() const { return gpr32(X86::RegisterESP); }
-    u32 ebp() const { return gpr32(X86::RegisterEBP); }
-    u32 esi() const { return gpr32(X86::RegisterESI); }
-    u32 edi() const { return gpr32(X86::RegisterEDI); }
+    ValueWithShadow<u32> const_gpr32(X86::RegisterIndex32 reg) const
+    {
+        return { m_gpr[reg].full_u32, m_gpr_shadow[reg].full_u32 };
+    }
 
-    u16 ax() const { return gpr16(X86::RegisterAX); }
-    u16 bx() const { return gpr16(X86::RegisterBX); }
-    u16 cx() const { return gpr16(X86::RegisterCX); }
-    u16 dx() const { return gpr16(X86::RegisterDX); }
-    u16 sp() const { return gpr16(X86::RegisterSP); }
-    u16 bp() const { return gpr16(X86::RegisterBP); }
-    u16 si() const { return gpr16(X86::RegisterSI); }
-    u16 di() const { return gpr16(X86::RegisterDI); }
+    ValueAndShadowReference<u32> gpr32(X86::RegisterIndex32 reg)
+    {
+        return { m_gpr[reg].full_u32, m_gpr_shadow[reg].full_u32 };
+    }
 
-    u8 al() const { return gpr8(X86::RegisterAL); }
-    u8 ah() const { return gpr8(X86::RegisterAH); }
-    u8 bl() const { return gpr8(X86::RegisterBL); }
-    u8 bh() const { return gpr8(X86::RegisterBH); }
-    u8 cl() const { return gpr8(X86::RegisterCL); }
-    u8 ch() const { return gpr8(X86::RegisterCH); }
-    u8 dl() const { return gpr8(X86::RegisterDL); }
-    u8 dh() const { return gpr8(X86::RegisterDH); }
+    template<typename T>
+    ValueWithShadow<T> const_gpr(unsigned register_index) const
+    {
+        if constexpr (sizeof(T) == 1)
+            return const_gpr8((X86::RegisterIndex8)register_index);
+        if constexpr (sizeof(T) == 2)
+            return const_gpr16((X86::RegisterIndex16)register_index);
+        if constexpr (sizeof(T) == 4)
+            return const_gpr32((X86::RegisterIndex32)register_index);
+    }
 
-    void set_eax(u32 value) { gpr32(X86::RegisterEAX) = value; }
-    void set_ebx(u32 value) { gpr32(X86::RegisterEBX) = value; }
-    void set_ecx(u32 value) { gpr32(X86::RegisterECX) = value; }
-    void set_edx(u32 value) { gpr32(X86::RegisterEDX) = value; }
-    void set_esp(u32 value) { gpr32(X86::RegisterESP) = value; }
-    void set_ebp(u32 value) { gpr32(X86::RegisterEBP) = value; }
-    void set_esi(u32 value) { gpr32(X86::RegisterESI) = value; }
-    void set_edi(u32 value) { gpr32(X86::RegisterEDI) = value; }
+    template<typename T>
+    ValueAndShadowReference<T> gpr(unsigned register_index)
+    {
+        if constexpr (sizeof(T) == 1)
+            return gpr8((X86::RegisterIndex8)register_index);
+        if constexpr (sizeof(T) == 2)
+            return gpr16((X86::RegisterIndex16)register_index);
+        if constexpr (sizeof(T) == 4)
+            return gpr32((X86::RegisterIndex32)register_index);
+    }
 
-    void set_ax(u16 value) { gpr16(X86::RegisterAX) = value; }
-    void set_bx(u16 value) { gpr16(X86::RegisterBX) = value; }
-    void set_cx(u16 value) { gpr16(X86::RegisterCX) = value; }
-    void set_dx(u16 value) { gpr16(X86::RegisterDX) = value; }
-    void set_sp(u16 value) { gpr16(X86::RegisterSP) = value; }
-    void set_bp(u16 value) { gpr16(X86::RegisterBP) = value; }
-    void set_si(u16 value) { gpr16(X86::RegisterSI) = value; }
-    void set_di(u16 value) { gpr16(X86::RegisterDI) = value; }
+    ValueWithShadow<u32> source_index(bool a32) const
+    {
+        if (a32)
+            return esi();
+        return { si().value(), (u32)si().shadow() & 0xffff };
+    }
 
-    void set_al(u8 value) { gpr8(X86::RegisterAL) = value; }
-    void set_ah(u8 value) { gpr8(X86::RegisterAH) = value; }
-    void set_bl(u8 value) { gpr8(X86::RegisterBL) = value; }
-    void set_bh(u8 value) { gpr8(X86::RegisterBH) = value; }
-    void set_cl(u8 value) { gpr8(X86::RegisterCL) = value; }
-    void set_ch(u8 value) { gpr8(X86::RegisterCH) = value; }
-    void set_dl(u8 value) { gpr8(X86::RegisterDL) = value; }
-    void set_dh(u8 value) { gpr8(X86::RegisterDH) = value; }
+    ValueWithShadow<u32> destination_index(bool a32) const
+    {
+        if (a32)
+            return edi();
+        return { di().value(), (u32)di().shadow() & 0xffff };
+    }
+
+    ValueWithShadow<u32> loop_index(bool a32) const
+    {
+        if (a32)
+            return ecx();
+        return { cx().value(), (u32)cx().shadow() & 0xffff };
+    }
+
+    bool decrement_loop_index(bool a32)
+    {
+        if (a32) {
+            set_ecx({ ecx().value() - 1, ecx().shadow() });
+            return ecx().value() == 0;
+        }
+        set_cx(ValueWithShadow<u16>(cx().value() - 1, cx().shadow()));
+        return cx().value() == 0;
+    }
+
+    ALWAYS_INLINE void step_source_index(bool a32, u32 step)
+    {
+        if (a32) {
+            if (df())
+                set_esi({ esi().value() - step, esi().shadow() });
+            else
+                set_esi({ esi().value() + step, esi().shadow() });
+        } else {
+            if (df())
+                set_si(ValueWithShadow<u16>(si().value() - step, si().shadow()));
+            else
+                set_si(ValueWithShadow<u16>(si().value() + step, si().shadow()));
+        }
+    }
+
+    ALWAYS_INLINE void step_destination_index(bool a32, u32 step)
+    {
+        if (a32) {
+            if (df())
+                set_edi({ edi().value() - step, edi().shadow() });
+            else
+                set_edi({ edi().value() + step, edi().shadow() });
+        } else {
+            if (df())
+                set_di(ValueWithShadow<u16>(di().value() - step, di().shadow()));
+            else
+                set_di(ValueWithShadow<u16>(di().value() + step, di().shadow()));
+        }
+    }
+
+    u32 eflags() const { return m_eflags; }
+    void set_eflags(ValueWithShadow<u32> eflags)
+    {
+        m_eflags = eflags.value();
+        m_flags_tainted = eflags.is_uninitialized();
+    }
+
+    ValueWithShadow<u32> eax() const { return const_gpr32(X86::RegisterEAX); }
+    ValueWithShadow<u32> ebx() const { return const_gpr32(X86::RegisterEBX); }
+    ValueWithShadow<u32> ecx() const { return const_gpr32(X86::RegisterECX); }
+    ValueWithShadow<u32> edx() const { return const_gpr32(X86::RegisterEDX); }
+    ValueWithShadow<u32> esp() const { return const_gpr32(X86::RegisterESP); }
+    ValueWithShadow<u32> ebp() const { return const_gpr32(X86::RegisterEBP); }
+    ValueWithShadow<u32> esi() const { return const_gpr32(X86::RegisterESI); }
+    ValueWithShadow<u32> edi() const { return const_gpr32(X86::RegisterEDI); }
+
+    ValueWithShadow<u16> ax() const { return const_gpr16(X86::RegisterAX); }
+    ValueWithShadow<u16> bx() const { return const_gpr16(X86::RegisterBX); }
+    ValueWithShadow<u16> cx() const { return const_gpr16(X86::RegisterCX); }
+    ValueWithShadow<u16> dx() const { return const_gpr16(X86::RegisterDX); }
+    ValueWithShadow<u16> sp() const { return const_gpr16(X86::RegisterSP); }
+    ValueWithShadow<u16> bp() const { return const_gpr16(X86::RegisterBP); }
+    ValueWithShadow<u16> si() const { return const_gpr16(X86::RegisterSI); }
+    ValueWithShadow<u16> di() const { return const_gpr16(X86::RegisterDI); }
+
+    ValueWithShadow<u8> al() const { return const_gpr8(X86::RegisterAL); }
+    ValueWithShadow<u8> ah() const { return const_gpr8(X86::RegisterAH); }
+    ValueWithShadow<u8> bl() const { return const_gpr8(X86::RegisterBL); }
+    ValueWithShadow<u8> bh() const { return const_gpr8(X86::RegisterBH); }
+    ValueWithShadow<u8> cl() const { return const_gpr8(X86::RegisterCL); }
+    ValueWithShadow<u8> ch() const { return const_gpr8(X86::RegisterCH); }
+    ValueWithShadow<u8> dl() const { return const_gpr8(X86::RegisterDL); }
+    ValueWithShadow<u8> dh() const { return const_gpr8(X86::RegisterDH); }
+
+    void set_eax(ValueWithShadow<u32> value) { gpr32(X86::RegisterEAX) = value; }
+    void set_ebx(ValueWithShadow<u32> value) { gpr32(X86::RegisterEBX) = value; }
+    void set_ecx(ValueWithShadow<u32> value) { gpr32(X86::RegisterECX) = value; }
+    void set_edx(ValueWithShadow<u32> value) { gpr32(X86::RegisterEDX) = value; }
+    void set_esp(ValueWithShadow<u32> value) { gpr32(X86::RegisterESP) = value; }
+    void set_ebp(ValueWithShadow<u32> value) { gpr32(X86::RegisterEBP) = value; }
+    void set_esi(ValueWithShadow<u32> value) { gpr32(X86::RegisterESI) = value; }
+    void set_edi(ValueWithShadow<u32> value) { gpr32(X86::RegisterEDI) = value; }
+
+    void set_ax(ValueWithShadow<u16> value) { gpr16(X86::RegisterAX) = value; }
+    void set_bx(ValueWithShadow<u16> value) { gpr16(X86::RegisterBX) = value; }
+    void set_cx(ValueWithShadow<u16> value) { gpr16(X86::RegisterCX) = value; }
+    void set_dx(ValueWithShadow<u16> value) { gpr16(X86::RegisterDX) = value; }
+    void set_sp(ValueWithShadow<u16> value) { gpr16(X86::RegisterSP) = value; }
+    void set_bp(ValueWithShadow<u16> value) { gpr16(X86::RegisterBP) = value; }
+    void set_si(ValueWithShadow<u16> value) { gpr16(X86::RegisterSI) = value; }
+    void set_di(ValueWithShadow<u16> value) { gpr16(X86::RegisterDI) = value; }
+
+    void set_al(ValueWithShadow<u8> value) { gpr8(X86::RegisterAL) = value; }
+    void set_ah(ValueWithShadow<u8> value) { gpr8(X86::RegisterAH) = value; }
+    void set_bl(ValueWithShadow<u8> value) { gpr8(X86::RegisterBL) = value; }
+    void set_bh(ValueWithShadow<u8> value) { gpr8(X86::RegisterBH) = value; }
+    void set_cl(ValueWithShadow<u8> value) { gpr8(X86::RegisterCL) = value; }
+    void set_ch(ValueWithShadow<u8> value) { gpr8(X86::RegisterCH) = value; }
+    void set_dl(ValueWithShadow<u8> value) { gpr8(X86::RegisterDL) = value; }
+    void set_dh(ValueWithShadow<u8> value) { gpr8(X86::RegisterDH) = value; }
 
     bool of() const { return m_eflags & Flags::OF; }
     bool sf() const { return m_eflags & Flags::SF; }
@@ -246,13 +363,37 @@ public:
     u16 es() const { return m_segment[(int)X86::SegmentRegister::ES]; }
     u16 ss() const { return m_segment[(int)X86::SegmentRegister::SS]; }
 
-    u8 read_memory8(X86::LogicalAddress);
-    u16 read_memory16(X86::LogicalAddress);
-    u32 read_memory32(X86::LogicalAddress);
+    ValueWithShadow<u8> read_memory8(X86::LogicalAddress);
+    ValueWithShadow<u16> read_memory16(X86::LogicalAddress);
+    ValueWithShadow<u32> read_memory32(X86::LogicalAddress);
+    ValueWithShadow<u64> read_memory64(X86::LogicalAddress);
 
-    void write_memory8(X86::LogicalAddress, u8);
-    void write_memory16(X86::LogicalAddress, u16);
-    void write_memory32(X86::LogicalAddress, u32);
+    template<typename T>
+    ValueWithShadow<T> read_memory(X86::LogicalAddress address)
+    {
+        if constexpr (sizeof(T) == 1)
+            return read_memory8(address);
+        if constexpr (sizeof(T) == 2)
+            return read_memory16(address);
+        if constexpr (sizeof(T) == 4)
+            return read_memory32(address);
+    }
+
+    void write_memory8(X86::LogicalAddress, ValueWithShadow<u8>);
+    void write_memory16(X86::LogicalAddress, ValueWithShadow<u16>);
+    void write_memory32(X86::LogicalAddress, ValueWithShadow<u32>);
+    void write_memory64(X86::LogicalAddress, ValueWithShadow<u64>);
+
+    template<typename T>
+    void write_memory(X86::LogicalAddress address, ValueWithShadow<T> data)
+    {
+        if constexpr (sizeof(T) == 1)
+            return write_memory8(address, data);
+        if constexpr (sizeof(T) == 2)
+            return write_memory16(address, data);
+        if constexpr (sizeof(T) == 4)
+            return write_memory32(address, data);
+    }
 
     bool evaluate_condition(u8 condition) const
     {
@@ -295,11 +436,35 @@ public:
         return 0;
     }
 
+    template<bool check_zf, typename Callback>
+    void do_once_or_repeat(const X86::Instruction& insn, Callback);
+
+    template<typename A>
+    void taint_flags_from(const A& a)
+    {
+        m_flags_tainted = a.is_uninitialized();
+    }
+
+    template<typename A, typename B>
+    void taint_flags_from(const A& a, const B& b)
+    {
+        m_flags_tainted = a.is_uninitialized() || b.is_uninitialized();
+    }
+
+    template<typename A, typename B, typename C>
+    void taint_flags_from(const A& a, const B& b, const C& c)
+    {
+        m_flags_tainted = a.is_uninitialized() || b.is_uninitialized() || c.is_uninitialized();
+    }
+
+    void warn_if_flags_tainted(const char* message) const;
+
     // ^X86::InstructionStream
     virtual bool can_read() override { return false; }
     virtual u8 read8() override;
     virtual u16 read16() override;
     virtual u32 read32() override;
+    virtual u64 read64() override;
 
 private:
     // ^X86::Interpreter
@@ -425,6 +590,125 @@ private:
     virtual void ENTER16(const X86::Instruction&) override;
     virtual void ENTER32(const X86::Instruction&) override;
     virtual void ESCAPE(const X86::Instruction&) override;
+    virtual void FADD_RM32(const X86::Instruction&) override;
+    virtual void FMUL_RM32(const X86::Instruction&) override;
+    virtual void FCOM_RM32(const X86::Instruction&) override;
+    virtual void FCOMP_RM32(const X86::Instruction&) override;
+    virtual void FSUB_RM32(const X86::Instruction&) override;
+    virtual void FSUBR_RM32(const X86::Instruction&) override;
+    virtual void FDIV_RM32(const X86::Instruction&) override;
+    virtual void FDIVR_RM32(const X86::Instruction&) override;
+    virtual void FLD_RM32(const X86::Instruction&) override;
+    virtual void FXCH(const X86::Instruction&) override;
+    virtual void FST_RM32(const X86::Instruction&) override;
+    virtual void FNOP(const X86::Instruction&) override;
+    virtual void FSTP_RM32(const X86::Instruction&) override;
+    virtual void FLDENV(const X86::Instruction&) override;
+    virtual void FCHS(const X86::Instruction&) override;
+    virtual void FABS(const X86::Instruction&) override;
+    virtual void FTST(const X86::Instruction&) override;
+    virtual void FXAM(const X86::Instruction&) override;
+    virtual void FLDCW(const X86::Instruction&) override;
+    virtual void FLD1(const X86::Instruction&) override;
+    virtual void FLDL2T(const X86::Instruction&) override;
+    virtual void FLDL2E(const X86::Instruction&) override;
+    virtual void FLDPI(const X86::Instruction&) override;
+    virtual void FLDLG2(const X86::Instruction&) override;
+    virtual void FLDLN2(const X86::Instruction&) override;
+    virtual void FLDZ(const X86::Instruction&) override;
+    virtual void FNSTENV(const X86::Instruction&) override;
+    virtual void F2XM1(const X86::Instruction&) override;
+    virtual void FYL2X(const X86::Instruction&) override;
+    virtual void FPTAN(const X86::Instruction&) override;
+    virtual void FPATAN(const X86::Instruction&) override;
+    virtual void FXTRACT(const X86::Instruction&) override;
+    virtual void FPREM1(const X86::Instruction&) override;
+    virtual void FDECSTP(const X86::Instruction&) override;
+    virtual void FINCSTP(const X86::Instruction&) override;
+    virtual void FNSTCW(const X86::Instruction&) override;
+    virtual void FPREM(const X86::Instruction&) override;
+    virtual void FYL2XP1(const X86::Instruction&) override;
+    virtual void FSQRT(const X86::Instruction&) override;
+    virtual void FSINCOS(const X86::Instruction&) override;
+    virtual void FRNDINT(const X86::Instruction&) override;
+    virtual void FSCALE(const X86::Instruction&) override;
+    virtual void FSIN(const X86::Instruction&) override;
+    virtual void FCOS(const X86::Instruction&) override;
+    virtual void FIADD_RM32(const X86::Instruction&) override;
+    virtual void FCMOVB(const X86::Instruction&) override;
+    virtual void FIMUL_RM32(const X86::Instruction&) override;
+    virtual void FCMOVE(const X86::Instruction&) override;
+    virtual void FICOM_RM32(const X86::Instruction&) override;
+    virtual void FCMOVBE(const X86::Instruction&) override;
+    virtual void FICOMP_RM32(const X86::Instruction&) override;
+    virtual void FCMOVU(const X86::Instruction&) override;
+    virtual void FISUB_RM32(const X86::Instruction&) override;
+    virtual void FISUBR_RM32(const X86::Instruction&) override;
+    virtual void FUCOMPP(const X86::Instruction&) override;
+    virtual void FIDIV_RM32(const X86::Instruction&) override;
+    virtual void FIDIVR_RM32(const X86::Instruction&) override;
+    virtual void FILD_RM32(const X86::Instruction&) override;
+    virtual void FCMOVNB(const X86::Instruction&) override;
+    virtual void FISTTP_RM32(const X86::Instruction&) override;
+    virtual void FCMOVNE(const X86::Instruction&) override;
+    virtual void FIST_RM32(const X86::Instruction&) override;
+    virtual void FCMOVNBE(const X86::Instruction&) override;
+    virtual void FISTP_RM32(const X86::Instruction&) override;
+    virtual void FCMOVNU(const X86::Instruction&) override;
+    virtual void FNENI(const X86::Instruction&) override;
+    virtual void FNDISI(const X86::Instruction&) override;
+    virtual void FNCLEX(const X86::Instruction&) override;
+    virtual void FNINIT(const X86::Instruction&) override;
+    virtual void FNSETPM(const X86::Instruction&) override;
+    virtual void FLD_RM80(const X86::Instruction&) override;
+    virtual void FUCOMI(const X86::Instruction&) override;
+    virtual void FCOMI(const X86::Instruction&) override;
+    virtual void FSTP_RM80(const X86::Instruction&) override;
+    virtual void FADD_RM64(const X86::Instruction&) override;
+    virtual void FMUL_RM64(const X86::Instruction&) override;
+    virtual void FCOM_RM64(const X86::Instruction&) override;
+    virtual void FCOMP_RM64(const X86::Instruction&) override;
+    virtual void FSUB_RM64(const X86::Instruction&) override;
+    virtual void FSUBR_RM64(const X86::Instruction&) override;
+    virtual void FDIV_RM64(const X86::Instruction&) override;
+    virtual void FDIVR_RM64(const X86::Instruction&) override;
+    virtual void FLD_RM64(const X86::Instruction&) override;
+    virtual void FFREE(const X86::Instruction&) override;
+    virtual void FISTTP_RM64(const X86::Instruction&) override;
+    virtual void FST_RM64(const X86::Instruction&) override;
+    virtual void FSTP_RM64(const X86::Instruction&) override;
+    virtual void FRSTOR(const X86::Instruction&) override;
+    virtual void FUCOM(const X86::Instruction&) override;
+    virtual void FUCOMP(const X86::Instruction&) override;
+    virtual void FNSAVE(const X86::Instruction&) override;
+    virtual void FNSTSW(const X86::Instruction&) override;
+    virtual void FIADD_RM16(const X86::Instruction&) override;
+    virtual void FADDP(const X86::Instruction&) override;
+    virtual void FIMUL_RM16(const X86::Instruction&) override;
+    virtual void FMULP(const X86::Instruction&) override;
+    virtual void FICOM_RM16(const X86::Instruction&) override;
+    virtual void FICOMP_RM16(const X86::Instruction&) override;
+    virtual void FCOMPP(const X86::Instruction&) override;
+    virtual void FISUB_RM16(const X86::Instruction&) override;
+    virtual void FSUBRP(const X86::Instruction&) override;
+    virtual void FISUBR_RM16(const X86::Instruction&) override;
+    virtual void FSUBP(const X86::Instruction&) override;
+    virtual void FIDIV_RM16(const X86::Instruction&) override;
+    virtual void FDIVRP(const X86::Instruction&) override;
+    virtual void FIDIVR_RM16(const X86::Instruction&) override;
+    virtual void FDIVP(const X86::Instruction&) override;
+    virtual void FILD_RM16(const X86::Instruction&) override;
+    virtual void FFREEP(const X86::Instruction&) override;
+    virtual void FISTTP_RM16(const X86::Instruction&) override;
+    virtual void FIST_RM16(const X86::Instruction&) override;
+    virtual void FISTP_RM16(const X86::Instruction&) override;
+    virtual void FBLD_M80(const X86::Instruction&) override;
+    virtual void FNSTSW_AX(const X86::Instruction&) override;
+    virtual void FILD_RM64(const X86::Instruction&) override;
+    virtual void FUCOMIP(const X86::Instruction&) override;
+    virtual void FBSTP_M80(const X86::Instruction&) override;
+    virtual void FCOMIP(const X86::Instruction&) override;
+    virtual void FISTP_RM64(const X86::Instruction&) override;
     virtual void HLT(const X86::Instruction&) override;
     virtual void IDIV_RM16(const X86::Instruction&) override;
     virtual void IDIV_RM32(const X86::Instruction&) override;
@@ -773,33 +1057,37 @@ private:
     virtual void wrap_0xD3_16(const X86::Instruction&) override;
     virtual void wrap_0xD3_32(const X86::Instruction&) override;
 
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_or, typename Op>
     void generic_AL_imm8(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_or, typename Op>
     void generic_AX_imm16(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_or, typename Op>
     void generic_EAX_imm32(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_or, typename Op>
     void generic_RM16_imm16(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_or, typename Op>
     void generic_RM16_imm8(Op, const X86::Instruction&);
     template<bool update_dest, typename Op>
+    void generic_RM16_unsigned_imm8(Op, const X86::Instruction&);
+    template<bool update_dest, bool is_zero_idiom_if_both_operands_same, typename Op>
     void generic_RM16_reg16(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_or, typename Op>
     void generic_RM32_imm32(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_or, typename Op>
     void generic_RM32_imm8(Op, const X86::Instruction&);
     template<bool update_dest, typename Op>
+    void generic_RM32_unsigned_imm8(Op, const X86::Instruction&);
+    template<bool update_dest, bool is_zero_idiom_if_both_operands_same, typename Op>
     void generic_RM32_reg32(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_or, typename Op>
     void generic_RM8_imm8(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_zero_idiom_if_both_operands_same, typename Op>
     void generic_RM8_reg8(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_zero_idiom_if_both_operands_same, typename Op>
     void generic_reg16_RM16(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_zero_idiom_if_both_operands_same, typename Op>
     void generic_reg32_RM32(Op, const X86::Instruction&);
-    template<bool update_dest, typename Op>
+    template<bool update_dest, bool is_zero_idiom_if_both_operands_same, typename Op>
     void generic_reg8_RM8(Op, const X86::Instruction&);
 
     template<typename Op>
@@ -815,9 +1103,6 @@ private:
     template<typename Op>
     void generic_RM32_CL(Op, const X86::Instruction&);
 
-    template<bool check_zf, typename Callback>
-    void do_once_or_repeat(const X86::Instruction& insn, Callback);
-
     void update_code_cache();
 
     void did_receive_secret_data();
@@ -826,13 +1111,49 @@ private:
     Emulator& m_emulator;
 
     PartAddressableRegister m_gpr[8];
+    PartAddressableRegister m_gpr_shadow[8];
+
     u16 m_segment[8] { 0 };
     u32 m_eflags { 0 };
 
-    u32 m_eip { 0 };
+    bool m_flags_tainted { false };
 
-    const u8* m_cached_code_ptr { nullptr };
-    const u8* m_cached_code_end { nullptr };
+    u32 m_eip { 0 };
+    u32 m_base_eip { 0 };
+
+    long double m_fpu[8];
+    // FIXME: Shadow for m_fpu.
+
+    // FIXME: Use bits 11 to 13 in the FPU status word for this.
+    int m_fpu_top { -1 };
+
+    void fpu_push(long double n)
+    {
+        ++m_fpu_top;
+        fpu_set(0, n);
+    }
+    long double fpu_pop()
+    {
+        auto n = fpu_get(0);
+        m_fpu_top--;
+        return n;
+    }
+    long double fpu_get(int i)
+    {
+        ASSERT(i >= 0 && i <= m_fpu_top);
+        return m_fpu[m_fpu_top - i];
+    }
+    void fpu_set(int i, long double n)
+    {
+        ASSERT(i >= 0 && i <= m_fpu_top);
+        m_fpu[m_fpu_top - i] = n;
+    }
+
+    // FIXME: Or just something like m_flags_tainted?
+    ValueWithShadow<u16> m_fpu_cw { 0, 0 };
+
+    Region* m_cached_code_region { nullptr };
+    u8* m_cached_code_base_ptr { nullptr };
 
     u32 m_secret_handshake_state { 0 };
     u32 m_secret_data[3];
@@ -840,34 +1161,41 @@ private:
 
 ALWAYS_INLINE u8 SoftCPU::read8()
 {
-    if (!m_cached_code_ptr || m_cached_code_ptr >= m_cached_code_end)
+    if (!m_cached_code_region || !m_cached_code_region->contains(m_eip))
         update_code_cache();
 
-    u8 value = *m_cached_code_ptr;
-    m_cached_code_ptr += 1;
+    u8 value = m_cached_code_base_ptr[m_eip - m_cached_code_region->base()];
     m_eip += 1;
     return value;
 }
 
 ALWAYS_INLINE u16 SoftCPU::read16()
 {
-    if (!m_cached_code_ptr || (m_cached_code_ptr + 2) >= m_cached_code_end)
+    if (!m_cached_code_region || !m_cached_code_region->contains(m_eip))
         update_code_cache();
 
-    u16 value = *reinterpret_cast<const u16*>(m_cached_code_ptr);
-    m_cached_code_ptr += 2;
+    u16 value = *reinterpret_cast<const u16*>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()]);
     m_eip += 2;
     return value;
 }
 
 ALWAYS_INLINE u32 SoftCPU::read32()
 {
-    if (!m_cached_code_ptr || (m_cached_code_ptr + 4) >= m_cached_code_end)
+    if (!m_cached_code_region || !m_cached_code_region->contains(m_eip))
         update_code_cache();
 
-    u32 value = *reinterpret_cast<const u32*>(m_cached_code_ptr);
-    m_cached_code_ptr += 4;
+    u32 value = *reinterpret_cast<const u32*>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()]);
     m_eip += 4;
+    return value;
+}
+
+ALWAYS_INLINE u64 SoftCPU::read64()
+{
+    if (!m_cached_code_region || !m_cached_code_region->contains(m_eip))
+        update_code_cache();
+
+    auto value = *reinterpret_cast<const u64*>(&m_cached_code_base_ptr[m_eip - m_cached_code_region->base()]);
+    m_eip += 8;
     return value;
 }
 

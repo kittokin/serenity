@@ -26,55 +26,82 @@
 
 #pragma once
 
-#include <AK/FixedArray.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/RefPtr.h>
 #include <AK/Types.h>
+#include <Kernel/KResult.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
 
-#define OPTIMAL_TICKS_PER_SECOND_RATE 1000
+#define OPTIMAL_TICKS_PER_SECOND_RATE 250
 
-class HardwareTimer;
+class HardwareTimerBase;
+
+enum class TimePrecision {
+    Coarse = 0,
+    Precise
+};
 
 class TimeManagement {
     AK_MAKE_ETERNAL;
 
 public:
+    TimeManagement();
     static bool initialized();
-    static void initialize();
+    static void initialize(u32 cpu);
     static TimeManagement& the();
 
-    time_t epoch_time() const;
-    void set_epoch_time(time_t);
-    time_t seconds_since_boot() const;
+    static bool is_valid_clock_id(clockid_t);
+    KResultOr<timespec> current_time(clockid_t) const;
+    timespec monotonic_time(TimePrecision = TimePrecision::Coarse) const;
+    timespec monotonic_time_raw() const
+    {
+        // TODO: implement
+        return monotonic_time(TimePrecision::Precise);
+    }
+    timespec epoch_time(TimePrecision = TimePrecision::Precise) const;
+    void set_epoch_time(timespec);
     time_t ticks_per_second() const;
-    time_t ticks_this_second() const;
     time_t boot_time() const;
 
-    bool is_system_timer(const HardwareTimer&) const;
+    bool is_system_timer(const HardwareTimerBase&) const;
 
     static void update_time(const RegisterState&);
-    void increment_time_since_boot(const RegisterState&);
+    static void update_time_hpet(const RegisterState&);
+    void increment_time_since_boot_hpet();
+    void increment_time_since_boot();
 
     static bool is_hpet_periodic_mode_allowed();
 
+    u64 uptime_ms() const;
     static timeval now_as_timeval();
 
+    timespec remaining_epoch_time_adjustment() const { return m_remaining_epoch_time_adjustment; }
+    void set_remaining_epoch_time_adjustment(const timespec& adjustment) { m_remaining_epoch_time_adjustment = adjustment; }
+
 private:
-    explicit TimeManagement(bool probe_non_legacy_hardware_timers);
     bool probe_and_set_legacy_hardware_timers();
     bool probe_and_set_non_legacy_hardware_timers();
-    Vector<HardwareTimer*> scan_and_initialize_periodic_timers();
-    Vector<HardwareTimer*> scan_for_non_periodic_timers();
-    NonnullRefPtrVector<HardwareTimer> m_hardware_timers;
+    Vector<HardwareTimerBase*> scan_and_initialize_periodic_timers();
+    Vector<HardwareTimerBase*> scan_for_non_periodic_timers();
+    NonnullRefPtrVector<HardwareTimerBase> m_hardware_timers;
+    void set_system_timer(HardwareTimerBase&);
+    static void system_timer_tick(const RegisterState&);
 
+    // Variables between m_update1 and m_update2 are synchronized
+    Atomic<u32> m_update1 { 0 };
     u32 m_ticks_this_second { 0 };
-    u32 m_seconds_since_boot { 0 };
-    time_t m_epoch_time { 0 };
-    RefPtr<HardwareTimer> m_system_timer;
-    RefPtr<HardwareTimer> m_time_keeper_timer;
+    u64 m_seconds_since_boot { 0 };
+    timespec m_epoch_time { 0, 0 };
+    timespec m_remaining_epoch_time_adjustment { 0, 0 };
+    Atomic<u32> m_update2 { 0 };
+
+    u32 m_time_ticks_per_second { 0 }; // may be different from interrupts/second (e.g. hpet)
+    bool m_can_query_precise_time { false };
+
+    RefPtr<HardwareTimerBase> m_system_timer;
+    RefPtr<HardwareTimerBase> m_time_keeper_timer;
 };
 
 }

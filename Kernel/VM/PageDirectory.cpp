@@ -25,6 +25,7 @@
  */
 
 #include <AK/Memory.h>
+#include <AK/Singleton.h>
 #include <Kernel/Process.h>
 #include <Kernel/Random.h>
 #include <Kernel/Thread.h>
@@ -37,13 +38,12 @@ static const FlatPtr userspace_range_base = 0x00800000;
 static const FlatPtr userspace_range_ceiling = 0xbe000000;
 static const FlatPtr kernelspace_range_base = 0xc0800000;
 
+static AK::Singleton<HashMap<u32, PageDirectory*>> s_cr3_map;
+
 static HashMap<u32, PageDirectory*>& cr3_map()
 {
     ASSERT_INTERRUPTS_DISABLED();
-    static HashMap<u32, PageDirectory*>* map;
-    if (!map)
-        map = new HashMap<u32, PageDirectory*>;
-    return *map;
+    return *s_cr3_map;
 }
 
 RefPtr<PageDirectory> PageDirectory::find_by_cr3(u32 cr3)
@@ -80,7 +80,7 @@ PageDirectory::PageDirectory(Process& process, const RangeAllocator* parent_rang
     if (parent_range_allocator) {
         m_range_allocator.initialize_from_parent(*parent_range_allocator);
     } else {
-        size_t random_offset = (get_fast_random<u32>() % 32 * MB) & PAGE_MASK;
+        size_t random_offset = (get_fast_random<u8>() % 32 * MiB) & PAGE_MASK;
         u32 base = userspace_range_base + random_offset;
         m_range_allocator.initialize_with_range(VirtualAddress(base), userspace_range_ceiling - base);
     }
@@ -90,19 +90,45 @@ PageDirectory::PageDirectory(Process& process, const RangeAllocator* parent_rang
     m_directory_pages[0] = MM.allocate_user_physical_page();
     m_directory_pages[1] = MM.allocate_user_physical_page();
     m_directory_pages[2] = MM.allocate_user_physical_page();
-    // Share the top 1 GB of kernel-only mappings (>=3GB or >=0xc0000000)
+    // Share the top 1 GiB of kernel-only mappings (>=3GiB or >=0xc0000000)
     m_directory_pages[3] = MM.kernel_page_directory().m_directory_pages[3];
 
     {
         auto& table = *(PageDirectoryPointerTable*)MM.quickmap_page(*m_directory_table);
-        table.raw[0] = (u64)m_directory_pages[0]->paddr().as_ptr() | 1;
-        table.raw[1] = (u64)m_directory_pages[1]->paddr().as_ptr() | 1;
-        table.raw[2] = (u64)m_directory_pages[2]->paddr().as_ptr() | 1;
-        table.raw[3] = (u64)m_directory_pages[3]->paddr().as_ptr() | 1;
+        table.raw[0] = (FlatPtr)m_directory_pages[0]->paddr().as_ptr() | 1;
+        table.raw[1] = (FlatPtr)m_directory_pages[1]->paddr().as_ptr() | 1;
+        table.raw[2] = (FlatPtr)m_directory_pages[2]->paddr().as_ptr() | 1;
+        table.raw[3] = (FlatPtr)m_directory_pages[3]->paddr().as_ptr() | 1;
+
+        // 2 ** MAXPHYADDR - 1
+        // Where MAXPHYADDR = physical_address_bit_width
+        u64 max_physical_address = (1ULL << Processor::current().physical_address_bit_width()) - 1;
+
+        // bit 63 = no execute
+        // bit 7 = page size
+        // bit 5 = accessed
+        // bit 4 = cache disable
+        // bit 3 = write through
+        // bit 2 = user/supervisor
+        // bit 1 = read/write
+        // bit 0 = present
+        constexpr u64 pdpte_bit_flags = 0x80000000000000BF;
+
+        // This is to notify us of bugs where we're:
+        // 1. Going over what the processor is capable of.
+        // 2. Writing into the reserved bits (51:MAXPHYADDR), where doing so throws a GPF
+        //    when writing out the PDPT pointer to CR3.
+        // The reason we're not checking the page directory's physical address directly is because
+        // we're checking for sign extension when putting it into a PDPTE. See issue #4584.
+        ASSERT((table.raw[0] & ~pdpte_bit_flags) <= max_physical_address);
+        ASSERT((table.raw[1] & ~pdpte_bit_flags) <= max_physical_address);
+        ASSERT((table.raw[2] & ~pdpte_bit_flags) <= max_physical_address);
+        ASSERT((table.raw[3] & ~pdpte_bit_flags) <= max_physical_address);
+
         MM.unquickmap_page();
     }
 
-    // Clone bottom 2 MB of mappings from kernel_page_directory
+    // Clone bottom 2 MiB of mappings from kernel_page_directory
     PageDirectoryEntry buffer;
     auto* kernel_pd = MM.quickmap_pd(MM.kernel_page_directory(), 0);
     memcpy(&buffer, kernel_pd, sizeof(PageDirectoryEntry));

@@ -24,8 +24,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/ByteBuffer.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
+#include <AK/NumberFormat.h>
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <LibCore/ArgsParser.h>
@@ -38,17 +40,6 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 
-String si_bytes(unsigned bytes)
-{
-    if (bytes >= GB)
-        return String::format("%fGiB", (double)bytes / (double)GB);
-    if (bytes >= MB)
-        return String::format("%fMiB", (double)bytes / (double)MB);
-    if (bytes >= KB)
-        return String::format("%fKiB", (double)bytes / (double)KB);
-    return String::format("%dB", bytes);
-}
-
 int main(int argc, char** argv)
 {
     const char* value_ipv4 = nullptr;
@@ -57,6 +48,7 @@ int main(int argc, char** argv)
     const char* value_mask = nullptr;
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Display or modify the configuration of each network interface.");
     args_parser.add_option(value_ipv4, "Set the IP address of the selected network", "ipv4", 'i', "The new IP of the network");
     args_parser.add_option(value_adapter, "Select a specific network adapter to configure", "adapter", 'a', "The name of a network adapter");
     args_parser.add_option(value_gateway, "Set the default gateway of the selected network", "gateway", 'g', "The new IP of the gateway");
@@ -95,8 +87,8 @@ int main(int argc, char** argv)
             printf("\tnetmask: %s\n", netmask.characters());
             printf("\tgateway: %s\n", gateway.characters());
             printf("\tclass: %s\n", class_name.characters());
-            printf("\tRX: %u packets %u bytes (%s)\n", packets_in, bytes_in, si_bytes(bytes_in).characters());
-            printf("\tTX: %u packets %u bytes (%s)\n", packets_out, bytes_out, si_bytes(bytes_out).characters());
+            printf("\tRX: %u packets %u bytes (%s)\n", packets_in, bytes_in, human_readable_size(bytes_in).characters());
+            printf("\tTX: %u packets %u bytes (%s)\n", packets_out, bytes_out, human_readable_size(bytes_out).characters());
             printf("\tMTU: %u\n", mtu);
             printf("\n");
         });
@@ -126,7 +118,11 @@ int main(int argc, char** argv)
             struct ifreq ifr;
             memset(&ifr, 0, sizeof(ifr));
 
-            strncpy(ifr.ifr_name, ifname.characters(), IFNAMSIZ);
+            bool fits = ifname.copy_characters_to_buffer(ifr.ifr_name, IFNAMSIZ);
+            if (!fits) {
+                fprintf(stderr, "Interface name '%s' is too long\n", ifname.characters());
+                return 1;
+            }
             ifr.ifr_addr.sa_family = AF_INET;
             ((sockaddr_in&)ifr.ifr_addr).sin_addr.s_addr = address.value().to_in_addr_t();
 
@@ -154,7 +150,11 @@ int main(int argc, char** argv)
             struct ifreq ifr;
             memset(&ifr, 0, sizeof(ifr));
 
-            strncpy(ifr.ifr_name, ifname.characters(), IFNAMSIZ);
+            bool fits = ifname.copy_characters_to_buffer(ifr.ifr_name, IFNAMSIZ);
+            if (!fits) {
+                fprintf(stderr, "Interface name '%s' is too long\n", ifname.characters());
+                return 1;
+            }
             ifr.ifr_netmask.sa_family = AF_INET;
             ((sockaddr_in&)ifr.ifr_netmask).sin_addr.s_addr = address.value().to_in_addr_t();
 

@@ -33,10 +33,9 @@
 
 namespace WindowServer {
 
-Button::Button(WindowFrame& frame, NonnullRefPtr<Gfx::CharacterBitmap>&& bitmap, Function<void(Button&)>&& on_click_handler)
+Button::Button(WindowFrame& frame, Function<void(Button&)>&& on_click_handler)
     : on_click(move(on_click_handler))
     , m_frame(frame)
-    , m_bitmap(move(bitmap))
 {
 }
 
@@ -50,11 +49,13 @@ void Button::paint(Gfx::Painter& painter)
     Gfx::PainterStateSaver saver(painter);
     painter.translate(relative_rect().location());
     Gfx::StylePainter::paint_button(painter, rect(), palette, Gfx::ButtonStyle::Normal, m_pressed, m_hovered);
-    auto x_location = rect().center();
-    x_location.move_by(-(m_bitmap->width() / 2), -(m_bitmap->height() / 2));
-    if (m_pressed)
-        x_location.move_by(1, 1);
-    painter.draw_bitmap(x_location, *m_bitmap, palette.button_text());
+
+    if (m_icon) {
+        auto icon_location = rect().center().translated(-(m_icon->width() / 2), -(m_icon->height() / 2));
+        if (m_pressed)
+            painter.translate(1, 1);
+        painter.blit(icon_location, *m_icon, m_icon->rect());
+    }
 }
 
 void Button::on_mouse_event(const MouseEvent& event)
@@ -64,7 +65,7 @@ void Button::on_mouse_event(const MouseEvent& event)
     if (event.type() == Event::MouseDown && event.button() == MouseButton::Left) {
         m_pressed = true;
         wm.set_cursor_tracking_button(this);
-        wm.invalidate(screen_rect());
+        m_frame.invalidate(m_relative_rect);
         return;
     }
 
@@ -84,7 +85,7 @@ void Button::on_mouse_event(const MouseEvent& event)
             // However, we don't know that rect yet. We can make an educated
             // guess which also looks okay even when wrong:
             m_hovered = false;
-            wm.invalidate(screen_rect());
+            m_frame.invalidate(m_relative_rect);
         }
         return;
     }
@@ -94,7 +95,7 @@ void Button::on_mouse_event(const MouseEvent& event)
         m_hovered = rect().contains(event.position());
         wm.set_hovered_button(m_hovered ? this : nullptr);
         if (old_hovered != m_hovered)
-            wm.invalidate(screen_rect());
+            m_frame.invalidate(m_relative_rect);
     }
 
     if (event.type() == Event::MouseMove && event.buttons() & (unsigned)MouseButton::Left) {
@@ -103,7 +104,7 @@ void Button::on_mouse_event(const MouseEvent& event)
         bool old_pressed = m_pressed;
         m_pressed = m_hovered;
         if (old_pressed != m_pressed)
-            wm.invalidate(screen_rect());
+            m_frame.invalidate(m_relative_rect);
     }
 }
 

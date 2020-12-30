@@ -32,7 +32,7 @@
 
 namespace Web {
 
-StylePropertiesModel::StylePropertiesModel(const StyleProperties& properties)
+StylePropertiesModel::StylePropertiesModel(const CSS::StyleProperties& properties)
     : m_properties(properties)
 {
     properties.for_each_property([&](auto property_id, auto& property_value) {
@@ -61,10 +61,10 @@ String StylePropertiesModel::column_name(int column_index) const
         ASSERT_NOT_REACHED();
     }
 }
-GUI::Variant StylePropertiesModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant StylePropertiesModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
     auto& value = m_values[index.row()];
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Display) {
         if (index.column() == Column::PropertyName)
             return value.name;
         if (index.column() == Column::PropertyValue)

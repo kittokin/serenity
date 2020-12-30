@@ -26,18 +26,16 @@
 
 #include <LibWeb/CSS/StyleSheetList.h>
 
-namespace Web {
-namespace CSS {
+namespace Web::CSS {
 
 void StyleSheetList::add_sheet(NonnullRefPtr<StyleSheet> sheet)
 {
     m_sheets.append(move(sheet));
 }
 
-StyleSheetList::StyleSheetList(Document& document)
+StyleSheetList::StyleSheetList(DOM::Document& document)
     : m_document(document)
 {
 }
 
-}
 }

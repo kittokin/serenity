@@ -32,6 +32,7 @@
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
+#include <LibGUI/Clipboard.h>
 #include <LibGUI/Desktop.h>
 #include <LibGUI/FilePicker.h>
 #include <LibGUI/Label.h>
@@ -44,6 +45,7 @@
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/Rect.h>
+#include <serenity.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <string.h>
@@ -62,6 +64,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    auto app_icon = GUI::Icon::default_icon("filetype-image");
+
     const char* path = nullptr;
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(path, "The image file to be displayed.", "file", Core::ArgsParser::Required::No);
@@ -69,8 +73,8 @@ int main(int argc, char** argv)
 
     auto window = GUI::Window::construct();
     window->set_double_buffering_enabled(true);
-    window->set_rect(200, 200, 300, 200);
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-image.png"));
+    window->resize(300, 200);
+    window->set_icon(app_icon.bitmap_for_size(16));
     window->set_title("QuickShow");
 
     auto& root_widget = window->set_main_widget<GUI::Widget>();
@@ -88,7 +92,7 @@ int main(int argc, char** argv)
             return;
         }
 
-        window->set_title(String::format("%s %s %d%% - QuickShow", widget.path().characters(), widget.bitmap()->size().to_string().characters(), scale));
+        window->set_title(String::formatted("{} {} {}% - QuickShow", widget.path(), widget.bitmap()->size().to_string(), scale));
 
         if (window->is_fullscreen())
             return;
@@ -114,7 +118,12 @@ int main(int argc, char** argv)
             pid_t child;
             for (size_t i = 1; i < urls.size(); ++i) {
                 const char* argv[] = { "/bin/QuickShow", urls[i].path().characters(), nullptr };
-                posix_spawn(&child, "/bin/QuickShow", nullptr, nullptr, const_cast<char**>(argv), environ);
+                if ((errno = posix_spawn(&child, "/bin/QuickShow", nullptr, nullptr, const_cast<char**>(argv), environ))) {
+                    perror("posix_spawn");
+                } else {
+                    if (disown(child) < 0)
+                        perror("disown");
+                }
             }
         }
     };
@@ -139,7 +148,7 @@ int main(int argc, char** argv)
                 return;
 
             auto msgbox_result = GUI::MessageBox::show(window,
-                String::format("Really delete %s?", path.characters()),
+                String::formatted("Really delete {}?", path),
                 "Confirm deletion",
                 GUI::MessageBox::Type::Warning,
                 GUI::MessageBox::InputType::OKCancel);
@@ -148,12 +157,12 @@ int main(int argc, char** argv)
                 return;
 
             auto unlink_result = unlink(widget.path().characters());
-            dbg() << "unlink_result::" << unlink_result;
+            dbgln("unlink_result::{}", unlink_result);
 
             if (unlink_result < 0) {
                 int saved_errno = errno;
                 GUI::MessageBox::show(window,
-                    String::format("unlink(%s) failed: %s", path.characters(), strerror(saved_errno)),
+                    String::formatted("unlink({}) failed: {}", path, strerror(saved_errno)),
                     "Delete failed",
                     GUI::MessageBox::Type::Error);
 
@@ -240,8 +249,13 @@ int main(int argc, char** argv)
 
     auto about_action = GUI::Action::create("About",
         [&](auto&) {
-            GUI::AboutDialog::show("QuickShow", Gfx::Bitmap::load_from_file("/res/icons/32x32/filetype-image.png"), window);
+            GUI::AboutDialog::show("QuickShow", app_icon.bitmap_for_size(32), window);
         });
+
+    auto copy_action = GUI::CommonActions::make_copy_action([&](auto&) {
+        if (widget.bitmap())
+            GUI::Clipboard::the().set_bitmap(*widget.bitmap());
+    });
 
     main_toolbar.add_action(open_action);
     main_toolbar.add_action(delete_action);

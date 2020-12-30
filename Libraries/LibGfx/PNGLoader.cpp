@@ -24,20 +24,22 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/ByteBuffer.h>
+#include <AK/Endian.h>
 #include <AK/LexicalPath.h>
 #include <AK/MappedFile.h>
-#include <AK/NetworkOrdered.h>
 #include <LibCore/puff.h>
 #include <LibGfx/PNGLoader.h>
-#include <LibM/math.h>
 #include <fcntl.h>
-#include <serenity.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#ifdef __serenity__
+#    include <serenity.h>
+#endif
 
 //#define PNG_DEBUG
 
@@ -59,7 +61,7 @@ static_assert(sizeof(PNG_IHDR) == 13);
 
 struct Scanline {
     u8 filter { 0 };
-    ByteBuffer data {};
+    ReadonlyBytes data {};
 };
 
 struct [[gnu::packed]] PaletteEntry
@@ -128,6 +130,20 @@ struct PNGLoadingContext {
     Vector<u8> compressed_data;
     Vector<PaletteEntry> palette_data;
     Vector<u8> palette_transparency_data;
+
+    Checked<int> compute_row_size_for_width(int width)
+    {
+        Checked<int> row_size = width;
+        row_size *= channels;
+        row_size *= bit_depth;
+        row_size += 7;
+        row_size /= 8;
+        if (row_size.has_overflow()) {
+            dbgln("PNG too large, integer overflow while computing row size");
+            state = State::Error;
+        }
+        return row_size;
+    }
 };
 
 class Streamer {
@@ -159,11 +175,11 @@ public:
         return true;
     }
 
-    bool wrap_bytes(ByteBuffer& buffer, size_t count)
+    bool wrap_bytes(ReadonlyBytes& buffer, size_t count)
     {
         if (m_size_remaining < count)
             return false;
-        buffer = ByteBuffer::wrap(m_data_ptr, count);
+        buffer = ReadonlyBytes { m_data_ptr, count };
         m_data_ptr += count;
         m_size_remaining -= count;
         return true;
@@ -361,17 +377,18 @@ NEVER_INLINE FLATTEN static void unfilter(PNGLoadingContext& context)
         } else if (context.bit_depth == 16) {
             unpack_grayscale_without_alpha<u16>(context);
         } else if (context.bit_depth == 1 || context.bit_depth == 2 || context.bit_depth == 4) {
+            auto bit_depth_squared = context.bit_depth * context.bit_depth;
             auto pixels_per_byte = 8 / context.bit_depth;
             auto mask = (1 << context.bit_depth) - 1;
             for (int y = 0; y < context.height; ++y) {
-                auto* gray_values = (u8*)context.scanlines[y].data.data();
+                auto* gray_values = context.scanlines[y].data.data();
                 for (int x = 0; x < context.width; ++x) {
                     auto bit_offset = (8 - context.bit_depth) - (context.bit_depth * (x % pixels_per_byte));
                     auto value = (gray_values[x / pixels_per_byte] >> bit_offset) & mask;
                     auto& pixel = (Pixel&)context.bitmap->scanline(y)[x];
-                    pixel.r = value * (0xff / pow(context.bit_depth, 2));
-                    pixel.g = value * (0xff / pow(context.bit_depth, 2));
-                    pixel.b = value * (0xff / pow(context.bit_depth, 2));
+                    pixel.r = value * (0xff / bit_depth_squared);
+                    pixel.g = value * (0xff / bit_depth_squared);
+                    pixel.b = value * (0xff / bit_depth_squared);
                     pixel.a = 0xff;
                 }
             }
@@ -420,7 +437,7 @@ NEVER_INLINE FLATTEN static void unfilter(PNGLoadingContext& context)
     case 3:
         if (context.bit_depth == 8) {
             for (int y = 0; y < context.height; ++y) {
-                auto* palette_index = (u8*)context.scanlines[y].data.data();
+                auto* palette_index = context.scanlines[y].data.data();
                 for (int i = 0; i < context.width; ++i) {
                     auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
                     auto& color = context.palette_data.at((int)palette_index[i]);
@@ -437,7 +454,7 @@ NEVER_INLINE FLATTEN static void unfilter(PNGLoadingContext& context)
             auto pixels_per_byte = 8 / context.bit_depth;
             auto mask = (1 << context.bit_depth) - 1;
             for (int y = 0; y < context.height; ++y) {
-                auto* palette_indexes = (u8*)context.scanlines[y].data.data();
+                auto* palette_indexes = context.scanlines[y].data.data();
                 for (int i = 0; i < context.width; ++i) {
                     auto bit_offset = (8 - context.bit_depth) - (context.bit_depth * (i % pixels_per_byte));
                     auto palette_index = (palette_indexes[i / pixels_per_byte] >> bit_offset) & mask;
@@ -461,43 +478,43 @@ NEVER_INLINE FLATTEN static void unfilter(PNGLoadingContext& context)
         break;
     }
 
-    auto dummy_scanline = ByteBuffer::create_zeroed(context.width * sizeof(RGBA32));
+    u8 dummy_scanline[context.width * sizeof(RGBA32)];
 
     for (int y = 0; y < context.height; ++y) {
         auto filter = context.scanlines[y].filter;
         if (filter == 0) {
             if (context.has_alpha())
-                unfilter_impl<true, 0>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<true, 0>(*context.bitmap, y, dummy_scanline);
             else
-                unfilter_impl<false, 0>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<false, 0>(*context.bitmap, y, dummy_scanline);
             continue;
         }
         if (filter == 1) {
             if (context.has_alpha())
-                unfilter_impl<true, 1>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<true, 1>(*context.bitmap, y, dummy_scanline);
             else
-                unfilter_impl<false, 1>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<false, 1>(*context.bitmap, y, dummy_scanline);
             continue;
         }
         if (filter == 2) {
             if (context.has_alpha())
-                unfilter_impl<true, 2>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<true, 2>(*context.bitmap, y, dummy_scanline);
             else
-                unfilter_impl<false, 2>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<false, 2>(*context.bitmap, y, dummy_scanline);
             continue;
         }
         if (filter == 3) {
             if (context.has_alpha())
-                unfilter_impl<true, 3>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<true, 3>(*context.bitmap, y, dummy_scanline);
             else
-                unfilter_impl<false, 3>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<false, 3>(*context.bitmap, y, dummy_scanline);
             continue;
         }
         if (filter == 4) {
             if (context.has_alpha())
-                unfilter_impl<true, 4>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<true, 4>(*context.bitmap, y, dummy_scanline);
             else
-                unfilter_impl<false, 4>(*context.bitmap, y, dummy_scanline.data());
+                unfilter_impl<false, 4>(*context.bitmap, y, dummy_scanline);
             continue;
         }
     }
@@ -595,21 +612,31 @@ static bool decode_png_bitmap_simple(PNGLoadingContext& context)
         }
 
         if (filter > 4) {
+#ifdef PNG_DEBUG
             dbg() << "Invalid PNG filter: " << filter;
+#endif
             context.state = PNGLoadingContext::State::Error;
             return false;
         }
 
         context.scanlines.append({ filter });
         auto& scanline_buffer = context.scanlines.last().data;
-        auto row_size = ((context.width * context.channels * context.bit_depth) + 7) / 8;
-        if (!streamer.wrap_bytes(scanline_buffer, row_size)) {
+        auto row_size = context.compute_row_size_for_width(context.width);
+        if (row_size.has_overflow())
+            return false;
+
+        if (!streamer.wrap_bytes(scanline_buffer, row_size.value())) {
             context.state = PNGLoadingContext::State::Error;
             return false;
         }
     }
 
     context.bitmap = Bitmap::create_purgeable(context.has_alpha() ? BitmapFormat::RGBA32 : BitmapFormat::RGB32, { context.width, context.height });
+
+    if (!context.bitmap) {
+        context.state = PNGLoadingContext::State::Error;
+        return false;
+    }
 
     unfilter(context);
 
@@ -691,15 +718,20 @@ static bool decode_adam7_pass(PNGLoadingContext& context, Streamer& streamer, in
         }
 
         if (filter > 4) {
+#ifdef PNG_DEBUG
             dbg() << "Invalid PNG filter: " << filter;
+#endif
             context.state = PNGLoadingContext::State::Error;
             return false;
         }
 
         subimage_context.scanlines.append({ filter });
         auto& scanline_buffer = subimage_context.scanlines.last().data;
-        auto row_size = ((subimage_context.width * context.channels * context.bit_depth) + 7) / 8;
-        if (!streamer.wrap_bytes(scanline_buffer, row_size)) {
+
+        auto row_size = context.compute_row_size_for_width(subimage_context.width);
+        if (row_size.has_overflow())
+            return false;
+        if (!streamer.wrap_bytes(scanline_buffer, row_size.value())) {
             context.state = PNGLoadingContext::State::Error;
             return false;
         }
@@ -721,6 +753,8 @@ static bool decode_png_adam7(PNGLoadingContext& context)
 {
     Streamer streamer(context.decompression_buffer, context.decompression_buffer_size);
     context.bitmap = Bitmap::create_purgeable(context.has_alpha() ? BitmapFormat::RGBA32 : BitmapFormat::RGB32, { context.width, context.height });
+    if (!context.bitmap)
+        return false;
 
     for (int pass = 1; pass <= 7; ++pass) {
         if (!decode_adam7_pass(context, streamer, pass))
@@ -739,15 +773,25 @@ static bool decode_png_bitmap(PNGLoadingContext& context)
     if (context.state >= PNGLoadingContext::State::BitmapDecoded)
         return true;
 
+    if (context.width == -1 || context.height == -1)
+        return false; // Didn't see an IHDR chunk.
+
+    if (context.color_type == 3 && context.palette_data.size() < (1u << context.bit_depth))
+        return false; // Didn't see an PLTE chunk for a palettized image, or not enough entries.
+
     unsigned long srclen = context.compressed_data.size() - 6;
     unsigned long destlen = 0;
-    int ret = puff(NULL, &destlen, context.compressed_data.data() + 2, &srclen);
+    int ret = puff(nullptr, &destlen, context.compressed_data.data() + 2, &srclen);
     if (ret != 0) {
         context.state = PNGLoadingContext::State::Error;
         return false;
     }
     context.decompression_buffer_size = destlen;
+#ifdef __serenity__
     context.decompression_buffer = (u8*)mmap_with_name(nullptr, context.decompression_buffer_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0, "PNG decompression buffer");
+#else
+    context.decompression_buffer = (u8*)mmap(nullptr, context.decompression_buffer_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
+#endif
 
     ret = puff(context.decompression_buffer, &destlen, context.compressed_data.data() + 2, &srclen);
     if (ret != 0) {
@@ -793,11 +837,37 @@ static RefPtr<Gfx::Bitmap> load_png_impl(const u8* data, size_t data_size)
     return context.bitmap;
 }
 
-static bool process_IHDR(const ByteBuffer& data, PNGLoadingContext& context)
+static bool is_valid_compression_method(u8 compression_method)
+{
+    return compression_method == 0;
+}
+
+static bool is_valid_filter_method(u8 filter_method)
+{
+    return filter_method <= 4;
+}
+
+static bool process_IHDR(ReadonlyBytes data, PNGLoadingContext& context)
 {
     if (data.size() < (int)sizeof(PNG_IHDR))
         return false;
     auto& ihdr = *(const PNG_IHDR*)data.data();
+
+    if (ihdr.width > maximum_width_for_decoded_images || ihdr.height > maximum_height_for_decoded_images) {
+        dbgln("This PNG is too large for comfort: {}x{}", (u32)ihdr.width, (u32)ihdr.height);
+        return false;
+    }
+
+    if (!is_valid_compression_method(ihdr.compression_method)) {
+        dbgln("PNG has invalid compression method {}", ihdr.compression_method);
+        return false;
+    }
+
+    if (!is_valid_filter_method(ihdr.filter_method)) {
+        dbgln("PNG has invalid filter method {}", ihdr.filter_method);
+        return false;
+    }
+
     context.width = ihdr.width;
     context.height = ihdr.height;
     context.bit_depth = ihdr.bit_depth;
@@ -815,45 +885,57 @@ static bool process_IHDR(const ByteBuffer& data, PNGLoadingContext& context)
 #endif
 
     if (context.interlace_method != PngInterlaceMethod::Null && context.interlace_method != PngInterlaceMethod::Adam7) {
+#ifdef PNG_DEBUG
         dbgprintf("PNGLoader::process_IHDR: unknown interlace method: %d\n", context.interlace_method);
+#endif
         return false;
     }
 
     switch (context.color_type) {
     case 0: // Each pixel is a grayscale sample.
+        if (context.bit_depth != 1 && context.bit_depth != 2 && context.bit_depth != 4 && context.bit_depth != 8 && context.bit_depth != 16)
+            return false;
         context.channels = 1;
         break;
     case 4: // Each pixel is a grayscale sample, followed by an alpha sample.
+        if (context.bit_depth != 8 && context.bit_depth != 16)
+            return false;
         context.channels = 2;
         break;
     case 2: // Each pixel is an RGB sample
+        if (context.bit_depth != 8 && context.bit_depth != 16)
+            return false;
         context.channels = 3;
         break;
     case 3: // Each pixel is a palette index; a PLTE chunk must appear.
+        if (context.bit_depth != 1 && context.bit_depth != 2 && context.bit_depth != 4 && context.bit_depth != 8)
+            return false;
         context.channels = 1;
         break;
     case 6: // Each pixel is an RGB sample, followed by an alpha sample.
+        if (context.bit_depth != 8 && context.bit_depth != 16)
+            return false;
         context.channels = 4;
         break;
     default:
-        ASSERT_NOT_REACHED();
+        return false;
     }
     return true;
 }
 
-static bool process_IDAT(const ByteBuffer& data, PNGLoadingContext& context)
+static bool process_IDAT(ReadonlyBytes data, PNGLoadingContext& context)
 {
     context.compressed_data.append(data.data(), data.size());
     return true;
 }
 
-static bool process_PLTE(const ByteBuffer& data, PNGLoadingContext& context)
+static bool process_PLTE(ReadonlyBytes data, PNGLoadingContext& context)
 {
     context.palette_data.append((const PaletteEntry*)data.data(), data.size() / 3);
     return true;
 }
 
-static bool process_tRNS(const ByteBuffer& data, PNGLoadingContext& context)
+static bool process_tRNS(ReadonlyBytes data, PNGLoadingContext& context)
 {
     switch (context.color_type) {
     case 3:
@@ -867,23 +949,31 @@ static bool process_chunk(Streamer& streamer, PNGLoadingContext& context)
 {
     u32 chunk_size;
     if (!streamer.read(chunk_size)) {
+#ifdef PNG_DEBUG
         printf("Bail at chunk_size\n");
+#endif
         return false;
     }
     u8 chunk_type[5];
     chunk_type[4] = '\0';
     if (!streamer.read_bytes(chunk_type, 4)) {
+#ifdef PNG_DEBUG
         printf("Bail at chunk_type\n");
+#endif
         return false;
     }
-    ByteBuffer chunk_data;
+    ReadonlyBytes chunk_data;
     if (!streamer.wrap_bytes(chunk_data, chunk_size)) {
+#ifdef PNG_DEBUG
         printf("Bail at chunk_data\n");
+#endif
         return false;
     }
     u32 chunk_crc;
     if (!streamer.read(chunk_crc)) {
+#ifdef PNG_DEBUG
         printf("Bail at chunk_crc\n");
+#endif
         return false;
     }
 #ifdef PNG_DEBUG

@@ -64,7 +64,7 @@ struct sigaction {
 int kill(pid_t, int sig);
 int killpg(int pgrp, int sig);
 sighandler_t signal(int sig, sighandler_t);
-int pthread_sigmask(int how, const sigset_t *set, sigset_t *ol_dset);
+int pthread_sigmask(int how, const sigset_t* set, sigset_t* ol_dset);
 int sigaction(int sig, const struct sigaction* act, struct sigaction* old_act);
 int sigemptyset(sigset_t*);
 int sigfillset(sigset_t*);
@@ -75,6 +75,8 @@ int sigprocmask(int how, const sigset_t* set, sigset_t* old_set);
 int sigpending(sigset_t*);
 int sigsuspend(const sigset_t*);
 int raise(int sig);
+int getsignalbyname(const char*);
+const char* getsignalname(int);
 
 extern const char* sys_siglist[NSIG];
 

@@ -27,7 +27,6 @@
 
 #include "Menu.h"
 #include "Event.h"
-#include "EventLoop.h"
 #include "MenuItem.h"
 #include "MenuManager.h"
 #include "Screen.h"
@@ -68,7 +67,7 @@ const Gfx::Font& Menu::title_font() const
 
 const Gfx::Font& Menu::font() const
 {
-    return Gfx::Font::default_font();
+    return Gfx::FontDatabase::default_font();
 }
 
 static const char* s_checked_bitmap_data = {
@@ -110,7 +109,7 @@ int Menu::content_width() const
     for (auto& item : m_items) {
         if (item.type() != MenuItem::Text)
             continue;
-        auto& use_font = item.is_default() ? Gfx::Font::default_bold_font() : font();
+        auto& use_font = item.is_default() ? Gfx::FontDatabase::default_bold_font() : font();
         int text_width = use_font.width(item.text());
         if (!item.shortcut_text().is_empty()) {
             int shortcut_width = use_font.width(item.shortcut_text());
@@ -247,11 +246,22 @@ void Menu::draw()
             } else if (item.icon()) {
                 Gfx::IntRect icon_rect { item.rect().x() + 3, 0, s_item_icon_width, s_item_icon_width };
                 icon_rect.center_vertically_within(text_rect);
-                painter.blit(icon_rect.location(), *item.icon(), item.icon()->rect());
+
+                if (&item == hovered_item() && item.is_enabled()) {
+                    auto shadow_color = palette.menu_selection().darkened(0.7f);
+                    painter.blit_filtered(icon_rect.location().translated(1, 1), *item.icon(), item.icon()->rect(), [&shadow_color](auto) {
+                        return shadow_color;
+                    });
+                    icon_rect.move_by(-1, -1);
+                }
+                if (item.is_enabled())
+                    painter.blit(icon_rect.location(), *item.icon(), item.icon()->rect());
+                else
+                    painter.blit_disabled(icon_rect.location(), *item.icon(), item.icon()->rect(), palette);
             }
             auto& previous_font = painter.font();
             if (item.is_default())
-                painter.set_font(Gfx::Font::default_bold_font());
+                painter.set_font(Gfx::FontDatabase::default_bold_font());
             painter.draw_text(text_rect, item.text(), Gfx::TextAlignment::CenterLeft, text_color);
             if (!item.shortcut_text().is_empty()) {
                 painter.draw_text(item.rect().translated(-right_padding(), 0), item.shortcut_text(), Gfx::TextAlignment::CenterRight, text_color);
@@ -476,10 +486,10 @@ bool Menu::activate_default()
     return false;
 }
 
-MenuItem* Menu::item_with_identifier(unsigned identifer)
+MenuItem* Menu::item_with_identifier(unsigned identifier)
 {
     for (auto& item : m_items) {
-        if (item.identifier() == identifer)
+        if (item.identifier() == identifier)
             return &item;
     }
     return nullptr;

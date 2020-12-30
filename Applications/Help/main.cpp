@@ -26,26 +26,28 @@
 
 #include "History.h"
 #include "ManualModel.h"
-#include <AK/ByteBuffer.h>
 #include <AK/URL.h>
+#include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <LibDesktop/Launcher.h>
 #include <LibGUI/AboutDialog.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
+#include <LibGUI/FilteringProxyModel.h>
+#include <LibGUI/ListView.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/MenuBar.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/Splitter.h>
-#include <LibGUI/TextEditor.h>
+#include <LibGUI/TabWidget.h>
+#include <LibGUI/TextBox.h>
 #include <LibGUI/ToolBar.h>
 #include <LibGUI/ToolBarContainer.h>
 #include <LibGUI/TreeView.h>
 #include <LibGUI/Window.h>
 #include <LibMarkdown/Document.h>
-#include <LibWeb/Layout/LayoutNode.h>
-#include <LibWeb/PageView.h>
+#include <LibWeb/OutOfProcessWebView.h>
 #include <libgen.h>
 #include <stdio.h>
 #include <string.h>
@@ -79,14 +81,26 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    if (unveil("/tmp/portal/webcontent", "rw") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
     unveil(nullptr, nullptr);
+
+    const char* term_to_search_for_at_launch = nullptr;
+
+    Core::ArgsParser args_parser;
+    args_parser.add_positional_argument(term_to_search_for_at_launch, "Term to search for at launch", "term", Core::ArgsParser::Required::No);
+
+    args_parser.parse(argc, argv);
 
     auto app_icon = GUI::Icon::default_icon("app-help");
 
     auto window = GUI::Window::construct();
     window->set_icon(app_icon.bitmap_for_size(16));
     window->set_title("Help");
-    window->set_rect(300, 200, 570, 500);
+    window->resize(570, 500);
 
     auto& widget = window->set_main_widget<GUI::Widget>();
     widget.set_layout<GUI::VerticalBoxLayout>();
@@ -100,12 +114,32 @@ int main(int argc, char* argv[])
 
     auto model = ManualModel::create();
 
-    auto& tree_view = splitter.add<GUI::TreeView>();
-    tree_view.set_model(model);
-    tree_view.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    tree_view.set_preferred_size(200, 500);
+    auto& left_tab_bar = splitter.add<GUI::TabWidget>();
+    auto& tree_view_container = left_tab_bar.add_tab<GUI::Widget>("Tree");
+    tree_view_container.set_layout<GUI::VerticalBoxLayout>();
+    tree_view_container.layout()->set_margins({ 4, 4, 4, 4 });
+    auto& tree_view = tree_view_container.add<GUI::TreeView>();
+    auto& search_view = left_tab_bar.add_tab<GUI::Widget>("Search");
+    search_view.set_layout<GUI::VerticalBoxLayout>();
+    search_view.layout()->set_margins({ 4, 4, 4, 4 });
+    auto& search_box = search_view.add<GUI::TextBox>();
+    auto& search_list_view = search_view.add<GUI::ListView>();
+    search_box.set_fixed_height(20);
+    search_box.set_placeholder("Search...");
+    search_box.on_change = [&] {
+        if (auto model = search_list_view.model()) {
+            auto& search_model = *static_cast<GUI::FilteringProxyModel*>(model);
+            search_model.set_filter_term(search_box.text());
+            search_model.update();
+        }
+    };
+    search_list_view.set_model(GUI::FilteringProxyModel::construct(model));
+    search_list_view.model()->update();
 
-    auto& page_view = splitter.add<Web::PageView>();
+    tree_view.set_model(model);
+    left_tab_bar.set_fixed_width(200);
+
+    auto& page_view = splitter.add<Web::OutOfProcessWebView>();
 
     History history;
 
@@ -119,23 +153,17 @@ int main(int argc, char* argv[])
 
     auto open_page = [&](const String& path) {
         if (path.is_null()) {
-            page_view.set_document(nullptr);
+            page_view.load_empty_document();
             return;
         }
 
-        dbg() << "Opening page at " << path;
-
-        auto file = Core::File::construct();
-        file->set_filename(path);
-
-        if (!file->open(Core::IODevice::OpenMode::ReadOnly)) {
-            int saved_errno = errno;
-            GUI::MessageBox::show(window, strerror(saved_errno), "Failed to open man page", GUI::MessageBox::Type::Error);
+        auto source_result = model->page_view(path);
+        if (source_result.is_error()) {
+            GUI::MessageBox::show(window, strerror(source_result.error()), "Failed to open man page", GUI::MessageBox::Type::Error);
             return;
         }
-        auto buffer = file->read_all();
-        StringView source { (const char*)buffer.data(), buffer.size() };
 
+        auto source = source_result.value();
         String html;
         {
             auto md_document = Markdown::Document::parse(source);
@@ -146,13 +174,13 @@ int main(int argc, char* argv[])
         page_view.load_html(html, URL::create_with_file_protocol(path));
 
         String page_and_section = model->page_and_section(tree_view.selection().first());
-        window->set_title(String::format("%s - Help", page_and_section.characters()));
+        window->set_title(String::formatted("{} - Help", page_and_section));
     };
 
     tree_view.on_selection_change = [&] {
         String path = model->page_path(tree_view.selection().first());
         if (path.is_null()) {
-            page_view.set_document(nullptr);
+            page_view.load_empty_document();
             window->set_title("Help");
             return;
         }
@@ -168,10 +196,32 @@ int main(int argc, char* argv[])
     auto open_external = [&](auto& url) {
         if (!Desktop::Launcher::open(url)) {
             GUI::MessageBox::show(window,
-                String::format("The link to '%s' could not be opened.", url.to_string().characters()),
+                String::formatted("The link to '{}' could not be opened.", url),
                 "Failed to open link",
                 GUI::MessageBox::Type::Error);
         }
+    };
+    search_list_view.on_selection = [&](auto index) {
+        if (!index.is_valid())
+            return;
+
+        if (auto model = search_list_view.model()) {
+            auto& search_model = *static_cast<GUI::FilteringProxyModel*>(model);
+            index = search_model.map(index);
+        } else {
+            page_view.load_empty_document();
+            return;
+        }
+        String path = model->page_path(index);
+        if (path.is_null()) {
+            page_view.load_empty_document();
+            return;
+        }
+        tree_view.selection().clear();
+        tree_view.selection().add(index);
+        history.push(path);
+        update_actions();
+        open_page(path);
     };
 
     page_view.on_link_click = [&](auto& url, auto&, unsigned) {
@@ -186,7 +236,7 @@ int main(int argc, char* argv[])
         }
         auto tree_view_index = model->index_from_path(path);
         if (tree_view_index.has_value()) {
-            dbg() << "Found path _" << path << "_ in model at index " << tree_view_index.value();
+            dbgln("Found path _{}_ in model at index {}", path, tree_view_index.value());
             tree_view.selection().set(tree_view_index.value());
             return;
         }
@@ -230,7 +280,16 @@ int main(int argc, char* argv[])
 
     app->set_menubar(move(menubar));
 
-    window->set_focused_widget(&tree_view);
+    if (term_to_search_for_at_launch) {
+        left_tab_bar.set_active_widget(&search_view);
+        search_box.set_text(term_to_search_for_at_launch);
+        if (auto model = search_list_view.model()) {
+            auto& search_model = *static_cast<GUI::FilteringProxyModel*>(model);
+            search_model.set_filter_term(search_box.text());
+        }
+    }
+
+    window->set_focused_widget(&left_tab_bar);
     window->show();
 
     return app->exec();

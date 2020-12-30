@@ -32,24 +32,34 @@
 
 namespace GUI {
 
-AbstractButton::AbstractButton(const StringView& text)
-    : m_text(text)
+AbstractButton::AbstractButton(String text)
 {
+    set_text(move(text));
+
+    set_focus_policy(GUI::FocusPolicy::StrongFocus);
+    set_background_role(Gfx::ColorRole::Button);
+    set_foreground_role(Gfx::ColorRole::ButtonText);
+
     m_auto_repeat_timer = add<Core::Timer>();
     m_auto_repeat_timer->on_timeout = [this] {
         click();
     };
+
+    REGISTER_STRING_PROPERTY("text", text, set_text);
+    REGISTER_BOOL_PROPERTY("checked", is_checked, set_checked);
+    REGISTER_BOOL_PROPERTY("checkable", is_checkable, set_checkable);
+    REGISTER_BOOL_PROPERTY("exclusive", is_exclusive, set_exclusive);
 }
 
 AbstractButton::~AbstractButton()
 {
 }
 
-void AbstractButton::set_text(const StringView& text)
+void AbstractButton::set_text(String text)
 {
     if (m_text == text)
         return;
-    m_text = text;
+    m_text = move(text);
     update();
 }
 
@@ -59,7 +69,7 @@ void AbstractButton::set_checked(bool checked)
         return;
     m_checked = checked;
 
-    if (is_exclusive() && checked) {
+    if (is_exclusive() && checked && parent_widget()) {
         parent_widget()->for_each_child_of_type<AbstractButton>([&](auto& sibling) {
             if (!sibling.is_exclusive() || !sibling.is_checked())
                 return IterationDecision::Continue;
@@ -147,7 +157,7 @@ void AbstractButton::leave_event(Core::Event&)
 
 void AbstractButton::keydown_event(KeyEvent& event)
 {
-    if (event.key() == KeyCode::Key_Return) {
+    if (event.key() == KeyCode::Key_Return || event.key() == KeyCode::Key_Space) {
         click(event.modifiers());
         event.accept();
         return;
@@ -167,9 +177,7 @@ void AbstractButton::paint_text(Painter& painter, const Gfx::IntRect& rect, cons
 
     if (text().is_empty())
         return;
-    painter.draw_text(clipped_rect, text(), font, text_alignment, palette().button_text(), Gfx::TextElision::Right);
-    if (is_focused())
-        painter.draw_rect(clipped_rect.inflated(6, 4), palette().focus_outline());
+    painter.draw_text(clipped_rect, text(), font, text_alignment, palette().color(foreground_role()), Gfx::TextElision::Right);
 }
 
 void AbstractButton::change_event(Event& event)
@@ -183,37 +191,6 @@ void AbstractButton::change_event(Event& event)
         }
     }
     Widget::change_event(event);
-}
-
-void AbstractButton::save_to(JsonObject& json)
-{
-    json.set("text", m_text);
-    json.set("checked", m_checked);
-    json.set("checkable", m_checkable);
-    json.set("exclusive", m_exclusive);
-    Widget::save_to(json);
-}
-
-bool AbstractButton::set_property(const StringView& name, const JsonValue& value)
-{
-    if (name == "text") {
-        set_text(value.to_string());
-        return true;
-    }
-    if (name == "checked") {
-        set_checked(value.to_bool());
-        return true;
-    }
-    if (name == "checkable") {
-        set_checkable(value.to_bool());
-        return true;
-    }
-    if (name == "exclusive") {
-        set_exclusive(value.to_bool());
-        return true;
-    }
-
-    return Widget::set_property(name, value);
 }
 
 }

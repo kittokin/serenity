@@ -91,6 +91,8 @@ int main(int, char**)
 
     WindowServer::Screen screen(wm_config->read_num_entry("Screen", "Width", 1024),
         wm_config->read_num_entry("Screen", "Height", 768));
+    screen.set_acceleration_factor(atof(wm_config->read_entry("Mouse", "AccelerationFactor", "1.0").characters()));
+    screen.set_scroll_step_size(wm_config->read_num_entry("Mouse", "ScrollStepSize", 4));
     WindowServer::Compositor::the();
     auto wm = WindowServer::WindowManager::construct(*palette);
     auto am = WindowServer::AppletManager::construct();
@@ -111,7 +113,7 @@ int main(int, char**)
         return 1;
     }
 
-    dbgprintf("Entering WindowServer main loop.\n");
+    dbg() << "Entering WindowServer main loop";
     loop.exec();
     ASSERT_NOT_REACHED();
 }

@@ -30,6 +30,7 @@
 #include <AK/LexicalPath.h>
 #include <LibGUI/ActionGroup.h>
 #include <LibGUI/Application.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/TextEditor.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
@@ -53,13 +54,15 @@ public:
     void set_preview_mode(PreviewMode);
     void set_auto_detect_preview_mode(bool value) { m_auto_detect_preview_mode = value; }
 
+    void update_title();
+
 private:
     TextEditorWidget();
     void set_path(const LexicalPath& file);
-    void update_title();
     void update_preview();
     void update_markdown_preview();
     void update_html_preview();
+    void update_statusbar_cursor_position();
 
     virtual void drop_event(GUI::DropEvent&) override;
 
@@ -75,6 +78,7 @@ private:
     RefPtr<GUI::Action> m_line_wrapping_setting_action;
 
     RefPtr<GUI::Action> m_find_next_action;
+    RefPtr<GUI::Action> m_find_regex_action;
     RefPtr<GUI::Action> m_find_previous_action;
     RefPtr<GUI::Action> m_replace_next_action;
     RefPtr<GUI::Action> m_replace_previous_action;
@@ -91,6 +95,7 @@ private:
     RefPtr<GUI::TextBox> m_replace_textbox;
     RefPtr<GUI::Button> m_find_previous_button;
     RefPtr<GUI::Button> m_find_next_button;
+    RefPtr<GUI::Button> m_find_regex_button;
     RefPtr<GUI::Button> m_replace_previous_button;
     RefPtr<GUI::Button> m_replace_next_button;
     RefPtr<GUI::Button> m_replace_all_button;
@@ -102,13 +107,16 @@ private:
     RefPtr<GUI::Action> m_plain_text_highlight;
     RefPtr<GUI::Action> m_cpp_highlight;
     RefPtr<GUI::Action> m_js_highlight;
+    RefPtr<GUI::Action> m_gml_highlight;
     RefPtr<GUI::Action> m_ini_highlight;
+    RefPtr<GUI::Action> m_shell_highlight;
 
-    RefPtr<Web::PageView> m_page_view;
+    RefPtr<Web::OutOfProcessWebView> m_page_view;
 
     bool m_document_dirty { false };
     bool m_document_opening { false };
     bool m_auto_detect_preview_mode { false };
+    bool m_find_use_regex { false };
 
     PreviewMode m_preview_mode { PreviewMode::None };
 };

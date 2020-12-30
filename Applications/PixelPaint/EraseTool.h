@@ -28,8 +28,8 @@
 
 #include "Tool.h"
 #include <LibGUI/ActionGroup.h>
-#include <LibGfx/Point.h>
 #include <LibGfx/Forward.h>
+#include <LibGfx/Point.h>
 
 namespace PixelPaint {
 
@@ -40,6 +40,7 @@ public:
 
     virtual void on_mousedown(Layer&, GUI::MouseEvent& layer_event, GUI::MouseEvent& image_event) override;
     virtual void on_mousemove(Layer&, GUI::MouseEvent& layer_event, GUI::MouseEvent& image_event) override;
+    virtual void on_mouseup(Layer&, GUI::MouseEvent& layer_event, GUI::MouseEvent& image_event) override;
     virtual void on_tool_button_contextmenu(GUI::ContextMenuEvent&) override;
 
 private:

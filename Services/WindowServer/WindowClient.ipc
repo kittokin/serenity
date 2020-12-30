@@ -16,7 +16,7 @@ endpoint WindowClient = 4
     WindowDeactivated(i32 window_id) =|
     WindowStateChanged(i32 window_id, bool minimized, bool occluded) =|
     WindowCloseRequest(i32 window_id) =|
-    WindowResized(i32 window_id, Gfx::IntRect old_rect, Gfx::IntRect new_rect) =|
+    WindowResized(i32 window_id, Gfx::IntRect new_rect) =|
 
     MenuItemActivated(i32 menu_id, i32 identifier) =|
 
@@ -32,7 +32,7 @@ endpoint WindowClient = 4
     DragAccepted() =|
     DragCancelled() =|
 
-    DragDropped(i32 window_id, Gfx::IntPoint mouse_position, [UTF8] String text, String data_type, String data) =|
+    DragDropped(i32 window_id, Gfx::IntPoint mouse_position, [UTF8] String text, HashMap<String,ByteBuffer> mime_data) =|
 
     UpdateSystemTheme(i32 system_theme_buffer_id) =|
 

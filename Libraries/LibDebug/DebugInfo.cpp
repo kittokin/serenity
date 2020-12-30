@@ -25,14 +25,19 @@
  */
 
 #include "DebugInfo.h"
+#include <AK/MemoryStream.h>
 #include <AK/QuickSort.h>
 #include <LibDebug/Dwarf/CompilationUnit.h>
 #include <LibDebug/Dwarf/DwarfInfo.h>
 #include <LibDebug/Dwarf/Expression.h>
 
-DebugInfo::DebugInfo(NonnullRefPtr<const ELF::Loader> elf)
-    : m_elf(elf)
-    , m_dwarf_info(Dwarf::DwarfInfo::create(m_elf))
+//#define DEBUG_SPAM
+
+namespace Debug {
+
+DebugInfo::DebugInfo(NonnullOwnPtr<const ELF::Image> elf)
+    : m_elf(move(elf))
+    , m_dwarf_info(*m_elf)
 {
     prepare_variable_scopes();
     prepare_lines();
@@ -40,7 +45,7 @@ DebugInfo::DebugInfo(NonnullRefPtr<const ELF::Loader> elf)
 
 void DebugInfo::prepare_variable_scopes()
 {
-    m_dwarf_info->for_each_compilation_unit([&](const Dwarf::CompilationUnit& unit) {
+    m_dwarf_info.for_each_compilation_unit([&](const Dwarf::CompilationUnit& unit) {
         auto root = unit.root_die();
         parse_scopes_impl(root);
     });
@@ -55,11 +60,15 @@ void DebugInfo::parse_scopes_impl(const Dwarf::DIE& die)
             return;
 
         if (child.get_attribute(Dwarf::Attribute::Inline).has_value()) {
+#ifdef DEBUG_SPAM
             dbg() << "DWARF inlined functions are not supported";
+#endif
             return;
         }
         if (child.get_attribute(Dwarf::Attribute::Ranges).has_value()) {
+#ifdef DEBUG_SPAM
             dbg() << "DWARF ranges are not supported";
+#endif
             return;
         }
         auto name = child.get_attribute(Dwarf::Attribute::Name);
@@ -70,7 +79,9 @@ void DebugInfo::parse_scopes_impl(const Dwarf::DIE& die)
             scope.name = name.value().data.as_string;
 
         if (!child.get_attribute(Dwarf::Attribute::LowPc).has_value()) {
-            dbg() << "DWARF: Couldn't find attribtue LowPc for scope";
+#ifdef DEBUG_SPAM
+            dbg() << "DWARF: Couldn't find attribute LowPc for scope";
+#endif
             return;
         }
         scope.address_low = child.get_attribute(Dwarf::Attribute::LowPc).value().data.as_u32;
@@ -91,25 +102,26 @@ void DebugInfo::parse_scopes_impl(const Dwarf::DIE& die)
 
 void DebugInfo::prepare_lines()
 {
-    auto section = m_elf->image().lookup_section(".debug_line");
+    auto section = elf().lookup_section(".debug_line");
     if (section.is_undefined())
         return;
 
-    auto buffer = section.wrapping_byte_buffer();
-    BufferStream stream(buffer);
+    InputMemoryStream stream { section.bytes() };
 
-    Vector<LineProgram::LineInfo> all_lines;
-    while (!stream.at_end()) {
-        LineProgram program(stream);
+    Vector<Dwarf::LineProgram::LineInfo> all_lines;
+    while (!stream.eof()) {
+        Dwarf::LineProgram program(stream);
         all_lines.append(program.lines());
     }
+
+    String serenity_slash("serenity/");
 
     for (auto& line_info : all_lines) {
         String file_path = line_info.file;
         if (file_path.contains("Toolchain/") || file_path.contains("libgcc"))
             continue;
-        if (file_path.contains("serenity/")) {
-            auto start_index = file_path.index_of("serenity/").value() + String("serenity/").length();
+        if (file_path.contains(serenity_slash)) {
+            auto start_index = file_path.index_of(serenity_slash).value() + serenity_slash.length();
             file_path = file_path.substring(start_index, file_path.length() - start_index);
         }
         m_sorted_lines.append({ line_info.address, file_path, line_info.line });
@@ -129,7 +141,7 @@ Optional<DebugInfo::SourcePosition> DebugInfo::get_source_position(u32 target_ad
     // TODO: We can do a binray search here
     for (size_t i = 0; i < m_sorted_lines.size() - 1; ++i) {
         if (m_sorted_lines[i + 1].address > target_address) {
-            return Optional<SourcePosition>({ m_sorted_lines[i].file, m_sorted_lines[i].line, m_sorted_lines[i].address });
+            return SourcePosition::from_line_info(m_sorted_lines[i]);
         }
     }
     return {};
@@ -137,8 +149,14 @@ Optional<DebugInfo::SourcePosition> DebugInfo::get_source_position(u32 target_ad
 
 Optional<u32> DebugInfo::get_instruction_from_source(const String& file, size_t line) const
 {
+    String file_path = file;
+    constexpr char SERENITY_LIBS_PREFIX[] = "/usr/src/serenity";
+    if (file.starts_with(SERENITY_LIBS_PREFIX)) {
+        file_path = file.substring(sizeof(SERENITY_LIBS_PREFIX), file.length() - sizeof(SERENITY_LIBS_PREFIX));
+        file_path = String::format("../%s", file_path.characters());
+    }
     for (const auto& line_entry : m_sorted_lines) {
-        if (line_entry.file == file && line_entry.line == line)
+        if (line_entry.file == file_path && line_entry.line == line)
             return Optional<u32>(line_entry.address);
     }
     return {};
@@ -148,7 +166,7 @@ NonnullOwnPtrVector<DebugInfo::VariableInfo> DebugInfo::get_variables_in_current
 {
     NonnullOwnPtrVector<DebugInfo::VariableInfo> variables;
 
-    // TODO: We can store the scopes in a better data strucutre
+    // TODO: We can store the scopes in a better data structure
     for (const auto& scope : m_scopes) {
         if (regs.eip < scope.address_low || regs.eip >= scope.address_high)
             continue;
@@ -196,7 +214,7 @@ static void parse_variable_location(const Dwarf::DIE& variable_die, DebugInfo::V
         }
 
         if (location_info.value().type == Dwarf::DIE::AttributeValue::Type::DwarfExpression) {
-            auto expression_bytes = ByteBuffer::wrap(location_info.value().data.as_dwarf_expression.bytes, location_info.value().data.as_dwarf_expression.length);
+            auto expression_bytes = ReadonlyBytes { location_info.value().data.as_raw_bytes.bytes, location_info.value().data.as_raw_bytes.length };
             auto value = Dwarf::Expression::evaluate(expression_bytes, regs);
 
             if (value.type != Dwarf::Expression::Type::None) {
@@ -219,7 +237,7 @@ OwnPtr<DebugInfo::VariableInfo> DebugInfo::create_variable_info(const Dwarf::DIE
 
     if (variable_die.tag() == Dwarf::EntryTag::FormalParameter
         && !variable_die.get_attribute(Dwarf::Attribute::Name).has_value()) {
-        // We don't want to display info for unused paramters
+        // We don't want to display info for unused parameters
         return {};
     }
 
@@ -286,10 +304,39 @@ OwnPtr<DebugInfo::VariableInfo> DebugInfo::create_variable_info(const Dwarf::DIE
 
 String DebugInfo::name_of_containing_function(u32 address) const
 {
+    auto function = get_containing_function(address);
+    if (!function.has_value())
+        return {};
+    return function.value().name;
+}
+
+Optional<DebugInfo::VariablesScope> DebugInfo::get_containing_function(u32 address) const
+{
     for (const auto& scope : m_scopes) {
         if (!scope.is_function || address < scope.address_low || address >= scope.address_high)
             continue;
-        return scope.name;
+        return scope;
     }
     return {};
+}
+
+Vector<DebugInfo::SourcePosition> DebugInfo::source_lines_in_scope(const VariablesScope& scope) const
+{
+    Vector<DebugInfo::SourcePosition> source_lines;
+    for (const auto& line : m_sorted_lines) {
+        if (line.address < scope.address_low)
+            continue;
+
+        if (line.address >= scope.address_high)
+            break;
+        source_lines.append(SourcePosition::from_line_info(line));
+    }
+    return source_lines;
+}
+
+DebugInfo::SourcePosition DebugInfo::SourcePosition::from_line_info(const Dwarf::LineProgram::LineInfo& line)
+{
+    return { line.file, line.line, line.address };
+}
+
 }

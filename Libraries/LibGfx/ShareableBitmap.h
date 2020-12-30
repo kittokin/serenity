@@ -34,7 +34,7 @@ namespace Gfx {
 
 class ShareableBitmap {
 public:
-    ShareableBitmap() {}
+    ShareableBitmap() { }
     explicit ShareableBitmap(const Gfx::Bitmap&);
 
     bool is_valid() const { return m_bitmap; }
@@ -57,6 +57,8 @@ private:
 }
 
 namespace IPC {
+
 bool encode(Encoder&, const Gfx::ShareableBitmap&);
 bool decode(Decoder&, Gfx::ShareableBitmap&);
+
 }

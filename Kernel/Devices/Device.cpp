@@ -24,18 +24,17 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/Singleton.h>
 #include <Kernel/Devices/Device.h>
 #include <Kernel/FileSystem/InodeMetadata.h>
 #include <LibC/errno_numbers.h>
 
 namespace Kernel {
 
-static HashMap<u32, Device*>* s_all_devices;
+static AK::Singleton<HashMap<u32, Device*>> s_all_devices;
 
 HashMap<u32, Device*>& Device::all_devices()
 {
-    if (s_all_devices == nullptr)
-        s_all_devices = new HashMap<u32, Device*>;
     return *s_all_devices;
 }
 
@@ -79,6 +78,25 @@ String Device::absolute_path() const
 String Device::absolute_path(const FileDescription&) const
 {
     return absolute_path();
+}
+
+void Device::process_next_queued_request(Badge<AsyncDeviceRequest>, const AsyncDeviceRequest& completed_request)
+{
+    AsyncDeviceRequest* next_request = nullptr;
+
+    {
+        ScopedSpinLock lock(m_requests_lock);
+        ASSERT(!m_requests.is_empty());
+        ASSERT(m_requests.first().ptr() == &completed_request);
+        m_requests.remove(m_requests.begin());
+        if (!m_requests.is_empty())
+            next_request = m_requests.first().ptr();
+    }
+
+    if (next_request)
+        next_request->start();
+
+    evaluate_block_conditions();
 }
 
 }

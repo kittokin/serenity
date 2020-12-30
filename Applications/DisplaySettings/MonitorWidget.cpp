@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2020, Hüseyin Aslıtürk <asliturk@hotmail.com>
+ * Copyright (c) 2020, Hüseyin Aslıtürk <asliturk@hotmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,19 +26,22 @@
 
 #include "MonitorWidget.h"
 #include <LibGUI/Painter.h>
+#include <LibGfx/Bitmap.h>
+
+namespace DisplaySettings {
 
 MonitorWidget::MonitorWidget()
 {
-    m_monitor_bitmap = Gfx::Bitmap::load_from_file("/res/monitor.png");
+    m_monitor_bitmap = Gfx::Bitmap::load_from_file("/res/graphics/monitor.png");
     m_monitor_rect = { 8, 9, 320, 180 };
 }
 
 bool MonitorWidget::set_wallpaper(String path)
 {
-    m_desktop_wallpaper_path = path;
     auto bitmap_ptr = Gfx::Bitmap::load_from_file(path);
-    if (!bitmap_ptr)
+    if (!bitmap_ptr && !path.is_empty())
         return false;
+    m_desktop_wallpaper_path = path;
     m_desktop_wallpaper_bitmap = bitmap_ptr;
     return true;
 }
@@ -106,6 +109,10 @@ void MonitorWidget::paint_event(GUI::PaintEvent& event)
     painter.blit({ 0, 0 }, *m_monitor_bitmap, m_monitor_bitmap->rect());
     painter.draw_scaled_bitmap(m_monitor_rect, *screen_bitmap, screen_bitmap->rect());
 
-    if (!m_desktop_resolution.is_null())
-        painter.draw_text(m_monitor_rect, m_desktop_resolution.to_string(), Gfx::TextAlignment::Center);
+    if (!m_desktop_resolution.is_null()) {
+        painter.draw_text(m_monitor_rect.translated(1, 1), m_desktop_resolution.to_string(), Gfx::TextAlignment::Center, Color::Black);
+        painter.draw_text(m_monitor_rect, m_desktop_resolution.to_string(), Gfx::TextAlignment::Center, Color::White);
+    }
+}
+
 }

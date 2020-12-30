@@ -32,6 +32,7 @@ endpoint WindowServer = 2
 
     CreateWindow(
         Gfx::IntRect rect,
+        bool auto_position,
         bool has_alpha_channel,
         bool modal,
         bool minimizable,
@@ -42,6 +43,7 @@ endpoint WindowServer = 2
         float opacity,
         Gfx::IntSize base_size,
         Gfx::IntSize size_increment,
+        Optional<Gfx::IntSize> resize_aspect_ratio,
         i32 type,
         [UTF8] String title,
         i32 parent_window_id) => (i32 window_id)
@@ -55,6 +57,8 @@ endpoint WindowServer = 2
 
     SetWindowRect(i32 window_id, Gfx::IntRect rect) => (Gfx::IntRect rect)
     GetWindowRect(i32 window_id) => (Gfx::IntRect rect)
+
+    GetWindowRectInMenubar(i32 window_id) => (Gfx::IntRect rect)
 
     IsMaximized(i32 window_id) => (bool maximized)
 
@@ -87,18 +91,27 @@ endpoint WindowServer = 2
     SetWindowIconBitmap(i32 window_id, Gfx::ShareableBitmap icon) => ()
 
     GetWallpaper() => (String path)
-    SetWindowOverrideCursor(i32 window_id, i32 cursor_type) => ()
-    SetWindowCustomOverrideCursor(i32 window_id, Gfx::ShareableBitmap cursor) => ()
+    SetWindowCursor(i32 window_id, i32 cursor_type) => ()
+    SetWindowCustomCursor(i32 window_id, Gfx::ShareableBitmap cursor) => ()
 
-    StartDrag([UTF8] String text, String data_type, String data, i32 bitmap_id, Gfx::IntSize bitmap_size) => (bool started)
+    StartDrag([UTF8] String text, HashMap<String,ByteBuffer> mime_data, i32 bitmap_id, Gfx::IntSize bitmap_size) => (bool started)
 
     SetSystemTheme(String theme_path, [UTF8] String theme_name) => (bool success)
     GetSystemTheme() => ([UTF8] String theme_name)
 
     SetWindowBaseSizeAndSizeIncrement(i32 window_id, Gfx::IntSize base_size, Gfx::IntSize size_increment) => ()
+    SetWindowResizeAspectRatio(i32 window_id, Optional<Gfx::IntSize> resize_aspect_ratio) => ()
 
     EnableDisplayLink() =|
     DisableDisplayLink() =|
+
+    GetGlobalCursorPosition() => (Gfx::IntPoint position)
+
+    SetMouseAcceleration(float factor) => ()
+    GetMouseAcceleration() => (float factor)
+
+    SetScrollStepSize(u32 step_size) => ()
+    GetScrollStepSize() => (u32 step_size)
 
     Pong() =|
 }

@@ -46,6 +46,7 @@ int main(int argc, char** argv)
     int port = 0;
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Network cat: Connect to network sockets as if it were a file.");
     args_parser.add_option(should_listen, "Listen instead of connecting", "listen", 'l');
     args_parser.add_option(verbose, "Log everything that's happening", "verbose", 'v');
     args_parser.add_option(should_close, "Close connection after reading stdin to the end", nullptr, 'N');
@@ -133,7 +134,7 @@ int main(int argc, char** argv)
         char addr_str[100];
 
         struct sockaddr_in dst_addr;
-        memset(&addr, 0, sizeof(addr));
+        memset(&dst_addr, 0, sizeof(dst_addr));
 
         dst_addr.sin_family = AF_INET;
         dst_addr.sin_port = htons(port);
@@ -175,7 +176,7 @@ int main(int argc, char** argv)
             highest_fd = max(highest_fd, fd);
         }
 
-        int ready = select(highest_fd + 1, &readfds, &writefds, &exceptfds, NULL);
+        int ready = select(highest_fd + 1, &readfds, &writefds, &exceptfds, nullptr);
         if (ready == -1) {
             if (errno == EINTR)
                 continue;

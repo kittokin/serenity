@@ -55,13 +55,13 @@ __BEGIN_DECLS
 extern char** environ;
 
 int get_process_name(char* buffer, int buffer_size);
+int set_process_name(const char* name, size_t name_length);
 void dump_backtrace();
 int fsync(int fd);
 void sysbeep();
 int gettid();
 int donate(int tid);
-int set_process_icon(int icon_id);
-inline int getpagesize() { return 4096; }
+int getpagesize();
 pid_t fork();
 int execv(const char* path, char* const argv[]);
 int execve(const char* filename, char* const argv[], char* const envp[]);
@@ -104,9 +104,6 @@ int chdir(const char* path);
 int fchdir(int fd);
 char* getcwd(char* buffer, size_t size);
 char* getwd(char* buffer);
-int fstat(int fd, struct stat* statbuf);
-int lstat(const char* path, struct stat* statbuf);
-int stat(const char* path, struct stat* statbuf);
 int sleep(unsigned seconds);
 int usleep(useconds_t);
 int gethostname(char*, size_t);
@@ -175,7 +172,39 @@ enum {
 enum {
     _SC_NPROCESSORS_CONF,
     _SC_NPROCESSORS_ONLN,
+    _SC_PAGESIZE,
+    _SC_OPEN_MAX,
 };
+
+#define _SC_NPROCESSORS_CONF _SC_NPROCESSORS_CONF
+#define _SC_NPROCESSORS_ONLN _SC_NPROCESSORS_ONLN
+#define _SC_PAGESIZE _SC_PAGESIZE
+#define _SC_OPEN_MAX _SC_OPEN_MAX
+
 long sysconf(int name);
+
+struct crypt_data {
+    int initialized;
+    char result[65];
+};
+
+char* crypt(const char* key, const char* salt);
+char* crypt_r(const char* key, const char* salt, struct crypt_data* data);
+
+// If opterr is set (the default), print error messages to stderr.
+extern int opterr;
+// On errors, optopt is set to the erroneous *character*.
+extern int optopt;
+// Index of the next argument to process upon a getopt*() call.
+extern int optind;
+// If set, reset the internal state kept by getopt*(). You may also want to set
+// optind to 1 in that case. Alternatively, setting optind to 0 is treated like
+// doing both of the above.
+extern int optreset;
+// After parsing an option that accept an argument, set to point to the argument
+// value.
+extern char* optarg;
+
+int getopt(int argc, char** argv, const char* short_options);
 
 __END_DECLS

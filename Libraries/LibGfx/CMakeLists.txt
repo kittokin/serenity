@@ -2,12 +2,15 @@ set(SOURCES
     AffineTransform.cpp
     Bitmap.cpp
     BMPLoader.cpp
+    BMPWriter.cpp
     CharacterBitmap.cpp
+    ClassicStylePainter.cpp
+    ClassicWindowTheme.cpp
     Color.cpp
     DisjointRectSet.cpp
     Emoji.cpp
-    FloatRect.cpp
     Font.cpp
+    FontDatabase.cpp
     GIFLoader.cpp
     ICOLoader.cpp
     ImageDecoder.cpp
@@ -26,6 +29,7 @@ set(SOURCES
     StylePainter.cpp
     SystemTheme.cpp
     Triangle.cpp
+    WindowTheme.cpp
 )
 
 serenity_lib(LibGfx gfx)

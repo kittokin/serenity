@@ -29,7 +29,7 @@
 #include <AK/FlyString.h>
 #include <AK/Vector.h>
 
-namespace Web {
+namespace Web::CSS {
 
 class Selector {
 public:
@@ -56,6 +56,13 @@ public:
             Root,
         };
         PseudoClass pseudo_class { PseudoClass::None };
+
+        enum class PseudoElement {
+            None,
+            Before,
+            After,
+        };
+        PseudoElement pseudo_element { PseudoElement::None };
 
         FlyString value;
 

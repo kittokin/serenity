@@ -27,54 +27,109 @@
 #pragma once
 
 #include <AK/Function.h>
-#include <AK/NonnullOwnPtr.h>
+#include <AK/InlineLinkedList.h>
+#include <AK/NonnullRefPtr.h>
 #include <AK/OwnPtr.h>
-#include <AK/SinglyLinkedList.h>
+#include <AK/RefCounted.h>
 #include <Kernel/Time/TimeManagement.h>
 
 namespace Kernel {
 
 typedef u64 TimerId;
 
-struct Timer {
-    TimerId id;
-    u64 expires;
-    Function<void()> callback;
+class Timer : public RefCounted<Timer>
+    , public InlineLinkedListNode<Timer> {
+    friend class TimerQueue;
+    friend class InlineLinkedListNode<Timer>;
+
+public:
+    Timer(clockid_t clock_id, u64 expires, Function<void()>&& callback)
+        : m_clock_id(clock_id)
+        , m_expires(expires)
+        , m_callback(move(callback))
+    {
+    }
+    ~Timer()
+    {
+        ASSERT(!is_queued());
+    }
+
+    timespec remaining() const;
+
+private:
+    TimerId m_id;
+    clockid_t m_clock_id;
+    u64 m_expires;
+    u64 m_remaining { 0 };
+    Function<void()> m_callback;
+    Timer* m_next { nullptr };
+    Timer* m_prev { nullptr };
+    Atomic<bool> m_queued { false };
+
     bool operator<(const Timer& rhs) const
     {
-        return expires < rhs.expires;
+        return m_expires < rhs.m_expires;
     }
     bool operator>(const Timer& rhs) const
     {
-        return expires > rhs.expires;
+        return m_expires > rhs.m_expires;
     }
     bool operator==(const Timer& rhs) const
     {
-        return id == rhs.id;
+        return m_id == rhs.m_id;
     }
+    bool is_queued() const { return m_queued.load(AK::MemoryOrder::memory_order_relaxed); }
+    void set_queued(bool queued) { m_queued.store(queued, AK::MemoryOrder::memory_order_relaxed); }
+    u64 now(bool) const;
 };
 
 class TimerQueue {
+    friend class Timer;
+
 public:
+    TimerQueue();
     static TimerQueue& the();
 
-    TimerId add_timer(NonnullOwnPtr<Timer>&&);
-    TimerId add_timer(timeval& timeout, Function<void()>&& callback);
+    TimerId add_timer(NonnullRefPtr<Timer>&&);
+    RefPtr<Timer> add_timer_without_id(clockid_t, const timespec&, Function<void()>&&);
+    TimerId add_timer(clockid_t, timeval& timeout, Function<void()>&& callback);
     bool cancel_timer(TimerId id);
+    bool cancel_timer(Timer&);
+    bool cancel_timer(NonnullRefPtr<Timer>&& timer)
+    {
+        return cancel_timer(*move(timer));
+    }
     void fire();
 
 private:
-    TimerQueue();
+    struct Queue {
+        InlineLinkedList<Timer> list;
+        u64 next_timer_due { 0 };
+    };
+    void remove_timer_locked(Queue&, Timer&);
+    void update_next_timer_due(Queue&);
+    void add_timer_locked(NonnullRefPtr<Timer>);
 
-    void update_next_timer_due();
+    Queue& queue_for_timer(Timer& timer)
+    {
+        switch (timer.m_clock_id) {
+        case CLOCK_MONOTONIC:
+        case CLOCK_MONOTONIC_COARSE:
+        case CLOCK_MONOTONIC_RAW:
+            return m_timer_queue_monotonic;
+        case CLOCK_REALTIME:
+        case CLOCK_REALTIME_COARSE:
+            return m_timer_queue_realtime;
+        default:
+            ASSERT_NOT_REACHED();
+        }
+    }
 
-    u64 microseconds_to_ticks(u64 micro_seconds) { return micro_seconds * (m_ticks_per_second / 1'000'000); }
-    u64 seconds_to_ticks(u64 seconds) { return seconds * m_ticks_per_second; }
-
-    u64 m_next_timer_due { 0 };
     u64 m_timer_id_count { 0 };
     u64 m_ticks_per_second { 0 };
-    SinglyLinkedList<NonnullOwnPtr<Timer>> m_timer_queue;
+    Queue m_timer_queue_monotonic;
+    Queue m_timer_queue_realtime;
+    InlineLinkedList<Timer> m_timers_executing;
 };
 
 }

@@ -31,7 +31,6 @@
 #include <Kernel/KSyms.h>
 #include <Kernel/Process.h>
 #include <Kernel/Profiling.h>
-#include <LibELF/Loader.h>
 
 namespace Kernel {
 
@@ -40,7 +39,7 @@ namespace Profiling {
 static KBufferImpl* s_profiling_buffer;
 static size_t s_slot_count;
 static size_t s_next_slot_index;
-static u32 s_pid;
+static ProcessID s_pid { -1 };
 
 String& executable_path()
 {
@@ -50,7 +49,7 @@ String& executable_path()
     return *path;
 }
 
-u32 pid()
+ProcessID pid()
 {
     return s_pid;
 }
@@ -64,7 +63,7 @@ void start(Process& process)
     s_pid = process.pid();
 
     if (!s_profiling_buffer) {
-        s_profiling_buffer = RefPtr<KBufferImpl>(KBuffer::create_with_size(8 * MB).impl()).leak_ref();
+        s_profiling_buffer = RefPtr<KBufferImpl>(KBuffer::create_with_size(8 * MiB).impl()).leak_ref();
         s_profiling_buffer->region().commit();
         s_slot_count = s_profiling_buffer->size() / sizeof(Sample);
     }
@@ -87,6 +86,7 @@ Sample& next_sample_slot()
 
 void stop()
 {
+    // FIXME: This probably shouldn't be empty.
 }
 
 void did_exec(const String& new_executable_path)

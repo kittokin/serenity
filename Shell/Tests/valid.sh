@@ -3,18 +3,26 @@
 # Are comments ignored?
 # Sanity check: can we do && and || ?
 true || exit 2
-false && exit 2
+false
+
+# Apply some useful aliases
+fail() {
+    echo $*
+    exit 1
+}
+
+# Can we chain &&'s?
+false && exit 2 && fail "can't chain &&'s"
+
+# Proper precedence between &&'s and ||'s
+false && exit 2 || true && false && fail Invalid precedence between '&&' and '||'
+
 
 # Sanity check: can we pass arguments to 'test'?
 test yes = yes || exit 2
 
 # Sanity check: can we use $(command)?
 test "$(echo yes)" = yes || exit 2
-
-# Apply some useful aliases
-# FIXME: Convert these to functions when we have them
-alias fail="echo Failure: "
-
 # Redirections.
 test -z "$(echo foo > /dev/null)" || fail direct path redirection
 test -z "$(echo foo 2> /dev/null 1>&2)" || fail indirect redirection
@@ -78,7 +86,7 @@ rm -fr sh-test
 
 # Setopt
 setopt --inline_exec_keep_empty_segments
-test "$(echo "a\n\nb")" = "a  b" || fail inline_exec_keep_empty_segments has no effect
+test "$(echo -n "a\n\nb")" = "a  b" || fail inline_exec_keep_empty_segments has no effect
 
 setopt --no_inline_exec_keep_empty_segments
-test "$(echo "a\n\nb")" = "a b" || fail cannot unset inline_exec_keep_empty_segments
+test "$(echo -n "a\n\nb")" = "a b" || fail cannot unset inline_exec_keep_empty_segments

@@ -25,6 +25,7 @@
  */
 
 #include <AK/HashTable.h>
+#include <AK/Singleton.h>
 #include <AK/StdLibExtras.h>
 #include <AK/StringView.h>
 #include <Kernel/FileSystem/FIFO.h>
@@ -37,11 +38,10 @@
 
 namespace Kernel {
 
-Lockable<HashTable<FIFO*>>& all_fifos()
+static AK::Singleton<Lockable<HashTable<FIFO*>>> s_table;
+
+static Lockable<HashTable<FIFO*>>& all_fifos()
 {
-    static Lockable<HashTable<FIFO*>>* s_table;
-    if (!s_table)
-        s_table = new Lockable<HashTable<FIFO*>>;
     return *s_table;
 }
 
@@ -60,12 +60,46 @@ NonnullRefPtr<FileDescription> FIFO::open_direction(FIFO::Direction direction)
     return description;
 }
 
+NonnullRefPtr<FileDescription> FIFO::open_direction_blocking(FIFO::Direction direction)
+{
+    Locker locker(m_open_lock);
+
+    auto description = open_direction(direction);
+
+    if (direction == Direction::Reader) {
+        m_read_open_queue.wake_all();
+
+        if (m_writers == 0) {
+            locker.unlock();
+            m_write_open_queue.wait_on(nullptr, "FIFO");
+            locker.lock();
+        }
+    }
+
+    if (direction == Direction::Writer) {
+        m_write_open_queue.wake_all();
+
+        if (m_readers == 0) {
+            locker.unlock();
+            m_read_open_queue.wait_on(nullptr, "FIFO");
+            locker.lock();
+        }
+    }
+
+    return description;
+}
+
 FIFO::FIFO(uid_t uid)
     : m_uid(uid)
 {
     LOCKER(all_fifos().lock());
     all_fifos().resource().set(this);
     m_fifo_id = ++s_next_fifo_id;
+
+    // Use the same block condition for read and write
+    m_buffer.set_unblock_callback([this]() {
+        evaluate_block_conditions();
+    });
 }
 
 FIFO::~FIFO()
@@ -87,6 +121,8 @@ void FIFO::attach(Direction direction)
         klog() << "open writer (" << m_writers << ")";
 #endif
     }
+
+    evaluate_block_conditions();
 }
 
 void FIFO::detach(Direction direction)
@@ -104,6 +140,8 @@ void FIFO::detach(Direction direction)
         ASSERT(m_writers);
         --m_writers;
     }
+
+    evaluate_block_conditions();
 }
 
 bool FIFO::can_read(const FileDescription&, size_t) const
@@ -116,35 +154,32 @@ bool FIFO::can_write(const FileDescription&, size_t) const
     return m_buffer.space_for_writing() || !m_readers;
 }
 
-ssize_t FIFO::read(FileDescription&, size_t, u8* buffer, ssize_t size)
+KResultOr<size_t> FIFO::read(FileDescription&, size_t, UserOrKernelBuffer& buffer, size_t size)
 {
     if (!m_writers && m_buffer.is_empty())
         return 0;
-#ifdef FIFO_DEBUG
-    dbg() << "fifo: read(" << size << ")\n";
-#endif
-    ssize_t nread = m_buffer.read(buffer, size);
-#ifdef FIFO_DEBUG
-    dbg() << "   -> read (" << String::format("%c", buffer[0]) << ") " << nread;
-#endif
-    return nread;
+    return m_buffer.read(buffer, size);
 }
 
-ssize_t FIFO::write(FileDescription&, size_t, const u8* buffer, ssize_t size)
+KResultOr<size_t> FIFO::write(FileDescription&, size_t, const UserOrKernelBuffer& buffer, size_t size)
 {
     if (!m_readers) {
         Thread::current()->send_signal(SIGPIPE, Process::current());
         return -EPIPE;
     }
-#ifdef FIFO_DEBUG
-    dbg() << "fifo: write(" << (const void*)buffer << ", " << size << ")";
-#endif
     return m_buffer.write(buffer, size);
 }
 
 String FIFO::absolute_path(const FileDescription&) const
 {
     return String::format("fifo:%u", m_fifo_id);
+}
+
+KResult FIFO::stat(::stat& st) const
+{
+    memset(&st, 0, sizeof(st));
+    st.st_mode = S_IFIFO;
+    return KSuccess;
 }
 
 }

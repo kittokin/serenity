@@ -32,7 +32,7 @@ namespace AK {
 
 class FlyString {
 public:
-    FlyString() {}
+    FlyString() { }
     FlyString(const FlyString& other)
         : m_impl(other.impl())
     {
@@ -82,9 +82,13 @@ public:
 
     FlyString to_lowercase() const;
 
-    Optional<int> to_int() const;
+    template<typename T = int>
+    Optional<T> to_int() const;
+    template<typename T = unsigned>
+    Optional<T> to_uint() const;
 
     bool equals_ignoring_case(const StringView&) const;
+    bool starts_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     bool ends_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
 
     static void did_destroy_impl(Badge<StringImpl>, StringImpl&);
@@ -92,11 +96,10 @@ public:
     template<typename T, typename... Rest>
     bool is_one_of(const T& string, Rest... rest) const
     {
-        if (string == *this)
+        if (*this == string)
             return true;
         return is_one_of(rest...);
     }
-
 
 private:
     bool is_one_of() const { return false; }

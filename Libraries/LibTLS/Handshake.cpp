@@ -25,7 +25,6 @@
  */
 
 #include <AK/Random.h>
-#include <LibCore/Timer.h>
 #include <LibCrypto/ASN1/DER.h>
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
 #include <LibTLS/TLSv12.h>
@@ -74,11 +73,12 @@ ByteBuffer TLSv12::build_hello()
     }
 
     // Ciphers
-    builder.append((u16)(4 * sizeof(u16)));
+    builder.append((u16)(5 * sizeof(u16)));
     builder.append((u16)CipherSuite::RSA_WITH_AES_128_CBC_SHA256);
     builder.append((u16)CipherSuite::RSA_WITH_AES_256_CBC_SHA256);
     builder.append((u16)CipherSuite::RSA_WITH_AES_128_CBC_SHA);
     builder.append((u16)CipherSuite::RSA_WITH_AES_256_CBC_SHA);
+    builder.append((u16)CipherSuite::RSA_WITH_AES_128_GCM_SHA256);
 
     // we don't like compression
     builder.append((u8)1);
@@ -153,11 +153,11 @@ ByteBuffer TLSv12::build_finished()
     builder.append_u24(out_size);
 
     u8 out[out_size];
-    auto outbuffer = ByteBuffer::wrap(out, out_size);
+    auto outbuffer = Bytes { out, out_size };
     auto dummy = ByteBuffer::create_zeroed(0);
 
     auto digest = m_context.handshake_hash.digest();
-    auto hashbuf = ByteBuffer::wrap(digest.immutable_data(), m_context.handshake_hash.digest_size());
+    auto hashbuf = ReadonlyBytes { digest.immutable_data(), m_context.handshake_hash.digest_size() };
     pseudorandom_function(outbuffer, m_context.master_key, (const u8*)"client finished", 15, hashbuf, dummy);
 
     builder.append(outbuffer);

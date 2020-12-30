@@ -28,11 +28,13 @@
 #include <LibGUI/Application.h>
 #include <LibGUI/MessageBox.h>
 
+namespace HackStudio {
+
 GUI::ModelIndex VariablesModel::index(int row, int column, const GUI::ModelIndex& parent_index) const
 {
     if (!parent_index.is_valid())
         return create_index(row, column, &m_variables[row]);
-    auto* parent = static_cast<const DebugInfo::VariableInfo*>(parent_index.internal_data());
+    auto* parent = static_cast<const Debug::DebugInfo::VariableInfo*>(parent_index.internal_data());
     auto* child = &parent->members[row];
     return create_index(row, column, child);
 }
@@ -41,7 +43,7 @@ GUI::ModelIndex VariablesModel::parent_index(const GUI::ModelIndex& index) const
 {
     if (!index.is_valid())
         return {};
-    auto* child = static_cast<const DebugInfo::VariableInfo*>(index.internal_data());
+    auto* child = static_cast<const Debug::DebugInfo::VariableInfo*>(index.internal_data());
     auto* parent = child->parent;
     if (parent == nullptr)
         return {};
@@ -53,7 +55,7 @@ GUI::ModelIndex VariablesModel::parent_index(const GUI::ModelIndex& index) const
         ASSERT_NOT_REACHED();
     }
     for (size_t row = 0; row < parent->parent->members.size(); row++) {
-        DebugInfo::VariableInfo* child_at_row = parent->parent->members.ptr_at(row).ptr();
+        Debug::DebugInfo::VariableInfo* child_at_row = parent->parent->members.ptr_at(row).ptr();
         if (child_at_row == parent)
             return create_index(row, 0, parent);
     }
@@ -64,13 +66,13 @@ int VariablesModel::row_count(const GUI::ModelIndex& index) const
 {
     if (!index.is_valid())
         return m_variables.size();
-    auto* node = static_cast<const DebugInfo::VariableInfo*>(index.internal_data());
+    auto* node = static_cast<const Debug::DebugInfo::VariableInfo*>(index.internal_data());
     return node->members.size();
 }
 
-String variable_value_as_string(const DebugInfo::VariableInfo& variable)
+static String variable_value_as_string(const Debug::DebugInfo::VariableInfo& variable)
 {
-    if (variable.location_type != DebugInfo::VariableInfo::LocationType::Address)
+    if (variable.location_type != Debug::DebugInfo::VariableInfo::LocationType::Address)
         return "N/A";
 
     auto variable_address = variable.location_data.address;
@@ -82,19 +84,19 @@ String variable_value_as_string(const DebugInfo::VariableInfo& variable)
             return enumerator->constant_data.as_u32 == enumerator_value;
         });
         ASSERT(!it.is_end());
-        return String::format("%s::%s", variable.type_name.characters(), (*it)->name.characters());
+        return String::formatted("{}::{}", variable.type_name, (*it)->name);
     }
 
     if (variable.type_name == "int") {
         auto value = Debugger::the().session()->peek((u32*)variable_address);
         ASSERT(value.has_value());
-        return String::format("%d", static_cast<int>(value.value()));
+        return String::formatted("{}", static_cast<int>(value.value()));
     }
 
     if (variable.type_name == "char") {
         auto value = Debugger::the().session()->peek((u32*)variable_address);
         ASSERT(value.has_value());
-        return String::format("'%c' (%d)", static_cast<char>(value.value()), static_cast<char>(value.value()));
+        return String::formatted("'{0:c}' ({0:d})", value.value());
     }
 
     if (variable.type_name == "bool") {
@@ -103,13 +105,13 @@ String variable_value_as_string(const DebugInfo::VariableInfo& variable)
         return (value.value() & 1) ? "true" : "false";
     }
 
-    return String::format("type: %s @ %08x, ", variable.type_name.characters(), variable_address);
+    return String::formatted("type: {} @ {:p}, ", variable.type_name, variable_address);
 }
 
-static Optional<u32> string_to_variable_value(const StringView& string_value, const DebugInfo::VariableInfo& variable)
+static Optional<u32> string_to_variable_value(const StringView& string_value, const Debug::DebugInfo::VariableInfo& variable)
 {
     if (variable.is_enum_type()) {
-        auto prefix_string = String::format("%s::", variable.type_name.characters());
+        auto prefix_string = String::formatted("{}::", variable.type_name);
         auto string_to_use = string_value;
         if (string_value.starts_with(prefix_string))
             string_to_use = string_value.substring_view(prefix_string.length(), string_value.length() - prefix_string.length());
@@ -143,7 +145,7 @@ static Optional<u32> string_to_variable_value(const StringView& string_value, co
 
 void VariablesModel::set_variable_value(const GUI::ModelIndex& index, const StringView& string_value, GUI::Window* parent_window)
 {
-    auto variable = static_cast<const DebugInfo::VariableInfo*>(index.internal_data());
+    auto variable = static_cast<const Debug::DebugInfo::VariableInfo*>(index.internal_data());
 
     auto value = string_to_variable_value(string_value, *variable);
 
@@ -153,21 +155,22 @@ void VariablesModel::set_variable_value(const GUI::ModelIndex& index, const Stri
         return;
     }
 
-    GUI::MessageBox::show(parent_window,
-        String::format("String value \"%s\" could not be converted to a value of type %s.", string_value.to_string().characters(), variable->type_name.characters()),
+    GUI::MessageBox::show(
+        parent_window,
+        String::formatted("String value \"{}\" could not be converted to a value of type {}.", string_value, variable->type_name),
         "Set value failed",
         GUI::MessageBox::Type::Error);
 }
 
-GUI::Variant VariablesModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant VariablesModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
-    auto* variable = static_cast<const DebugInfo::VariableInfo*>(index.internal_data());
+    auto* variable = static_cast<const Debug::DebugInfo::VariableInfo*>(index.internal_data());
     switch (role) {
-    case Role::Display: {
+    case GUI::ModelRole::Display: {
         auto value_as_string = variable_value_as_string(*variable);
-        return String::format("%s: %s", variable->name.characters(), value_as_string.characters());
+        return String::formatted("{}: {}", variable->name, value_as_string);
     }
-    case Role::Icon:
+    case GUI::ModelRole::Icon:
         return m_variable_icon;
     default:
         return {};
@@ -183,4 +186,6 @@ RefPtr<VariablesModel> VariablesModel::create(const PtraceRegisters& regs)
 {
     auto variables = Debugger::the().session()->debug_info().get_variables_in_current_scope(regs);
     return adopt(*new VariablesModel(move(variables), regs));
+}
+
 }

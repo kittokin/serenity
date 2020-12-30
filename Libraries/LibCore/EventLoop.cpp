@@ -25,6 +25,7 @@
  */
 
 #include <AK/Badge.h>
+#include <AK/ByteBuffer.h>
 #include <AK/IDAllocator.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
@@ -102,7 +103,7 @@ public:
             int nread = m_socket->read((u8*)&length, sizeof(length));
             if (nread == 0) {
 #ifdef EVENTLOOP_DEBUG
-                dbg() << "RPC client disconnected";
+                dbgln("RPC client disconnected");
 #endif
                 shutdown();
                 return;
@@ -112,7 +113,7 @@ public:
 
             auto request_json = JsonValue::from_string(request);
             if (!request_json.has_value() || !request_json.value().is_object()) {
-                dbg() << "RPC client sent invalid request";
+                dbgln("RPC client sent invalid request");
                 shutdown();
                 return;
             }
@@ -122,8 +123,8 @@ public:
     }
     virtual ~RPCClient() override
     {
-        if (m_inspected_object)
-            m_inspected_object->decrement_inspector_count({});
+        if (auto inspected_object = m_inspected_object.strong_ref())
+            inspected_object->decrement_inspector_count({});
     }
 
     void send_response(const JsonObject& response)
@@ -139,7 +140,7 @@ public:
         auto type = request.get("type").as_string_or({});
 
         if (type.is_null()) {
-            dbg() << "RPC client sent request without type field";
+            dbgln("RPC client sent request without type field");
             return;
         }
 
@@ -177,10 +178,10 @@ public:
             auto address = request.get("address").to_number<FlatPtr>();
             for (auto& object : Object::all_objects()) {
                 if ((FlatPtr)&object == address) {
-                    if (m_inspected_object)
-                        m_inspected_object->decrement_inspector_count({});
-                    m_inspected_object = object.make_weak_ptr();
-                    m_inspected_object->increment_inspector_count({});
+                    if (auto inspected_object = m_inspected_object.strong_ref())
+                        inspected_object->decrement_inspector_count({});
+                    m_inspected_object = object;
+                    object.increment_inspector_count({});
                     break;
                 }
             }
@@ -245,12 +246,12 @@ EventLoop::EventLoop()
 
         if (!s_rpc_server) {
             if (!start_rpc_server())
-                dbg() << "Core::EventLoop: Failed to start an RPC server";
+                dbgln("Core::EventLoop: Failed to start an RPC server");
         }
     }
 
 #ifdef EVENTLOOP_DEBUG
-    dbg() << getpid() << " Core::EventLoop constructed :)";
+    dbgln("{} Core::EventLoop constructed :)", getpid());
 #endif
 }
 
@@ -304,7 +305,7 @@ EventLoop& EventLoop::current()
 void EventLoop::quit(int code)
 {
 #ifdef EVENTLOOP_DEBUG
-    dbg() << "Core::EventLoop::quit(" << code << ")";
+    dbgln("Core::EventLoop::quit({})", code);
 #endif
     m_exit_requested = true;
     m_exit_code = code;
@@ -313,7 +314,7 @@ void EventLoop::quit(int code)
 void EventLoop::unquit()
 {
 #ifdef EVENTLOOP_DEBUG
-    dbg() << "Core::EventLoop::unquit()";
+    dbgln("Core::EventLoop::unquit()");
 #endif
     m_exit_requested = false;
     m_exit_code = 0;
@@ -364,11 +365,11 @@ void EventLoop::pump(WaitMode mode)
 
     for (size_t i = 0; i < events.size(); ++i) {
         auto& queued_event = events.at(i);
-        auto* receiver = queued_event.receiver.ptr();
+        auto receiver = queued_event.receiver.strong_ref();
         auto& event = *queued_event.event;
 #ifdef EVENTLOOP_DEBUG
         if (receiver)
-            dbg() << "Core::EventLoop: " << *receiver << " event " << (int)event.type();
+            dbgln("Core::EventLoop: {} event {}", *receiver, event.type());
 #endif
         if (!receiver) {
             switch (event.type()) {
@@ -377,13 +378,13 @@ void EventLoop::pump(WaitMode mode)
                 return;
             default:
 #ifdef EVENTLOOP_DEBUG
-                dbg() << "Event type " << event.type() << " with no receiver :(";
+                dbgln("Event type {} with no receiver :(", event.type());
 #endif
                 break;
             }
         } else if (event.type() == Event::Type::DeferredInvoke) {
 #ifdef DEFERRED_INVOKE_DEBUG
-            printf("DeferredInvoke: receiver=%s{%p}\n", receiver->class_name(), receiver);
+            dbgln("DeferredInvoke: receiver = {}", *receiver);
 #endif
             static_cast<DeferredInvocationEvent&>(event).m_invokee(*receiver);
         } else {
@@ -394,7 +395,7 @@ void EventLoop::pump(WaitMode mode)
         if (m_exit_requested) {
             LOCKER(m_private->lock);
 #ifdef EVENTLOOP_DEBUG
-            dbg() << "Core::EventLoop: Exit requested. Rejigging " << (events.size() - i) << " events.";
+            dbgln("Core::EventLoop: Exit requested. Rejigging {} events.", events.size() - i);
 #endif
             decltype(m_queued_events) new_event_queue;
             new_event_queue.ensure_capacity(m_queued_events.size() + events.size());
@@ -411,7 +412,7 @@ void EventLoop::post_event(Object& receiver, NonnullOwnPtr<Event>&& event)
 {
     LOCKER(m_private->lock);
 #ifdef EVENTLOOP_DEBUG
-    dbg() << "Core::EventLoop::post_event: {" << m_queued_events.size() << "} << receiver=" << receiver << ", event=" << event;
+    dbgln("Core::EventLoop::post_event: ({}) << receivier={}, event={}", m_queued_events.size(), receiver, event);
 #endif
     m_queued_events.empend(receiver, move(event));
 }
@@ -421,7 +422,7 @@ EventLoop::SignalHandlers::SignalHandlers(int signo)
     , m_original_handler(signal(signo, EventLoop::handle_signal))
 {
 #ifdef EVENTLOOP_DEBUG
-    dbg() << "Core::EventLoop: Registered handler for signal " << m_signo;
+    dbgln("Core::EventLoop: Registered handler for signal {}", m_signo);
 #endif
 }
 
@@ -429,7 +430,7 @@ EventLoop::SignalHandlers::~SignalHandlers()
 {
     if (m_valid) {
 #ifdef EVENTLOOP_DEBUG
-        dbg() << "Core::EventLoop: Unregistering handler for signal " << m_signo;
+        dbgln("Core::EventLoop: Unregistering handler for signal {}", m_signo);
 #endif
         signal(m_signo, m_original_handler);
     }
@@ -461,7 +462,7 @@ void EventLoop::dispatch_signal(int signo)
     auto handlers = s_signal_handlers.find(signo);
     if (handlers != s_signal_handlers.end()) {
 #ifdef EVENTLOOP_DEBUG
-        dbg() << "Core::EventLoop: dispatching signal " << signo;
+        dbgln("Core::EventLoop: dispatching signal {}", signo);
 #endif
         handlers->value.dispatch();
     }
@@ -519,6 +520,26 @@ void EventLoop::unregister_signal(int handler_id)
         s_signal_handlers.remove(remove_signo);
 }
 
+void EventLoop::notify_forked(ForkEvent event)
+{
+    switch (event) {
+    case ForkEvent::Child:
+        s_main_event_loop = nullptr;
+        s_event_loop_stack->clear();
+        s_timers->clear();
+        s_notifiers->clear();
+        s_signal_handlers.clear();
+        s_handling_signal = 0;
+        s_next_signal_id = 0;
+        s_pid = 0;
+        s_rpc_server = nullptr;
+        s_rpc_clients.clear();
+        return;
+    }
+
+    ASSERT_NOT_REACHED();
+}
+
 void EventLoop::wait_for_event(WaitMode mode)
 {
     fd_set rfds;
@@ -559,11 +580,11 @@ retry:
         auto next_timer_expiration = get_next_timer_expiration();
         if (next_timer_expiration.has_value()) {
             timespec now_spec;
-            clock_gettime(CLOCK_MONOTONIC, &now_spec);
+            clock_gettime(CLOCK_MONOTONIC_COARSE, &now_spec);
             now.tv_sec = now_spec.tv_sec;
             now.tv_usec = now_spec.tv_nsec / 1000;
             timeval_sub(next_timer_expiration.value(), now, timeout);
-            if (timeout.tv_sec < 0) {
+            if (timeout.tv_sec < 0 || (timeout.tv_sec == 0 && timeout.tv_usec < 0)) {
                 timeout.tv_sec = 0;
                 timeout.tv_usec = 0;
             }
@@ -582,7 +603,7 @@ try_select_again:
             goto try_select_again;
         }
 #ifdef EVENTLOOP_DEBUG
-        dbg() << "Core::EventLoop::wait_for_event: " << marked_fd_count << " (" << saved_errno << ": " << strerror(saved_errno) << ")";
+        dbgln("Core::EventLoop::wait_for_event: {} ({}: {})", marked_fd_count, saved_errno, strerror(saved_errno));
 #endif
         // Blow up, similar to Core::safe_syscall.
         ASSERT_NOT_REACHED();
@@ -610,7 +631,7 @@ try_select_again:
 
     if (!s_timers->is_empty()) {
         timespec now_spec;
-        clock_gettime(CLOCK_MONOTONIC, &now_spec);
+        clock_gettime(CLOCK_MONOTONIC_COARSE, &now_spec);
         now.tv_sec = now_spec.tv_sec;
         now.tv_usec = now_spec.tv_nsec / 1000;
     }
@@ -619,15 +640,16 @@ try_select_again:
         auto& timer = *it.value;
         if (!timer.has_expired(now))
             continue;
-        if (it.value->fire_when_not_visible == TimerShouldFireWhenNotVisible::No
-            && it.value->owner
-            && !it.value->owner->is_visible_for_timer_purposes()) {
+        auto owner = timer.owner.strong_ref();
+        if (timer.fire_when_not_visible == TimerShouldFireWhenNotVisible::No
+            && owner && !owner->is_visible_for_timer_purposes()) {
             continue;
         }
 #ifdef EVENTLOOP_DEBUG
-        dbg() << "Core::EventLoop: Timer " << timer.timer_id << " has expired, sending Core::TimerEvent to " << timer.owner;
+        dbgln("Core::EventLoop: Timer {} has expired, sending Core::TimerEvent to {}", timer.timer_id, *owner);
 #endif
-        post_event(*timer.owner, make<TimerEvent>(timer.timer_id));
+        if (owner)
+            post_event(*owner, make<TimerEvent>(timer.timer_id));
         if (timer.should_reload) {
             timer.reload(now);
         } else {
@@ -668,9 +690,9 @@ Optional<struct timeval> EventLoop::get_next_timer_expiration()
     Optional<struct timeval> soonest {};
     for (auto& it : *s_timers) {
         auto& fire_time = it.value->fire_time;
+        auto owner = it.value->owner.strong_ref();
         if (it.value->fire_when_not_visible == TimerShouldFireWhenNotVisible::No
-            && it.value->owner
-            && !it.value->owner->is_visible_for_timer_purposes()) {
+            && owner && !owner->is_visible_for_timer_purposes()) {
             continue;
         }
         if (!soonest.has_value() || fire_time.tv_sec < soonest.value().tv_sec || (fire_time.tv_sec == soonest.value().tv_sec && fire_time.tv_usec < soonest.value().tv_usec))
@@ -683,11 +705,11 @@ int EventLoop::register_timer(Object& object, int milliseconds, bool should_relo
 {
     ASSERT(milliseconds >= 0);
     auto timer = make<EventLoopTimer>();
-    timer->owner = object.make_weak_ptr();
+    timer->owner = object;
     timer->interval = milliseconds;
     timeval now;
     timespec now_spec;
-    clock_gettime(CLOCK_MONOTONIC, &now_spec);
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &now_spec);
     now.tv_sec = now_spec.tv_sec;
     now.tv_usec = now_spec.tv_nsec / 1000;
     timer->reload(now);
@@ -730,7 +752,7 @@ void EventLoop::wake()
 }
 
 EventLoop::QueuedEvent::QueuedEvent(Object& receiver, NonnullOwnPtr<Event> event)
-    : receiver(receiver.make_weak_ptr())
+    : receiver(receiver)
     , event(move(event))
 {
 }

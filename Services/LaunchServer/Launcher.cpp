@@ -32,7 +32,8 @@
 #include <AK/LexicalPath.h>
 #include <AK/StringBuilder.h>
 #include <LibCore/ConfigFile.h>
-#include <LibCore/DirIterator.h>
+#include <LibDesktop/AppFile.h>
+#include <serenity.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -66,23 +67,17 @@ String Handler::to_details_str() const
     obj.add("executable", executable);
     obj.add("name", name);
     switch (handler_type) {
-        case Type::Application:
-            obj.add("type", "app");
-            break;
-        case Type::UserDefault:
-            obj.add("type", "userdefault");
-            break;
-        case Type::UserPreferred:
-            obj.add("type", "userpreferred");
-            break;
-        default:
-            break;
-    }
-    if (!icons.is_empty()) {
-        JsonObject icons_obj;
-        for (auto& icon : icons)
-            icons_obj.set(icon.key, icon.value);
-        obj.add("icons", move(icons_obj));
+    case Type::Application:
+        obj.add("type", "app");
+        break;
+    case Type::UserDefault:
+        obj.add("type", "userdefault");
+        break;
+    case Type::UserPreferred:
+        obj.add("type", "userpreferred");
+        break;
+    default:
+        break;
     }
     obj.finish();
     return builder.build();
@@ -102,48 +97,34 @@ Launcher& Launcher::the()
 
 void Launcher::load_handlers(const String& af_dir)
 {
-    auto load_hashtable = [](auto& af, auto& key) {
-        HashTable<String> table;
-
-        auto config_value = af->read_entry("Launcher", key, {});
-        for (auto& key : config_value.split(','))
-            table.set(key.to_lowercase());
-
-        return table;
-    };
-    auto load_hashmap = [](auto& af, auto& group) {
-        HashMap<String, String> map;
-        auto keys = af->keys(group);
-        for (auto& key : keys)
-            map.set(key, af->read_entry(group, key));
-
-        return map;
-    };
-
-    Core::DirIterator dt(af_dir, Core::DirIterator::SkipDots);
-    while (dt.has_next()) {
-        auto af_name = dt.next_path();
-        auto af_path = String::format("%s/%s", af_dir.characters(), af_name.characters());
-        auto af = Core::ConfigFile::open(af_path);
-        if (!af->has_key("App", "Name") || !af->has_key("App", "Executable"))
-            continue;
-        auto app_name = af->read_entry("App", "Name");
-        auto app_executable = af->read_entry("App", "Executable");
-        auto file_types = load_hashtable(af, "FileTypes");
-        auto protocols = load_hashtable(af, "Protocols");
-        auto icons = load_hashmap(af, "Icons");
-        m_handlers.set(app_executable, { Handler::Type::Default, move(app_name), app_executable, move(file_types), move(protocols), move(icons) });
-    }
+    Desktop::AppFile::for_each([&](auto af) {
+        auto app_name = af->name();
+        auto app_executable = af->executable();
+        HashTable<String> file_types;
+        for (auto& file_type : af->launcher_file_types())
+            file_types.set(file_type);
+        HashTable<String> protocols;
+        for (auto& protocol : af->launcher_protocols())
+            protocols.set(protocol);
+        m_handlers.set(app_executable, { Handler::Type::Default, app_name, app_executable, file_types, protocols });
+    },
+        af_dir);
 }
 
 void Launcher::load_config(const Core::ConfigFile& cfg)
 {
     for (auto key : cfg.keys("FileType")) {
-        m_file_handlers.set(key.to_lowercase(), cfg.read_entry("FileType", key));
+        auto handler = cfg.read_entry("FileType", key).trim_whitespace();
+        if (handler.is_empty())
+            continue;
+        m_file_handlers.set(key.to_lowercase(), handler);
     }
 
     for (auto key : cfg.keys("Protocol")) {
-        m_protocol_handlers.set(key.to_lowercase(), cfg.read_entry("Protocol", key));
+        auto handler = cfg.read_entry("Protocol", key).trim_whitespace();
+        if (handler.is_empty())
+            continue;
+        m_protocol_handlers.set(key.to_lowercase(), handler);
     }
 }
 
@@ -195,7 +176,7 @@ bool Launcher::open_url(const URL& url, const String& handler_name)
     if (url.protocol() == "file")
         return open_file_url(url);
 
-    return open_with_user_preferences(m_protocol_handlers, url.protocol(), url.to_string(), "/bin/Browser");
+    return open_with_user_preferences(m_protocol_handlers, url.protocol(), url.to_string());
 }
 
 bool Launcher::open_with_handler_name(const URL& url, const String& handler_name)
@@ -220,6 +201,9 @@ bool spawn(String executable, String argument)
     if ((errno = posix_spawn(&child_pid, executable.characters(), nullptr, nullptr, const_cast<char**>(argv), environ))) {
         perror("posix_spawn");
         return false;
+    } else {
+        if (disown(child_pid) < 0)
+            perror("disown");
     }
     return true;
 }
@@ -248,9 +232,11 @@ bool Launcher::open_with_user_preferences(const HashMap<String, String>& user_pr
     if (program_path.has_value())
         return spawn(program_path.value(), argument);
 
-    // Absolute worst case, try the provided default
+    // Absolute worst case, try the provided default program, if any
+    if (!default_program.is_empty())
+        return spawn(default_program, argument);
 
-    return spawn(default_program, argument);
+    return false;
 }
 
 void Launcher::for_each_handler(const String& key, HashMap<String, String>& user_preference, Function<bool(const Handler&)> f)
@@ -318,6 +304,6 @@ bool Launcher::open_file_url(const URL& url)
     String extension = {};
     if (extension_parts.size() > 1)
         extension = extension_parts.last();
-    return open_with_user_preferences(m_file_handlers, extension, url.path(), "/bin/TextEdit");
+    return open_with_user_preferences(m_file_handlers, extension, url.path(), "/bin/TextEditor");
 }
 }

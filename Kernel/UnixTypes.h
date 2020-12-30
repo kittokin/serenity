@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <AK/DistinctNumeric.h>
 #include <AK/Types.h>
 
 #define O_RDONLY (1 << 0)
@@ -58,6 +59,8 @@
 enum {
     _SC_NPROCESSORS_CONF,
     _SC_NPROCESSORS_ONLN,
+    _SC_PAGESIZE,
+    _SC_OPEN_MAX
 };
 
 #define PERF_EVENT_MALLOC 1
@@ -68,6 +71,7 @@ enum {
 #define WSTOPPED WUNTRACED
 #define WEXITED 4
 #define WCONTINUED 8
+#define WNOWAIT 0x1000000
 
 #define R_OK 4
 #define W_OK 2
@@ -153,6 +157,7 @@ enum {
 #define VWERASE 14
 #define VLNEXT 15
 #define VEOL2 16
+#define VINFO 17
 
 /* c_iflag bits */
 #define IGNBRK 0000001
@@ -319,6 +324,11 @@ typedef u32 gid_t;
 typedef u32 clock_t;
 typedef u32 socklen_t;
 typedef int pid_t;
+// Avoid interference with AK/Types.h and LibC/sys/types.h by defining *separate* names:
+TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ProcessID);
+TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ThreadID);
+TYPEDEF_DISTINCT_ORDERED_ID(pid_t, SessionID);
+TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ProcessGroupID);
 
 struct tms {
     clock_t tms_utime;
@@ -418,11 +428,12 @@ struct stat {
 };
 
 #define POLLIN (1u << 0)
-#define POLLPRI (1u << 2)
-#define POLLOUT (1u << 3)
-#define POLLERR (1u << 4)
-#define POLLHUP (1u << 5)
-#define POLLNVAL (1u << 6)
+#define POLLPRI (1u << 1)
+#define POLLOUT (1u << 2)
+#define POLLERR (1u << 3)
+#define POLLHUP (1u << 4)
+#define POLLNVAL (1u << 5)
+#define POLLRDHUP (1u << 13)
 
 struct pollfd {
     int fd;
@@ -449,17 +460,27 @@ struct pollfd {
 #define SHUT_WR 2
 #define SHUT_RDWR 3
 
+#define MSG_TRUNC 0x1
+#define MSG_CTRUNC 0x2
 #define MSG_DONTWAIT 0x40
 
 #define SOL_SOCKET 1
 
-#define SO_RCVTIMEO 1
-#define SO_SNDTIMEO 2
-#define SO_ERROR 4
-#define SO_PEERCRED 5
-#define SO_REUSEADDR 6
-#define SO_BINDTODEVICE 7
-#define SO_KEEPALIVE 9
+enum {
+    SO_RCVTIMEO,
+    SO_SNDTIMEO,
+    SO_TYPE,
+    SO_ERROR,
+    SO_PEERCRED,
+    SO_REUSEADDR,
+    SO_BINDTODEVICE,
+    SO_KEEPALIVE,
+    SO_TIMESTAMP,
+};
+
+enum {
+    SCM_TIMESTAMP,
+};
 
 #define IPPROTO_IP 0
 #define IPPROTO_ICMP 1
@@ -527,6 +548,9 @@ typedef int clockid_t;
 
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
+#define CLOCK_MONOTONIC_RAW 4
+#define CLOCK_REALTIME_COARSE 5
+#define CLOCK_MONOTONIC_COARSE 6
 #define TIMER_ABSTIME 99
 
 #define UTSNAME_ENTRY_LEN 65
@@ -542,6 +566,22 @@ struct utsname {
 struct iovec {
     void* iov_base;
     size_t iov_len;
+};
+
+struct cmsghdr {
+    socklen_t cmsg_len;
+    int cmsg_level;
+    int cmsg_type;
+};
+
+struct msghdr {
+    void* msg_name;
+    socklen_t msg_namelen;
+    struct iovec* msg_iov;
+    int msg_iovlen;
+    void* msg_control;
+    socklen_t msg_controllen;
+    int msg_flags;
 };
 
 struct sched_param {
@@ -607,3 +647,25 @@ struct rtentry {
 #define PT_PEEK 7
 #define PT_POKE 8
 #define PT_SETREGS 9
+
+// Used in struct dirent
+enum {
+    DT_UNKNOWN = 0,
+#define DT_UNKNOWN DT_UNKNOWN
+    DT_FIFO = 1,
+#define DT_FIFO DT_FIFO
+    DT_CHR = 2,
+#define DT_CHR DT_CHR
+    DT_DIR = 4,
+#define DT_DIR DT_DIR
+    DT_BLK = 6,
+#define DT_BLK DT_BLK
+    DT_REG = 8,
+#define DT_REG DT_REG
+    DT_LNK = 10,
+#define DT_LNK DT_LNK
+    DT_SOCK = 12,
+#define DT_SOCK DT_SOCK
+    DT_WHT = 14
+#define DT_WHT DT_WHT
+};

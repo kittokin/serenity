@@ -26,9 +26,11 @@
 
 #include <AK/Function.h>
 #include <AK/LexicalPath.h>
+#include <LibCore/StandardPaths.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/FileIconProvider.h>
 #include <LibGUI/FilePicker.h>
 #include <LibGUI/FileSystemModel.h>
 #include <LibGUI/InputBox.h>
@@ -38,6 +40,7 @@
 #include <LibGUI/SortingProxyModel.h>
 #include <LibGUI/TextBox.h>
 #include <LibGUI/ToolBar.h>
+#include <LibGfx/FontDatabase.h>
 #include <string.h>
 
 namespace GUI {
@@ -81,18 +84,17 @@ FilePicker::FilePicker(Window* parent_window, Mode mode, Options options, const 
     , m_mode(mode)
 {
     switch (m_mode) {
-        case Mode::Open:
-            set_title("Open File");
-            break;
-        case Mode::OpenMultiple:
-            set_title("Open Files");
-            break;
-        case Mode::Save:
-            set_title("Save File");
-            break;
+    case Mode::Open:
+    case Mode::OpenMultiple:
+        set_title("Open");
+        set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/open.png"));
+        break;
+    case Mode::Save:
+        set_title("Save as");
+        set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/save.png"));
+        break;
     }
-    set_title(m_mode == Mode::Open ? "Open File" : "Save File");
-    set_rect(200, 200, 700, 400);
+    resize(560, 320);
     auto& horizontal_container = set_main_widget<Widget>();
     horizontal_container.set_layout<HorizontalBoxLayout>();
     horizontal_container.layout()->set_margins({ 4, 4, 4, 4 });
@@ -105,48 +107,41 @@ FilePicker::FilePicker(Window* parent_window, Mode mode, Options options, const 
     auto& upper_container = vertical_container.add<Widget>();
     upper_container.set_layout<HorizontalBoxLayout>();
     upper_container.layout()->set_spacing(2);
-    upper_container.set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    upper_container.set_preferred_size(0, 26);
+    upper_container.set_fixed_height(26);
 
     auto& toolbar = upper_container.add<ToolBar>();
-    toolbar.set_size_policy(SizePolicy::Fixed, SizePolicy::Fill);
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
-    toolbar.set_preferred_size(165, 0);
-#else
-    toolbar.set_preferred_size(140, 0);
-#endif
+    toolbar.set_fixed_width(165);
     toolbar.set_has_frame(false);
 
     m_location_textbox = upper_container.add<TextBox>();
-    m_location_textbox->set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    m_location_textbox->set_preferred_size(0, 22);
     m_location_textbox->set_text(path);
-    m_location_textbox->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-folder.png"));
 
     m_view = vertical_container.add<MultiView>();
-    m_view->set_multi_select(m_mode == Mode::OpenMultiple);
+    m_view->set_selection_mode(m_mode == Mode::OpenMultiple ? GUI::AbstractView::SelectionMode::MultiSelection : GUI::AbstractView::SelectionMode::SingleSelection);
     m_view->set_model(SortingProxyModel::create(*m_model));
     m_view->set_model_column(FileSystemModel::Column::Name);
-    m_view->model()->set_key_column_and_sort_order(GUI::FileSystemModel::Column::Name, GUI::SortOrder::Ascending);
+    m_view->set_key_column_and_sort_order(GUI::FileSystemModel::Column::Name, GUI::SortOrder::Ascending);
     m_view->set_column_hidden(FileSystemModel::Column::Owner, true);
     m_view->set_column_hidden(FileSystemModel::Column::Group, true);
     m_view->set_column_hidden(FileSystemModel::Column::Permissions, true);
     m_view->set_column_hidden(FileSystemModel::Column::Inode, true);
     m_view->set_column_hidden(FileSystemModel::Column::SymlinkTarget, true);
-    m_model->set_root_path(path);
+
+    set_path(path);
+
     m_model->register_client(*this);
 
     m_location_textbox->on_return_pressed = [this] {
-        m_model->set_root_path(m_location_textbox->text());
+        set_path(m_location_textbox->text());
     };
 
     auto open_parent_directory_action = Action::create("Open parent directory", { Mod_Alt, Key_Up }, Gfx::Bitmap::load_from_file("/res/icons/16x16/open-parent-directory.png"), [this](const Action&) {
-        m_model->set_root_path(String::format("%s/..", m_model->root_path().characters()));
+        set_path(String::format("%s/..", m_model->root_path().characters()));
     });
     toolbar.add_action(*open_parent_directory_action);
 
     auto go_home_action = CommonActions::make_go_home_action([this](auto&) {
-        m_model->set_root_path(Core::StandardPaths::home_directory());
+        set_path(Core::StandardPaths::home_directory());
     });
     toolbar.add_action(go_home_action);
     toolbar.add_separator();
@@ -173,30 +168,23 @@ FilePicker::FilePicker(Window* parent_window, Mode mode, Options options, const 
 
     toolbar.add_action(m_view->view_as_icons_action());
     toolbar.add_action(m_view->view_as_table_action());
-
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
-    m_view->view_as_columns_action().set_enabled(false);
     toolbar.add_action(m_view->view_as_columns_action());
-#endif
 
     auto& lower_container = vertical_container.add<Widget>();
     lower_container.set_layout<VerticalBoxLayout>();
     lower_container.layout()->set_spacing(4);
-    lower_container.set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    lower_container.set_preferred_size(0, 45);
+    lower_container.set_fixed_height(48);
 
     auto& filename_container = lower_container.add<Widget>();
-    filename_container.set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    filename_container.set_preferred_size(0, 20);
+    filename_container.set_fixed_height(22);
     filename_container.set_layout<HorizontalBoxLayout>();
     auto& filename_label = filename_container.add<Label>("File name:");
     filename_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
-    filename_label.set_size_policy(SizePolicy::Fixed, SizePolicy::Fill);
-    filename_label.set_preferred_size(60, 0);
+    filename_label.set_fixed_width(60);
     m_filename_textbox = filename_container.add<TextBox>();
+    m_filename_textbox->set_focus(true);
     if (m_mode == Mode::Save) {
         m_filename_textbox->set_text(file_name);
-        m_filename_textbox->set_focus(true);
         m_filename_textbox->select_all();
     }
     m_filename_textbox->on_return_pressed = [&] {
@@ -206,9 +194,9 @@ FilePicker::FilePicker(Window* parent_window, Mode mode, Options options, const 
     m_view->on_selection_change = [this] {
         auto index = m_view->selection().first();
         auto& filter_model = (SortingProxyModel&)*m_view->model();
-        auto local_index = filter_model.map_to_target(index);
+        auto local_index = filter_model.map_to_source(index);
         const FileSystemModel::Node& node = m_model->node(local_index);
-        LexicalPath path { node.full_path(m_model) };
+        LexicalPath path { node.full_path() };
 
         if (have_preview())
             clear_preview();
@@ -220,23 +208,20 @@ FilePicker::FilePicker(Window* parent_window, Mode mode, Options options, const 
     };
 
     auto& button_container = lower_container.add<Widget>();
-    button_container.set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    button_container.set_preferred_size(0, 20);
+    button_container.set_fixed_height(22);
     button_container.set_layout<HorizontalBoxLayout>();
     button_container.layout()->set_spacing(4);
     button_container.layout()->add_spacer();
 
     auto& cancel_button = button_container.add<Button>();
-    cancel_button.set_size_policy(SizePolicy::Fixed, SizePolicy::Fill);
-    cancel_button.set_preferred_size(80, 0);
+    cancel_button.set_fixed_width(80);
     cancel_button.set_text("Cancel");
     cancel_button.on_click = [this](auto) {
         done(ExecCancel);
     };
 
     auto& ok_button = button_container.add<Button>();
-    ok_button.set_size_policy(SizePolicy::Fixed, SizePolicy::Fill);
-    ok_button.set_preferred_size(80, 0);
+    ok_button.set_fixed_width(80);
     ok_button.set_text(ok_button_name(m_mode));
     ok_button.on_click = [this](auto) {
         on_file_return();
@@ -244,12 +229,12 @@ FilePicker::FilePicker(Window* parent_window, Mode mode, Options options, const 
 
     m_view->on_activation = [this](auto& index) {
         auto& filter_model = (SortingProxyModel&)*m_view->model();
-        auto local_index = filter_model.map_to_target(index);
+        auto local_index = filter_model.map_to_source(index);
         const FileSystemModel::Node& node = m_model->node(local_index);
-        auto path = node.full_path(m_model);
+        auto path = node.full_path();
 
         if (node.is_directory()) {
-            m_model->set_root_path(path);
+            set_path(path);
             // NOTE: 'node' is invalid from here on
         } else {
             on_file_return();
@@ -259,24 +244,21 @@ FilePicker::FilePicker(Window* parent_window, Mode mode, Options options, const 
     if (!((unsigned)options & (unsigned)Options::DisablePreview)) {
         m_preview_container = horizontal_container.add<Frame>();
         m_preview_container->set_visible(false);
-        m_preview_container->set_size_policy(SizePolicy::Fixed, SizePolicy::Fill);
-        m_preview_container->set_preferred_size(180, 0);
+        m_preview_container->set_fixed_width(180);
         m_preview_container->set_layout<VerticalBoxLayout>();
         m_preview_container->layout()->set_margins({ 8, 8, 8, 8 });
 
-        m_preview_image = m_preview_container->add<Image>();
+        m_preview_image = m_preview_container->add<ImageWidget>();
         m_preview_image->set_should_stretch(true);
         m_preview_image->set_auto_resize(false);
-        m_preview_image->set_preferred_size(160, 160);
+        m_preview_image->set_fixed_size(160, 160);
 
         m_preview_name_label = m_preview_container->add<Label>();
-        m_preview_name_label->set_font(Gfx::Font::default_bold_font());
-        m_preview_name_label->set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-        m_preview_name_label->set_preferred_size(0, m_preview_name_label->font().glyph_height());
+        m_preview_name_label->set_font(Gfx::FontDatabase::default_bold_font());
+        m_preview_name_label->set_fixed_height(m_preview_name_label->font().glyph_height());
 
         m_preview_geometry_label = m_preview_container->add<Label>();
-        m_preview_geometry_label->set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-        m_preview_geometry_label->set_preferred_size(0, m_preview_name_label->font().glyph_height());
+        m_preview_geometry_label->set_fixed_height(m_preview_name_label->font().glyph_height());
     }
 }
 
@@ -285,7 +267,7 @@ FilePicker::~FilePicker()
     m_model->unregister_client(*this);
 }
 
-void FilePicker::on_model_update(unsigned)
+void FilePicker::model_did_update(unsigned)
 {
     m_location_textbox->set_text(m_model->root_path());
     if (have_preview())
@@ -343,6 +325,13 @@ bool FilePicker::file_exists(const StringView& path)
         return true;
     }
     return false;
+}
+
+void FilePicker::set_path(const String& path)
+{
+    auto new_path = LexicalPath(path).string();
+    m_location_textbox->set_icon(FileIconProvider::icon_for_path(new_path).bitmap_for_size(16));
+    m_model->set_root_path(new_path);
 }
 
 }

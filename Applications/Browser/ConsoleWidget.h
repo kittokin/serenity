@@ -30,7 +30,7 @@
 #include "History.h"
 #include <LibGUI/Widget.h>
 #include <LibJS/Forward.h>
-#include <LibWeb/PageView.h>
+#include <LibWeb/InProcessWebView.h>
 
 namespace Browser {
 
@@ -48,8 +48,8 @@ private:
     ConsoleWidget();
 
     RefPtr<GUI::TextBox> m_input;
-    RefPtr<Web::PageView> m_output_view;
-    RefPtr<Web::Element> m_output_container;
+    RefPtr<Web::InProcessWebView> m_output_view;
+    RefPtr<Web::DOM::Element> m_output_container;
     WeakPtr<JS::Interpreter> m_interpreter;
     OwnPtr<BrowserConsoleClient> m_console_client;
 };

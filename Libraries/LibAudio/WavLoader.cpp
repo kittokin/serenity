@@ -24,129 +24,190 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/BufferStream.h>
 #include <AK/NumericLimits.h>
 #include <AK/OwnPtr.h>
+#include <LibAudio/Buffer.h>
 #include <LibAudio/WavLoader.h>
 #include <LibCore/File.h>
 #include <LibCore/IODeviceStreamReader.h>
 
 namespace Audio {
 
-WavLoader::WavLoader(const StringView& path)
+WavLoaderPlugin::WavLoaderPlugin(const StringView& path)
     : m_file(Core::File::construct(path))
 {
     if (!m_file->open(Core::IODevice::ReadOnly)) {
-        m_error_string = String::format("Can't open file: %s", m_file->error_string());
+        m_error_string = String::formatted("Can't open file: {}", m_file->error_string());
         return;
     }
 
-    if (!parse_header())
+    valid = parse_header();
+    if (!valid)
         return;
 
     m_resampler = make<ResampleHelper>(m_sample_rate, 44100);
 }
 
-RefPtr<Buffer> WavLoader::get_more_samples(size_t max_bytes_to_read_from_input)
+WavLoaderPlugin::WavLoaderPlugin(const ByteBuffer& buffer)
+{
+    m_stream = make<InputMemoryStream>(buffer);
+    if (!m_stream) {
+        m_error_string = String::formatted("Can't open memory stream");
+        return;
+    }
+
+    valid = parse_header();
+    if (!valid)
+        return;
+
+    m_resampler = make<ResampleHelper>(m_sample_rate, 44100);
+}
+
+bool WavLoaderPlugin::sniff()
+{
+    return valid;
+}
+
+RefPtr<Buffer> WavLoaderPlugin::get_more_samples(size_t max_bytes_to_read_from_input)
 {
 #ifdef AWAVLOADER_DEBUG
-    dbgprintf("Read WAV of format PCM with num_channels %u sample rate %u, bits per sample %u\n", m_num_channels, m_sample_rate, m_bits_per_sample);
+    dbgln("Read WAV of format PCM with num_channels {} sample rate {}, bits per sample {}", m_num_channels, m_sample_rate, m_bits_per_sample);
 #endif
-
-    auto raw_samples = m_file->read(max_bytes_to_read_from_input);
-    if (raw_samples.is_empty())
-        return nullptr;
-
-    auto buffer = Buffer::from_pcm_data(raw_samples, *m_resampler, m_num_channels, m_bits_per_sample);
-    //Buffer contains normalized samples, but m_loaded_samples should containt the ammount of actually loaded samples
-    m_loaded_samples += static_cast<int>(max_bytes_to_read_from_input) / (m_num_channels * (m_bits_per_sample / 8));
+    size_t samples_to_read = static_cast<int>(max_bytes_to_read_from_input) / (m_num_channels * (m_bits_per_sample / 8));
+    RefPtr<Buffer> buffer;
+    if (m_file) {
+        auto raw_samples = m_file->read(max_bytes_to_read_from_input);
+        if (raw_samples.is_empty())
+            return nullptr;
+        buffer = Buffer::from_pcm_data(raw_samples, *m_resampler, m_num_channels, m_bits_per_sample);
+    } else {
+        buffer = Buffer::from_pcm_stream(*m_stream, *m_resampler, m_num_channels, m_bits_per_sample, samples_to_read);
+    }
+    //Buffer contains normalized samples, but m_loaded_samples should contain the amount of actually loaded samples
+    m_loaded_samples += samples_to_read;
     m_loaded_samples = min(m_total_samples, m_loaded_samples);
     return buffer;
 }
 
-void WavLoader::seek(const int position)
+void WavLoaderPlugin::seek(const int position)
 {
     if (position < 0 || position > m_total_samples)
         return;
 
     m_loaded_samples = position;
-    m_file->seek(position * m_num_channels * (m_bits_per_sample / 8));
+    size_t byte_position = position * m_num_channels * (m_bits_per_sample / 8);
+
+    if (m_file)
+        m_file->seek(byte_position);
+    else
+        m_stream->seek(byte_position);
 }
 
-void WavLoader::reset()
+void WavLoaderPlugin::reset()
 {
     seek(0);
 }
 
-bool WavLoader::parse_header()
+bool WavLoaderPlugin::parse_header()
 {
-    Core::IODeviceStreamReader stream(*m_file);
+    OwnPtr<Core::IODeviceStreamReader> file_stream;
+    bool ok = true;
 
-#define CHECK_OK(msg)                                                           \
-    do {                                                                        \
-        if (stream.handle_read_failure()) {                                     \
-            m_error_string = String::format("Premature stream EOF at %s", msg); \
-            return {};                                                          \
-        }                                                                       \
-        if (!ok) {                                                              \
-            m_error_string = String::format("Parsing failed: %s", msg);         \
-            return {};                                                          \
-        } else {                                                                \
-            dbgprintf("%s is OK!\n", msg);                                      \
-        }                                                                       \
+    if (m_file)
+        file_stream = make<Core::IODeviceStreamReader>(*m_file);
+
+    auto read_u8 = [&]() -> u8 {
+        u8 value;
+        if (m_file) {
+            *file_stream >> value;
+            if (file_stream->handle_read_failure())
+                ok = false;
+        } else {
+            *m_stream >> value;
+            if (m_stream->has_any_error())
+                ok = false;
+        }
+        return value;
+    };
+
+    auto read_u16 = [&]() -> u16 {
+        u16 value;
+        if (m_file) {
+            *file_stream >> value;
+            if (file_stream->handle_read_failure())
+                ok = false;
+        } else {
+            *m_stream >> value;
+            if (m_stream->has_any_error())
+                ok = false;
+        }
+        return value;
+    };
+
+    auto read_u32 = [&]() -> u32 {
+        u32 value;
+        if (m_file) {
+            *file_stream >> value;
+            if (file_stream->handle_read_failure())
+                ok = false;
+        } else {
+            *m_stream >> value;
+            if (m_stream->has_any_error())
+                ok = false;
+        }
+        return value;
+    };
+
+#define CHECK_OK(msg)                                                      \
+    do {                                                                   \
+        if (!ok) {                                                         \
+            m_error_string = String::formatted("Parsing failed: {}", msg); \
+            return {};                                                     \
+        }                                                                  \
     } while (0);
 
-    bool ok = true;
-    u32 riff;
-    stream >> riff;
+    u32 riff = read_u32();
     ok = ok && riff == 0x46464952; // "RIFF"
     CHECK_OK("RIFF header");
 
-    u32 sz;
-    stream >> sz;
+    u32 sz = read_u32();
     ok = ok && sz < 1024 * 1024 * 1024; // arbitrary
     CHECK_OK("File size");
     ASSERT(sz < 1024 * 1024 * 1024);
 
-    u32 wave;
-    stream >> wave;
+    u32 wave = read_u32();
     ok = ok && wave == 0x45564157; // "WAVE"
     CHECK_OK("WAVE header");
 
-    u32 fmt_id;
-    stream >> fmt_id;
+    u32 fmt_id = read_u32();
     ok = ok && fmt_id == 0x20746D66; // "FMT"
     CHECK_OK("FMT header");
 
-    u32 fmt_size;
-    stream >> fmt_size;
+    u32 fmt_size = read_u32();
     ok = ok && fmt_size == 16;
     CHECK_OK("FMT size");
     ASSERT(fmt_size == 16);
 
-    u16 audio_format;
-    stream >> audio_format;
+    u16 audio_format = read_u16();
     CHECK_OK("Audio format");     // incomplete read check
     ok = ok && audio_format == 1; // WAVE_FORMAT_PCM
     ASSERT(audio_format == 1);
     CHECK_OK("Audio format"); // value check
 
-    stream >> m_num_channels;
+    m_num_channels = read_u16();
     ok = ok && (m_num_channels == 1 || m_num_channels == 2);
     CHECK_OK("Channel count");
 
-    stream >> m_sample_rate;
+    m_sample_rate = read_u32();
     CHECK_OK("Sample rate");
 
-    u32 byte_rate;
-    stream >> byte_rate;
+    read_u32();
     CHECK_OK("Byte rate");
 
-    u16 block_align;
-    stream >> block_align;
+    read_u16();
     CHECK_OK("Block align");
 
-    stream >> m_bits_per_sample;
+    m_bits_per_sample = read_u16();
     CHECK_OK("Bits per sample"); // incomplete read check
     ok = ok && (m_bits_per_sample == 8 || m_bits_per_sample == 16 || m_bits_per_sample == 24);
     ASSERT(m_bits_per_sample == 8 || m_bits_per_sample == 16 || m_bits_per_sample == 24);
@@ -157,23 +218,22 @@ bool WavLoader::parse_header()
     u32 data_sz = 0;
     u8 search_byte = 0;
     while (true) {
-        stream >> search_byte;
+        search_byte = read_u8();
         CHECK_OK("Reading byte searching for data");
         if (search_byte != 0x64) //D
             continue;
 
-        stream >> search_byte;
+        search_byte = read_u8();
         CHECK_OK("Reading next byte searching for data");
         if (search_byte != 0x61) //A
             continue;
 
-        u16 search_remaining = 0;
-        stream >> search_remaining;
+        u16 search_remaining = read_u16();
         CHECK_OK("Reading remaining bytes searching for data");
         if (search_remaining != 0x6174) //TA
             continue;
 
-        stream >> data_sz;
+        data_sz = read_u32();
         found_data = true;
         break;
     }
@@ -187,9 +247,6 @@ bool WavLoader::parse_header()
 
     int bytes_per_sample = (m_bits_per_sample / 8) * m_num_channels;
     m_total_samples = data_sz / bytes_per_sample;
-
-    // Just make sure we're good before we read the data...
-    ASSERT(!stream.handle_read_failure());
 
     return true;
 }
@@ -216,110 +273,6 @@ bool ResampleHelper::read_sample(double& next_l, double& next_r)
     }
 
     return false;
-}
-
-template<typename SampleReader>
-static void read_samples_from_stream(BufferStream& stream, SampleReader read_sample, Vector<Sample>& samples, ResampleHelper& resampler, int num_channels)
-{
-    double norm_l = 0;
-    double norm_r = 0;
-
-    switch (num_channels) {
-    case 1:
-        for (;;) {
-            while (resampler.read_sample(norm_l, norm_r)) {
-                samples.append(Sample(norm_l));
-            }
-            norm_l = read_sample(stream);
-
-            if (stream.handle_read_failure()) {
-                break;
-            }
-            resampler.process_sample(norm_l, norm_r);
-        }
-        break;
-    case 2:
-        for (;;) {
-            while (resampler.read_sample(norm_l, norm_r)) {
-                samples.append(Sample(norm_l, norm_r));
-            }
-            norm_l = read_sample(stream);
-            norm_r = read_sample(stream);
-
-            if (stream.handle_read_failure()) {
-                break;
-            }
-            resampler.process_sample(norm_l, norm_r);
-        }
-        break;
-    default:
-        ASSERT_NOT_REACHED();
-    }
-}
-
-static double read_norm_sample_24(BufferStream& stream)
-{
-    u8 byte = 0;
-    stream >> byte;
-    u32 sample1 = byte;
-    stream >> byte;
-    u32 sample2 = byte;
-    stream >> byte;
-    u32 sample3 = byte;
-
-    i32 value = 0;
-    value = sample1 << 8;
-    value |= (sample2 << 16);
-    value |= (sample3 << 24);
-    return double(value) / NumericLimits<i32>::max();
-}
-
-static double read_norm_sample_16(BufferStream& stream)
-{
-    i16 sample = 0;
-    stream >> sample;
-    return double(sample) / NumericLimits<i16>::max();
-}
-
-static double read_norm_sample_8(BufferStream& stream)
-{
-    u8 sample = 0;
-    stream >> sample;
-    return double(sample) / NumericLimits<u8>::max();
-}
-
-// ### can't const this because BufferStream is non-const
-// perhaps we need a reading class separate from the writing one, that can be
-// entirely consted.
-RefPtr<Buffer> Buffer::from_pcm_data(ByteBuffer& data, ResampleHelper& resampler, int num_channels, int bits_per_sample)
-{
-    BufferStream stream(data);
-    Vector<Sample> fdata;
-    fdata.ensure_capacity(data.size() / (bits_per_sample / 8));
-#ifdef AWAVLOADER_DEBUG
-    dbg() << "Reading " << bits_per_sample << " bits and " << num_channels << " channels, total bytes: " << data.size();
-#endif
-
-    switch (bits_per_sample) {
-    case 8:
-        read_samples_from_stream(stream, read_norm_sample_8, fdata, resampler, num_channels);
-        break;
-    case 16:
-        read_samples_from_stream(stream, read_norm_sample_16, fdata, resampler, num_channels);
-        break;
-    case 24:
-        read_samples_from_stream(stream, read_norm_sample_24, fdata, resampler, num_channels);
-        break;
-    default:
-        ASSERT_NOT_REACHED();
-    }
-
-    // We should handle this in a better way above, but for now --
-    // just make sure we're good. Worst case we just write some 0s where they
-    // don't belong.
-    ASSERT(!stream.handle_read_failure());
-
-    return Buffer::create_with_samples(move(fdata));
 }
 
 }

@@ -24,9 +24,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/MACAddress.h>
+#include <Kernel/IO.h>
 #include <Kernel/Net/E1000NetworkAdapter.h>
 #include <Kernel/Thread.h>
-#include <Kernel/IO.h>
 
 //#define E1000_DEBUG
 
@@ -139,17 +140,55 @@ namespace Kernel {
 #define INTERRUPT_TXD_LOW (1 << 15)
 #define INTERRUPT_SRPD (1 << 16)
 
+// https://www.intel.com/content/dam/doc/manual/pci-pci-x-family-gbe-controllers-software-dev-manual.pdf Section 5.2
+static bool is_valid_device_id(u16 device_id)
+{
+    // FIXME: It would be nice to distinguish which particular device it is.
+    //        Especially since it's needed to determine which registers we can access.
+    //        The reason I haven't done it now is because there's some IDs with multiple devices
+    //        and some devices with multiple IDs.
+    switch (device_id) {
+    case 0x1019: // 82547EI-A0, 82547EI-A1, 82547EI-B0, 82547GI-B0
+    case 0x101A: // 82547EI-B0
+    case 0x1010: // 82546EB-A1
+    case 0x1012: // 82546EB-A1
+    case 0x101D: // 82546EB-A1
+    case 0x1079: // 82546GB-B0
+    case 0x107A: // 82546GB-B0
+    case 0x107B: // 82546GB-B0
+    case 0x100F: // 82545EM-A
+    case 0x1011: // 82545EM-A
+    case 0x1026: // 82545GM-B
+    case 0x1027: // 82545GM-B
+    case 0x1028: // 82545GM-B
+    case 0x1107: // 82544EI-A4
+    case 0x1112: // 82544GC-A4
+    case 0x1013: // 82541EI-A0, 82541EI-B0
+    case 0x1018: // 82541EI-B0
+    case 0x1076: // 82541GI-B1, 82541PI-C0
+    case 0x1077: // 82541GI-B1
+    case 0x1078: // 82541ER-C0
+    case 0x1017: // 82540EP-A
+    case 0x1016: // 82540EP-A
+    case 0x100E: // 82540EM-A
+    case 0x1015: // 82540EM-A
+        return true;
+    default:
+        return false;
+    }
+}
+
 void E1000NetworkAdapter::detect()
 {
-    static const PCI::ID qemu_bochs_vbox_id = { 0x8086, 0x100e };
-
     PCI::enumerate([&](const PCI::Address& address, PCI::ID id) {
         if (address.is_null())
             return;
-        if (id != qemu_bochs_vbox_id)
+        if (id.vendor_id != 0x8086)
+            return;
+        if (!is_valid_device_id(id.device_id))
             return;
         u8 irq = PCI::get_interrupt_line(address);
-        (void)adopt(*new E1000NetworkAdapter(address, irq)).leak_ref();
+        [[maybe_unused]] auto& unused = adopt(*new E1000NetworkAdapter(address, irq)).leak_ref();
     });
 }
 
@@ -178,12 +217,12 @@ E1000NetworkAdapter::E1000NetworkAdapter(PCI::Address address, u8 irq)
     klog() << "E1000: Has EEPROM? " << m_has_eeprom;
     read_mac_address();
     const auto& mac = mac_address();
-    klog() << "E1000: MAC address: " << String::format("%b", mac[0]) << ":" << String::format("%b", mac[1]) << ":" << String::format("%b", mac[2]) << ":" << String::format("%b", mac[3]) << ":" << String::format("%b", mac[4]) << ":" << String::format("%b", mac[5]);
+    klog() << "E1000: MAC address: " << mac.to_string();
 
     u32 flags = in32(REG_CTRL);
     out32(REG_CTRL, flags | ECTRL_SLU);
 
-    out16(REG_INTERRUPT_RATE, 6000); // Interrupt rate of 1.536 milliseconds
+    out32(REG_INTERRUPT_RATE, 6000); // Interrupt rate of 1.536 milliseconds
 
     initialize_rx_descriptors();
     initialize_tx_descriptors();
@@ -256,7 +295,7 @@ u32 E1000NetworkAdapter::read_eeprom(u8 address)
 void E1000NetworkAdapter::read_mac_address()
 {
     if (m_has_eeprom) {
-        u8 mac[6];
+        MACAddress mac {};
         u32 tmp = read_eeprom(0);
         mac[0] = tmp & 0xff;
         mac[1] = tmp >> 8;
@@ -323,7 +362,7 @@ void E1000NetworkAdapter::initialize_tx_descriptors()
 void E1000NetworkAdapter::out8(u16 address, u8 data)
 {
 #ifdef E1000_DEBUG
-    dbg() << "E1000: OUT @ 0x" << address;
+    dbg() << "E1000: OUT8 0x" << String::format("%02x", data) << " @ 0x" << String::format("%04x", address);
 #endif
     if (m_use_mmio) {
         auto* ptr = (volatile u8*)(m_mmio_base.get() + address);
@@ -336,7 +375,7 @@ void E1000NetworkAdapter::out8(u16 address, u8 data)
 void E1000NetworkAdapter::out16(u16 address, u16 data)
 {
 #ifdef E1000_DEBUG
-    dbg() << "E1000: OUT @ 0x" << address;
+    dbg() << "E1000: OUT16 0x" << String::format("%04x", data) << " @ 0x" << String::format("%04x", address);
 #endif
     if (m_use_mmio) {
         auto* ptr = (volatile u16*)(m_mmio_base.get() + address);
@@ -349,7 +388,7 @@ void E1000NetworkAdapter::out16(u16 address, u16 data)
 void E1000NetworkAdapter::out32(u16 address, u32 data)
 {
 #ifdef E1000_DEBUG
-    dbg() << "E1000: OUT @ 0x" << address;
+    dbg() << "E1000: OUT32 0x" << String::format("%08x", data) << " @ 0x" << String::format("%04x", address);
 #endif
     if (m_use_mmio) {
         auto* ptr = (volatile u32*)(m_mmio_base.get() + address);
@@ -362,7 +401,7 @@ void E1000NetworkAdapter::out32(u16 address, u32 data)
 u8 E1000NetworkAdapter::in8(u16 address)
 {
 #ifdef E1000_DEBUG
-    dbg() << "E1000: IN @ 0x" << address;
+    dbg() << "E1000: IN8 @ 0x" << String::format("%04x", address);
 #endif
     if (m_use_mmio)
         return *(volatile u8*)(m_mmio_base.get() + address);
@@ -372,7 +411,7 @@ u8 E1000NetworkAdapter::in8(u16 address)
 u16 E1000NetworkAdapter::in16(u16 address)
 {
 #ifdef E1000_DEBUG
-    dbg() << "E1000: IN @ 0x " << address;
+    dbg() << "E1000: IN16 @ 0x" << String::format("%04x", address);
 #endif
     if (m_use_mmio)
         return *(volatile u16*)(m_mmio_base.get() + address);
@@ -382,26 +421,26 @@ u16 E1000NetworkAdapter::in16(u16 address)
 u32 E1000NetworkAdapter::in32(u16 address)
 {
 #ifdef E1000_DEBUG
-    dbg() << "E1000: IN @ 0x" << address;
+    dbg() << "E1000: IN32 @ 0x" << String::format("%04x", address);
 #endif
     if (m_use_mmio)
         return *(volatile u32*)(m_mmio_base.get() + address);
     return m_io_base.offset(address).in<u32>();
 }
 
-void E1000NetworkAdapter::send_raw(const u8* data, size_t length)
+void E1000NetworkAdapter::send_raw(ReadonlyBytes payload)
 {
     disable_irq();
     size_t tx_current = in32(REG_TXDESCTAIL) % number_of_tx_descriptors;
 #ifdef E1000_DEBUG
-    klog() << "E1000: Sending packet (" << length << " bytes)";
+    klog() << "E1000: Sending packet (" << payload.size() << " bytes)";
 #endif
     auto* tx_descriptors = (e1000_tx_desc*)m_tx_descriptors_region->vaddr().as_ptr();
     auto& descriptor = tx_descriptors[tx_current];
-    ASSERT(length <= 8192);
+    ASSERT(payload.size() <= 8192);
     auto* vptr = (void*)m_tx_buffers_regions[tx_current].vaddr().as_ptr();
-    memcpy(vptr, data, length);
-    descriptor.length = length;
+    memcpy(vptr, payload.data(), payload.size());
+    descriptor.length = payload.size();
     descriptor.status = 0;
     descriptor.cmd = CMD_EOP | CMD_IFCS | CMD_RS;
 #ifdef E1000_DEBUG
@@ -416,10 +455,10 @@ void E1000NetworkAdapter::send_raw(const u8* data, size_t length)
             sti();
             break;
         }
-        Thread::current()->wait_on(m_wait_queue, "E1000NetworkAdapter");
+        m_wait_queue.wait_on(nullptr, "E1000NetworkAdapter");
     }
 #ifdef E1000_DEBUG
-    klog() << "E1000: Sent packet, status is now " << String::format("%b", descriptor.status) << "!";
+    dbgln("E1000: Sent packet, status is now {:#02x}!", (u8)descriptor.status);
 #endif
 }
 
@@ -440,7 +479,7 @@ void E1000NetworkAdapter::receive()
 #ifdef E1000_DEBUG
         klog() << "E1000: Received 1 packet @ " << buffer << " (" << length << ") bytes!";
 #endif
-        did_receive(buffer, length);
+        did_receive({ buffer, length });
         rx_descriptors[rx_current].status = 0;
         out32(REG_RXDESCTAIL, rx_current);
     }

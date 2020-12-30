@@ -27,27 +27,34 @@
 #pragma once
 
 #include <AK/FlyString.h>
+#include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/NonElementParentNode.h>
 #include <LibWeb/DOM/ParentNode.h>
 
-namespace Web {
+namespace Web::DOM {
 
 class DocumentFragment
     : public ParentNode
     , public NonElementParentNode<DocumentFragment> {
 public:
-    DocumentFragment(Document& document)
-        : ParentNode(document, NodeType::DOCUMENT_FRAGMENT_NODE)
-    {
-    }
+    using WrapperType = Bindings::DocumentFragmentWrapper;
+
+    explicit DocumentFragment(Document& document);
+    virtual ~DocumentFragment() override;
 
     virtual FlyString node_name() const override { return "#document-fragment"; }
+
+    RefPtr<Element> host() { return m_host; }
+    const RefPtr<Element> host() const { return m_host; }
+
+    void set_host(Element& host) { m_host = host; }
+
+private:
+    RefPtr<Element> m_host;
 };
 
-template<>
-inline bool is<DocumentFragment>(const Node& node)
-{
-    return node.is_document_fragment();
 }
 
-}
+AK_BEGIN_TYPE_TRAITS(Web::DOM::DocumentFragment)
+static bool is_type(const Web::DOM::Node& node) { return node.is_document_fragment(); }
+AK_END_TYPE_TRAITS()

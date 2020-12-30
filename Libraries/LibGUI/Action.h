@@ -42,23 +42,24 @@
 namespace GUI {
 
 namespace CommonActions {
-    NonnullRefPtr<Action> make_open_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_save_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_undo_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_redo_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_cut_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_copy_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_paste_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_delete_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_move_to_front_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_move_to_back_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_fullscreen_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_quit_action(Function<void(Action&)>);
-    NonnullRefPtr<Action> make_go_back_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_go_forward_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_go_home_action(Function<void(Action&)> callback, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_reload_action(Function<void(Action&)>, Core::Object* parent = nullptr);
-    NonnullRefPtr<Action> make_select_all_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_open_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_save_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_save_as_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_undo_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_redo_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_cut_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_copy_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_paste_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_delete_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_move_to_front_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_move_to_back_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_fullscreen_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_quit_action(Function<void(Action&)>);
+NonnullRefPtr<Action> make_go_back_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_go_forward_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_go_home_action(Function<void(Action&)> callback, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_reload_action(Function<void(Action&)>, Core::Object* parent = nullptr);
+NonnullRefPtr<Action> make_select_all_action(Function<void(Action&)>, Core::Object* parent = nullptr);
 };
 
 class Action final : public Core::Object {
@@ -131,6 +132,9 @@ public:
     }
     void set_checked(bool);
 
+    bool swallow_key_event_when_disabled() const { return m_swallow_key_event_when_disabled; }
+    void set_swallow_key_event_when_disabled(bool swallow) { m_swallow_key_event_when_disabled = swallow; }
+
     void register_button(Badge<Button>, Button&);
     void unregister_button(Badge<Button>, Button&);
     void register_menu_item(Badge<MenuItem>, MenuItem&);
@@ -158,6 +162,7 @@ private:
     bool m_enabled { true };
     bool m_checkable { false };
     bool m_checked { false };
+    bool m_swallow_key_event_when_disabled { false };
     ShortcutScope m_scope { ShortcutScope::None };
 
     HashTable<Button*> m_buttons;
@@ -168,8 +173,6 @@ private:
 
 }
 
-template<>
-inline bool Core::is<GUI::Action>(const Core::Object& object)
-{
-    return object.is_action();
-}
+AK_BEGIN_TYPE_TRAITS(GUI::Action)
+static bool is_type(const Core::Object& object) { return object.is_action(); }
+AK_END_TYPE_TRAITS()

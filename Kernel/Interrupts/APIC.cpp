@@ -26,6 +26,7 @@
 
 #include <AK/Assertions.h>
 #include <AK/Memory.h>
+#include <AK/Singleton.h>
 #include <AK/StringView.h>
 #include <AK/Types.h>
 #include <Kernel/ACPI/Parser.h>
@@ -35,6 +36,7 @@
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/Interrupts/SpuriousInterruptHandler.h>
 #include <Kernel/Thread.h>
+#include <Kernel/Time/APICTimer.h>
 #include <Kernel/VM/MemoryManager.h>
 #include <Kernel/VM/PageDirectory.h>
 #include <Kernel/VM/TypedMapping.h>
@@ -42,6 +44,7 @@
 //#define APIC_DEBUG
 //#define APIC_SMP_DEBUG
 
+#define IRQ_APIC_TIMER (0xfc - IRQ_VECTOR_BASE)
 #define IRQ_APIC_IPI (0xfd - IRQ_VECTOR_BASE)
 #define IRQ_APIC_ERR (0xfe - IRQ_VECTOR_BASE)
 #define IRQ_APIC_SPURIOUS (0xff - IRQ_VECTOR_BASE)
@@ -65,10 +68,13 @@
 #define APIC_REG_LVT_LINT0 0x350
 #define APIC_REG_LVT_LINT1 0x360
 #define APIC_REG_LVT_ERR 0x370
+#define APIC_REG_TIMER_INITIAL_COUNT 0x380
+#define APIC_REG_TIMER_CURRENT_COUNT 0x390
+#define APIC_REG_TIMER_CONFIGURATION 0x3e0
 
 namespace Kernel {
 
-static APIC* s_apic;
+static AK::Singleton<APIC> s_apic;
 
 class APICIPIInterruptHandler final : public GenericInterruptHandler {
 public:
@@ -91,7 +97,7 @@ public:
 
     virtual HandlerType type() const override { return HandlerType::IRQHandler; }
     virtual const char* purpose() const override { return "IPI Handler"; }
-    virtual const char* controller() const override { ASSERT_NOT_REACHED(); }
+    virtual const char* controller() const override { return nullptr; }
 
     virtual size_t sharing_devices_count() const override { return 0; }
     virtual bool is_shared_handler() const override { return false; }
@@ -121,7 +127,7 @@ public:
 
     virtual HandlerType type() const override { return HandlerType::IRQHandler; }
     virtual const char* purpose() const override { return "SMP Error Handler"; }
-    virtual const char* controller() const override { ASSERT_NOT_REACHED(); }
+    virtual const char* controller() const override { return nullptr; }
 
     virtual size_t sharing_devices_count() const override { return 0; }
     virtual bool is_shared_handler() const override { return false; }
@@ -132,7 +138,7 @@ private:
 
 bool APIC::initialized()
 {
-    return (s_apic != nullptr);
+    return s_apic.is_initialized();
 }
 
 APIC& APIC::the()
@@ -144,7 +150,7 @@ APIC& APIC::the()
 void APIC::initialize()
 {
     ASSERT(!APIC::initialized());
-    s_apic = new APIC();
+    s_apic.ensure_instance();
 }
 
 PhysicalAddress APIC::get_base()
@@ -196,9 +202,13 @@ void APIC::write_icr(const ICRReg& icr)
     write_register(APIC_REG_ICR_LOW, icr.low());
 }
 
+#define APIC_LVT_TIMER_ONESHOT 0
+#define APIC_LVT_TIMER_PERIODIC (1 << 17)
+#define APIC_LVT_TIMER_TSCDEADLINE (1 << 18)
+
 #define APIC_LVT_MASKED (1 << 16)
 #define APIC_LVT_TRIGGER_LEVEL (1 << 14)
-#define APIC_LVT(iv, dm) ((iv & 0xff) | ((dm & 0x7) << 8))
+#define APIC_LVT(iv, dm) (((iv)&0xff) | (((dm)&0x7) << 8))
 
 extern "C" void apic_ap_start(void);
 extern "C" u16 apic_ap_start_size;
@@ -242,7 +252,11 @@ bool APIC::init_bsp()
 #endif
     set_base(apic_base);
 
-    m_apic_base = MM.allocate_kernel_region(apic_base.page_base(), PAGE_ROUND_UP(1), {}, Region::Access::Read | Region::Access::Write);
+    m_apic_base = MM.allocate_kernel_region(apic_base.page_base(), PAGE_SIZE, {}, Region::Access::Read | Region::Access::Write);
+    if (!m_apic_base) {
+        klog() << "APIC: Failed to allocate memory for APIC base";
+        return false;
+    }
 
     auto rsdp = ACPI::StaticParsing::find_rsdp();
     if (!rsdp.has_value()) {
@@ -514,6 +528,82 @@ void APIC::send_ipi(u32 cpu)
     write_icr(ICRReg(IRQ_APIC_IPI + IRQ_VECTOR_BASE, ICRReg::Fixed, ICRReg::Logical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::NoShorthand, 1u << cpu));
 }
 
+APICTimer* APIC::initialize_timers(HardwareTimerBase& calibration_timer)
+{
+    if (!m_apic_base)
+        return nullptr;
+
+    // We should only initialize and calibrate the APIC timer once on the BSP!
+    ASSERT(Processor::current().id() == 0);
+    ASSERT(!m_apic_timer);
+
+    m_apic_timer = APICTimer::initialize(IRQ_APIC_TIMER, calibration_timer);
+    return m_apic_timer;
+}
+
+void APIC::setup_local_timer(u32 ticks, TimerMode timer_mode, bool enable)
+{
+    u32 flags = 0;
+    switch (timer_mode) {
+    case TimerMode::OneShot:
+        flags |= APIC_LVT_TIMER_ONESHOT;
+        break;
+    case TimerMode::Periodic:
+        flags |= APIC_LVT_TIMER_PERIODIC;
+        break;
+    case TimerMode::TSCDeadline:
+        flags |= APIC_LVT_TIMER_TSCDEADLINE;
+        break;
+    }
+    if (!enable)
+        flags |= APIC_LVT_MASKED;
+    write_register(APIC_REG_LVT_TIMER, APIC_LVT(IRQ_APIC_TIMER + IRQ_VECTOR_BASE, 0) | flags);
+
+    u32 config = read_register(APIC_REG_TIMER_CONFIGURATION);
+    config &= ~0xf; // clear divisor (bits 0-3)
+    switch (get_timer_divisor()) {
+    case 1:
+        config |= (1 << 3) | 3;
+        break;
+    case 2:
+        break;
+    case 4:
+        config |= 1;
+        break;
+    case 8:
+        config |= 2;
+        break;
+    case 16:
+        config |= 3;
+        break;
+    case 32:
+        config |= (1 << 3);
+        break;
+    case 64:
+        config |= (1 << 3) | 1;
+        break;
+    case 128:
+        config |= (1 << 3) | 2;
+        break;
+    default:
+        ASSERT_NOT_REACHED();
+    }
+    write_register(APIC_REG_TIMER_CONFIGURATION, config);
+
+    if (timer_mode == TimerMode::Periodic)
+        write_register(APIC_REG_TIMER_INITIAL_COUNT, ticks / get_timer_divisor());
+}
+
+u32 APIC::get_timer_current_count()
+{
+    return read_register(APIC_REG_TIMER_CURRENT_COUNT);
+}
+
+u32 APIC::get_timer_divisor()
+{
+    return 16;
+}
+
 void APICIPIInterruptHandler::handle_interrupt(const RegisterState&)
 {
 #ifdef APIC_SMP_DEBUG
@@ -536,6 +626,12 @@ void APICErrInterruptHandler::handle_interrupt(const RegisterState&)
 }
 
 bool APICErrInterruptHandler::eoi()
+{
+    APIC::the().eoi();
+    return true;
+}
+
+bool HardwareTimer<GenericInterruptHandler>::eoi()
 {
     APIC::the().eoi();
     return true;

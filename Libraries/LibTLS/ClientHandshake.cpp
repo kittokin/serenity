@@ -24,7 +24,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/Endian.h>
 #include <AK/Random.h>
+
 #include <LibCore/Timer.h>
 #include <LibCrypto/ASN1/DER.h>
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
@@ -32,7 +34,7 @@
 
 namespace TLS {
 
-ssize_t TLSv12::handle_server_hello_done(const ByteBuffer& buffer)
+ssize_t TLSv12::handle_server_hello_done(ReadonlyBytes buffer)
 {
     if (buffer.size() < 3)
         return (i8)Error::NeedMoreData;
@@ -45,7 +47,7 @@ ssize_t TLSv12::handle_server_hello_done(const ByteBuffer& buffer)
     return size + 3;
 }
 
-ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_packets)
+ssize_t TLSv12::handle_hello(ReadonlyBytes buffer, WritePacketStage& write_packets)
 {
     write_packets = WritePacketStage::Initial;
     if (m_context.connection_status != ConnectionStatus::Disconnected && m_context.connection_status != ConnectionStatus::Renegotiating) {
@@ -70,7 +72,7 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
         dbg() << "not enough data for version";
         return (i8)Error::NeedMoreData;
     }
-    auto version = (Version)convert_between_host_and_network(*(const u16*)buffer.offset_pointer(res));
+    auto version = (Version)AK::convert_between_host_and_network_endian(*(const u16*)buffer.offset_pointer(res));
 
     res += 2;
     if (!supports_version(version))
@@ -90,7 +92,7 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
         m_context.session_id_size = session_length;
 #ifdef TLS_DEBUG
         dbg() << "Remote session ID:";
-        print_buffer(ByteBuffer::wrap(m_context.session_id, session_length));
+        print_buffer(ReadonlyBytes { m_context.session_id, session_length });
 #endif
     } else {
         m_context.session_id_size = 0;
@@ -101,7 +103,7 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
         dbg() << "not enough data for cipher suite listing";
         return (i8)Error::NeedMoreData;
     }
-    auto cipher = (CipherSuite)convert_between_host_and_network(*(const u16*)buffer.offset_pointer(res));
+    auto cipher = (CipherSuite)AK::convert_between_host_and_network_endian(*(const u16*)buffer.offset_pointer(res));
     res += 2;
     if (!supports_cipher(cipher)) {
         m_context.cipher = CipherSuite::Invalid;
@@ -140,9 +142,9 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
     }
 
     while ((ssize_t)buffer.size() - res >= 4) {
-        auto extension_type = (HandshakeExtension)convert_between_host_and_network(*(const u16*)buffer.offset_pointer(res));
+        auto extension_type = (HandshakeExtension)AK::convert_between_host_and_network_endian(*(const u16*)buffer.offset_pointer(res));
         res += 2;
-        u16 extension_length = convert_between_host_and_network(*(const u16*)buffer.offset_pointer(res));
+        u16 extension_length = AK::convert_between_host_and_network_endian(*(const u16*)buffer.offset_pointer(res));
         res += 2;
 
 #ifdef TLS_DEBUG
@@ -156,7 +158,7 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
 
             // SNI
             if (extension_type == HandshakeExtension::ServerName) {
-                u16 sni_host_length = convert_between_host_and_network(*(const u16*)buffer.offset_pointer(res + 3));
+                u16 sni_host_length = AK::convert_between_host_and_network_endian(*(const u16*)buffer.offset_pointer(res + 3));
                 if (buffer.size() - res - 5 < sni_host_length) {
                     dbg() << "Not enough data for sni " << (buffer.size() - res - 5) << " < " << sni_host_length;
                     return (i8)Error::NeedMoreData;
@@ -168,7 +170,7 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
                 }
             } else if (extension_type == HandshakeExtension::ApplicationLayerProtocolNegotiation && m_context.alpn.size()) {
                 if (buffer.size() - res > 2) {
-                    auto alpn_length = convert_between_host_and_network(*(const u16*)buffer.offset_pointer(res));
+                    auto alpn_length = AK::convert_between_host_and_network_endian(*(const u16*)buffer.offset_pointer(res));
                     if (alpn_length && alpn_length <= extension_length - 2) {
                         const u8* alpn = buffer.offset_pointer(res + 2);
                         size_t alpn_position = 0;
@@ -190,7 +192,7 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
                 }
             } else if (extension_type == HandshakeExtension::SignatureAlgorithms) {
                 dbg() << "supported signatures: ";
-                print_buffer(buffer.slice_view(res, extension_length));
+                print_buffer(buffer.slice(res, extension_length));
                 // FIXME: what are we supposed to do here?
             }
             res += extension_length;
@@ -200,7 +202,7 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
     return res;
 }
 
-ssize_t TLSv12::handle_finished(const ByteBuffer& buffer, WritePacketStage& write_packets)
+ssize_t TLSv12::handle_finished(ReadonlyBytes buffer, WritePacketStage& write_packets)
 {
     if (m_context.connection_status < ConnectionStatus::KeyExchange || m_context.connection_status == ConnectionStatus::Established) {
         dbg() << "unexpected finished message";
@@ -216,7 +218,6 @@ ssize_t TLSv12::handle_finished(const ByteBuffer& buffer, WritePacketStage& writ
     size_t index = 3;
 
     u32 size = buffer[0] * 0x10000 + buffer[1] * 0x100 + buffer[2];
-    index += 3;
 
     if (size < 12) {
 #ifdef TLS_DEBUG
@@ -248,7 +249,7 @@ ssize_t TLSv12::handle_finished(const ByteBuffer& buffer, WritePacketStage& writ
     if (on_tls_ready_to_write)
         on_tls_ready_to_write(*this);
 
-    return handle_message(buffer);
+    return index + size;
 }
 
 void TLSv12::build_random(PacketBuilder& builder)
@@ -268,12 +269,19 @@ void TLSv12::build_random(PacketBuilder& builder)
         dbg() << "Server mode not supported";
         return;
     } else {
-        *(u16*)random_bytes = convert_between_host_and_network((u16)Version::V12);
+        *(u16*)random_bytes = AK::convert_between_host_and_network_endian((u16)Version::V12);
     }
 
     m_context.premaster_key = ByteBuffer::copy(random_bytes, bytes);
 
-    const auto& certificate = m_context.certificates[0];
+    const auto& certificate_option = verify_chain_and_get_matching_certificate(m_context.SNI); // if the SNI is empty, we'll make a special case and match *a* leaf certificate.
+    if (!certificate_option.has_value()) {
+        dbg() << "certificate verification failed :(";
+        alert(AlertLevel::Critical, AlertDescription::BadCertificate);
+        return;
+    }
+
+    auto& certificate = m_context.certificates[certificate_option.value()];
 #ifdef TLS_DEBUG
     dbg() << "PreMaster secret";
     print_buffer(m_context.premaster_key);
@@ -282,7 +290,7 @@ void TLSv12::build_random(PacketBuilder& builder)
     Crypto::PK::RSA_PKCS1_EME rsa(certificate.public_key.modulus(), 0, certificate.public_key.public_exponent());
 
     u8 out[rsa.output_size()];
-    auto outbuf = ByteBuffer::wrap(out, rsa.output_size());
+    auto outbuf = Bytes { out, rsa.output_size() };
     rsa.encrypt(m_context.premaster_key, outbuf);
 
 #ifdef TLS_DEBUG
@@ -300,7 +308,7 @@ void TLSv12::build_random(PacketBuilder& builder)
     builder.append(outbuf);
 }
 
-ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
+ssize_t TLSv12::handle_payload(ReadonlyBytes vbuffer)
 {
     if (m_context.connection_status == ConnectionStatus::Established) {
 #ifdef TLS_DEBUG
@@ -366,7 +374,7 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
                 dbg() << "unsupported: server mode";
                 ASSERT_NOT_REACHED();
             } else {
-                payload_res = handle_hello(buffer.slice_view(1, payload_size), write_packets);
+                payload_res = handle_hello(buffer.slice(1, payload_size), write_packets);
             }
             break;
         case HelloVerifyRequest:
@@ -388,7 +396,7 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
                     dbg() << "unsupported: server mode";
                     ASSERT_NOT_REACHED();
                 }
-                payload_res = handle_certificate(buffer.slice_view(1, payload_size));
+                payload_res = handle_certificate(buffer.slice(1, payload_size));
                 if (m_context.certificates.size()) {
                     auto it = m_context.certificates.find([&](auto& cert) { return cert.is_valid(); });
 
@@ -422,7 +430,7 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
                 dbg() << "unsupported: server mode";
                 ASSERT_NOT_REACHED();
             } else {
-                payload_res = handle_server_key_exchange(buffer.slice_view(1, payload_size));
+                payload_res = handle_server_key_exchange(buffer.slice(1, payload_size));
             }
             break;
         case CertificateRequest:
@@ -439,7 +447,9 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
             } else {
                 // we do not support "certificate request"
                 dbg() << "certificate request";
-                ASSERT_NOT_REACHED();
+                if (on_tls_certificate_request)
+                    on_tls_certificate_request(*this);
+                m_context.client_verified = VerificationNeeded;
             }
             break;
         case ServerHelloDone:
@@ -456,7 +466,7 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
                 dbg() << "unsupported: server mode";
                 ASSERT_NOT_REACHED();
             } else {
-                payload_res = handle_server_hello_done(buffer.slice_view(1, payload_size));
+                payload_res = handle_server_hello_done(buffer.slice(1, payload_size));
                 if (payload_res > 0)
                     write_packets = WritePacketStage::ClientHandshake;
             }
@@ -472,7 +482,7 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
             dbg() << "certificate verify";
 #endif
             if (m_context.connection_status == ConnectionStatus::KeyExchange) {
-                payload_res = handle_verify(buffer.slice_view(1, payload_size));
+                payload_res = handle_verify(buffer.slice(1, payload_size));
             } else {
                 payload_res = (i8)Error::UnexpectedMessage;
             }
@@ -507,7 +517,7 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
 #ifdef TLS_DEBUG
             dbg() << "finished";
 #endif
-            payload_res = handle_finished(buffer.slice_view(1, payload_size), write_packets);
+            payload_res = handle_finished(buffer.slice(1, payload_size), write_packets);
             if (payload_res > 0) {
                 memset(m_context.handshake_messages, 0, sizeof(m_context.handshake_messages));
             }
@@ -518,7 +528,7 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
         }
 
         if (type != HelloRequest) {
-            update_hash(buffer.slice_view(0, payload_size + 1));
+            update_hash(buffer.slice(0, payload_size + 1));
         }
 
         // if something went wrong, send an alert about it
@@ -590,8 +600,10 @@ ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
             // nothing to write
             break;
         case WritePacketStage::ClientHandshake:
-            // Note: currently not used
             if (m_context.client_verified == VerificationNeeded) {
+#ifdef TLS_DEBUG
+                dbg() << "> Client Certificate";
+#endif
                 auto packet = build_certificate();
                 write_packet(packet);
                 m_context.client_verified = Verified;

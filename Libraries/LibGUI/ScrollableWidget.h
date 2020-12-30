@@ -77,12 +77,15 @@ public:
     Gfx::IntPoint to_content_position(const Gfx::IntPoint& widget_position) const;
     Gfx::IntPoint to_widget_position(const Gfx::IntPoint& content_position) const;
 
+    Gfx::IntRect to_content_rect(const Gfx::IntRect& widget_rect) const { return { to_content_position(widget_rect.location()), widget_rect.size() }; }
+    Gfx::IntRect to_widget_rect(const Gfx::IntRect& content_rect) const { return { to_widget_position(content_rect.location()), content_rect.size() }; }
+
 protected:
     ScrollableWidget();
     virtual void custom_layout() override;
     virtual void resize_event(ResizeEvent&) override;
     virtual void mousewheel_event(MouseEvent&) override;
-    virtual void did_scroll() {}
+    virtual void did_scroll() { }
     void set_content_size(const Gfx::IntSize&);
     void set_size_occupied_by_fixed_elements(const Gfx::IntSize&);
 

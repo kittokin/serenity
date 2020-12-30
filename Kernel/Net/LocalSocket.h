@@ -51,8 +51,8 @@ public:
     String absolute_path(const FileDescription& description) const override;
 
     // ^Socket
-    virtual KResult bind(const sockaddr*, socklen_t) override;
-    virtual KResult connect(FileDescription&, const sockaddr*, socklen_t, ShouldBlock = ShouldBlock::Yes) override;
+    virtual KResult bind(Userspace<const sockaddr*>, socklen_t) override;
+    virtual KResult connect(FileDescription&, Userspace<const sockaddr*>, socklen_t, ShouldBlock = ShouldBlock::Yes) override;
     virtual KResult listen(size_t) override;
     virtual void get_local_address(sockaddr*, socklen_t*) override;
     virtual void get_peer_address(sockaddr*, socklen_t*) override;
@@ -60,9 +60,9 @@ public:
     virtual void detach(FileDescription&) override;
     virtual bool can_read(const FileDescription&, size_t) const override;
     virtual bool can_write(const FileDescription&, size_t) const override;
-    virtual ssize_t sendto(FileDescription&, const void*, size_t, int, const sockaddr*, socklen_t) override;
-    virtual ssize_t recvfrom(FileDescription&, void*, size_t, int flags, sockaddr*, socklen_t*) override;
-    virtual KResult getsockopt(FileDescription&, int level, int option, void*, socklen_t*) override;
+    virtual KResultOr<size_t> sendto(FileDescription&, const UserOrKernelBuffer&, size_t, int, Userspace<const sockaddr*>, socklen_t) override;
+    virtual KResultOr<size_t> recvfrom(FileDescription&, UserOrKernelBuffer&, size_t, int flags, Userspace<sockaddr*>, Userspace<socklen_t*>, timeval&) override;
+    virtual KResult getsockopt(FileDescription&, int level, int option, Userspace<void*>, Userspace<socklen_t*>) override;
     virtual KResult chown(FileDescription&, uid_t, gid_t) override;
     virtual KResult chmod(FileDescription&, mode_t) override;
 
@@ -72,10 +72,18 @@ private:
     virtual bool is_local() const override { return true; }
     bool has_attached_peer(const FileDescription&) const;
     static Lockable<InlineLinkedList<LocalSocket>>& all_sockets();
-    DoubleBuffer& receive_buffer_for(FileDescription&);
-    DoubleBuffer& send_buffer_for(FileDescription&);
+    DoubleBuffer* receive_buffer_for(FileDescription&);
+    DoubleBuffer* send_buffer_for(FileDescription&);
     NonnullRefPtrVector<FileDescription>& sendfd_queue_for(const FileDescription&);
     NonnullRefPtrVector<FileDescription>& recvfd_queue_for(const FileDescription&);
+
+    void set_connect_side_role(Role connect_side_role, bool force_evaluate_block_conditions = false)
+    {
+        auto previous = m_connect_side_role;
+        m_connect_side_role = connect_side_role;
+        if (previous != m_connect_side_role || force_evaluate_block_conditions)
+            evaluate_block_conditions();
+    }
 
     // An open socket file on the filesystem.
     RefPtr<FileDescription> m_file;

@@ -24,6 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/QuickSort.h>
 #include <LibJS/Runtime/Accessor.h>
 #include <LibJS/Runtime/IndexedProperties.h>
 
@@ -208,6 +209,7 @@ ValueAndAttributes GenericIndexedPropertyStorage::take_last()
 
 void GenericIndexedPropertyStorage::set_array_like_size(size_t new_size)
 {
+    m_array_size = new_size;
     if (new_size < SPARSE_ARRAY_THRESHOLD) {
         m_packed_elements.resize(new_size);
         m_sparse_elements.clear();
@@ -228,22 +230,16 @@ IndexedPropertyIterator::IndexedPropertyIterator(const IndexedProperties& indexe
     , m_index(staring_index)
     , m_skip_empty(skip_empty)
 {
-    while (m_skip_empty && m_index < m_indexed_properties.array_like_size()) {
-        if (m_indexed_properties.has_index(m_index))
-            break;
-        m_index++;
-    }
+    if (m_skip_empty)
+        skip_empty_indices();
 }
 
 IndexedPropertyIterator& IndexedPropertyIterator::operator++()
 {
     m_index++;
 
-    while (m_skip_empty && m_index < m_indexed_properties.array_like_size()) {
-        if (m_indexed_properties.has_index(m_index))
-            break;
-        m_index++;
-    };
+    if (m_skip_empty)
+        skip_empty_indices();
 
     return *this;
 }
@@ -261,8 +257,20 @@ bool IndexedPropertyIterator::operator!=(const IndexedPropertyIterator& other) c
 ValueAndAttributes IndexedPropertyIterator::value_and_attributes(Object* this_object, bool evaluate_accessors)
 {
     if (m_index < m_indexed_properties.array_like_size())
-        return m_indexed_properties.get(this_object, m_index, evaluate_accessors).value();
+        return m_indexed_properties.get(this_object, m_index, evaluate_accessors).value_or({});
     return {};
+}
+
+void IndexedPropertyIterator::skip_empty_indices()
+{
+    auto indices = m_indexed_properties.indices();
+    for (auto i : indices) {
+        if (i < m_index)
+            continue;
+        m_index = i;
+        return;
+    }
+    m_index = m_indexed_properties.array_like_size();
 }
 
 Optional<ValueAndAttributes> IndexedProperties::get(Object* this_object, u32 index, bool evaluate_accessors) const
@@ -272,7 +280,7 @@ Optional<ValueAndAttributes> IndexedProperties::get(Object* this_object, u32 ind
         return result;
     if (!result.has_value())
         return {};
-    auto value = result.value();
+    auto& value = result.value();
     if (value.value.is_accessor()) {
         ASSERT(this_object);
         auto& accessor = value.value.as_accessor();
@@ -314,10 +322,10 @@ void IndexedProperties::insert(u32 index, Value value, PropertyAttributes attrib
 {
     if (m_storage->is_simple_storage() && (index >= SPARSE_ARRAY_THRESHOLD || attributes != default_attributes || array_like_size() == SPARSE_ARRAY_THRESHOLD))
         switch_to_generic_storage();
-    m_storage->insert(index, value, attributes);
+    m_storage->insert(index, move(value), attributes);
 }
 
-ValueAndAttributes IndexedProperties::take_first(Object *this_object)
+ValueAndAttributes IndexedProperties::take_first(Object* this_object)
 {
     auto first = m_storage->take_first();
     if (first.value.is_accessor())
@@ -325,7 +333,7 @@ ValueAndAttributes IndexedProperties::take_first(Object *this_object)
     return first;
 }
 
-ValueAndAttributes IndexedProperties::take_last(Object *this_object)
+ValueAndAttributes IndexedProperties::take_last(Object* this_object)
 {
     auto last = m_storage->take_last();
     if (last.value.is_accessor())
@@ -339,34 +347,49 @@ void IndexedProperties::append_all(Object* this_object, const IndexedProperties&
         switch_to_generic_storage();
 
     for (auto it = properties.begin(false); it != properties.end(); ++it) {
-        auto element = it.value_and_attributes(this_object, evaluate_accessors);
-        if (this_object && this_object->interpreter().exception())
+        const auto& element = it.value_and_attributes(this_object, evaluate_accessors);
+        if (this_object && this_object->vm().exception())
             return;
         m_storage->put(m_storage->array_like_size(), element.value, element.attributes);
     }
 }
 
-Vector<ValueAndAttributes> IndexedProperties::values_unordered() const
+void IndexedProperties::set_array_like_size(size_t new_size)
 {
-    if (m_storage->is_simple_storage()) {
-        auto elements = static_cast<const SimpleIndexedPropertyStorage&>(*m_storage).elements();
-        Vector<ValueAndAttributes> with_attributes;
-        for (auto& value : elements)
-            with_attributes.append({ value, default_attributes });
-        return with_attributes;
-    }
+    if (m_storage->is_simple_storage() && new_size > SPARSE_ARRAY_THRESHOLD)
+        switch_to_generic_storage();
+    m_storage->set_array_like_size(new_size);
+}
 
-    auto storage = static_cast<const GenericIndexedPropertyStorage&>(*m_storage);
-    auto values = storage.packed_elements();
-    values.ensure_capacity(values.size() + storage.sparse_elements().size());
-    for (auto& entry : storage.sparse_elements())
-        values.unchecked_append(entry.value);
-    return values;
+Vector<u32> IndexedProperties::indices() const
+{
+    Vector<u32> indices;
+    if (m_storage->is_simple_storage()) {
+        const auto& storage = static_cast<const SimpleIndexedPropertyStorage&>(*m_storage);
+        const auto& elements = storage.elements();
+        indices.ensure_capacity(storage.array_like_size());
+        for (size_t i = 0; i < elements.size(); ++i) {
+            if (!elements.at(i).is_empty())
+                indices.unchecked_append(i);
+        }
+    } else {
+        const auto& storage = static_cast<const GenericIndexedPropertyStorage&>(*m_storage);
+        const auto packed_elements = storage.packed_elements();
+        indices.ensure_capacity(storage.array_like_size());
+        for (size_t i = 0; i < packed_elements.size(); ++i) {
+            if (!packed_elements.at(i).value.is_empty())
+                indices.unchecked_append(i);
+        }
+        auto sparse_elements_keys = storage.sparse_elements().keys();
+        quick_sort(sparse_elements_keys);
+        indices.append(move(sparse_elements_keys));
+    }
+    return indices;
 }
 
 void IndexedProperties::switch_to_generic_storage()
 {
-    auto storage = static_cast<const SimpleIndexedPropertyStorage&>(*m_storage);
+    auto& storage = static_cast<SimpleIndexedPropertyStorage&>(*m_storage);
     m_storage = make<GenericIndexedPropertyStorage>(move(storage));
 }
 

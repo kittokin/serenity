@@ -26,8 +26,10 @@
 
 #pragma once
 
+#include <AK/Format.h>
 #include <AK/Forward.h>
 #include <AK/RefPtr.h>
+#include <AK/Stream.h>
 #include <AK/StringImpl.h>
 #include <AK/StringUtils.h>
 #include <AK/Traits.h>
@@ -56,8 +58,6 @@ namespace AK {
 
 class String {
 public:
-    using ConstIterator = const char*;
-
     ~String() { }
 
     String() { }
@@ -80,6 +80,11 @@ public:
 
     String(const char* cstring, size_t length, ShouldChomp shouldChomp = NoChomp)
         : m_impl(StringImpl::create(cstring, length, shouldChomp))
+    {
+    }
+
+    explicit String(ReadonlyBytes bytes, ShouldChomp shouldChomp = NoChomp)
+        : m_impl(StringImpl::create(bytes, shouldChomp))
     {
     }
 
@@ -107,45 +112,58 @@ public:
 
     static String repeated(char, size_t count);
     bool matches(const StringView& mask, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
+    bool matches(const StringView& mask, Vector<MaskSpan>&, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
 
-    Optional<int> to_int() const;
-    Optional<unsigned> to_uint() const;
+    template<typename T = int>
+    Optional<T> to_int() const;
+    template<typename T = unsigned>
+    Optional<T> to_uint() const;
 
     String to_lowercase() const;
     String to_uppercase() const;
 
-    enum class TrimMode {
-        Left,
-        Right,
-        Both
-    };
-    String trim_whitespace(TrimMode mode = TrimMode::Both) const;
+#ifndef KERNEL
+    String trim_whitespace(TrimMode mode = TrimMode::Both) const
+    {
+        return StringUtils::trim_whitespace(StringView { characters(), length() }, mode);
+    }
+#endif
 
     bool equals_ignoring_case(const StringView&) const;
 
-    bool contains(const String&) const;
+    bool contains(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     Optional<size_t> index_of(const String&, size_t start = 0) const;
 
     Vector<String> split_limit(char separator, size_t limit, bool keep_empty = false) const;
     Vector<String> split(char separator, bool keep_empty = false) const;
+    String substring(size_t start) const;
     String substring(size_t start, size_t length) const;
 
     Vector<StringView> split_view(char separator, bool keep_empty = false) const;
     StringView substring_view(size_t start, size_t length) const;
+    StringView substring_view(size_t start) const;
 
     bool is_null() const { return !m_impl; }
     ALWAYS_INLINE bool is_empty() const { return length() == 0; }
     ALWAYS_INLINE size_t length() const { return m_impl ? m_impl->length() : 0; }
+    // Includes NUL-terminator, if non-nullptr.
     ALWAYS_INLINE const char* characters() const { return m_impl ? m_impl->characters() : nullptr; }
+
+    [[nodiscard]] bool copy_characters_to_buffer(char* buffer, size_t buffer_size) const;
+
+    ALWAYS_INLINE ReadonlyBytes bytes() const { return m_impl ? m_impl->bytes() : nullptr; }
+
     ALWAYS_INLINE const char& operator[](size_t i) const
     {
         return (*m_impl)[i];
     }
 
-    ConstIterator begin() const { return characters(); }
-    ConstIterator end() const { return begin() + length(); }
+    using ConstIterator = SimpleIterator<const String, const char>;
 
-    bool starts_with(const StringView&) const;
+    constexpr ConstIterator begin() const { return ConstIterator::begin(*this); }
+    constexpr ConstIterator end() const { return ConstIterator::end(*this); }
+
+    bool starts_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     bool ends_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     bool starts_with(char) const;
     bool ends_with(char) const;
@@ -193,6 +211,18 @@ public:
         return *this;
     }
 
+    String& operator=(std::nullptr_t)
+    {
+        m_impl = nullptr;
+        return *this;
+    }
+
+    String& operator=(ReadonlyBytes bytes)
+    {
+        m_impl = StringImpl::create(bytes);
+        return *this;
+    }
+
     u32 hash() const
     {
         if (!m_impl)
@@ -213,21 +243,27 @@ public:
     }
 
     static String format(const char*, ...);
-    static String number(unsigned);
-    static String number(unsigned long);
-    static String number(unsigned long long);
-    static String number(int);
-    static String number(long);
-    static String number(long long);
+
+    static String vformatted(StringView fmtstr, TypeErasedFormatParams);
+
+    template<typename... Parameters>
+    static String formatted(StringView fmtstr, const Parameters&... parameters)
+    {
+        return vformatted(fmtstr, VariadicFormatParams { parameters... });
+    }
+
+    template<typename T>
+    static String number(T value) requires IsArithmetic<T>::value { return formatted("{}", value); }
 
     StringView view() const;
 
-    int replace(const String& needle, const String& replacement, bool all_occurences = false);
+    int replace(const String& needle, const String& replacement, bool all_occurrences = false);
+    String reverse() const;
 
     template<typename T, typename... Rest>
     bool is_one_of(const T& string, Rest... rest) const
     {
-        if (string == *this)
+        if (*this == string)
             return true;
         return is_one_of(rest...);
     }
@@ -254,6 +290,8 @@ bool operator>(const char*, const String&);
 bool operator<=(const char*, const String&);
 
 String escape_html_entities(const StringView& html);
+
+InputStream& operator>>(InputStream& stream, String& string);
 
 }
 

@@ -35,15 +35,16 @@ class ArrayConstructor final : public NativeFunction {
 
 public:
     explicit ArrayConstructor(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~ArrayConstructor() override;
 
-    virtual Value call(Interpreter&) override;
-    virtual Value construct(Interpreter&, Function& new_target) override;
+    virtual Value call() override;
+    virtual Value construct(Function& new_target) override;
 
 private:
     virtual bool has_constructor() const override { return true; }
 
+    JS_DECLARE_NATIVE_FUNCTION(from);
     JS_DECLARE_NATIVE_FUNCTION(is_array);
     JS_DECLARE_NATIVE_FUNCTION(of);
 };

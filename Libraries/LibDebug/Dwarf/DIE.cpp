@@ -27,22 +27,22 @@
 #include "DIE.h"
 #include "CompilationUnit.h"
 #include "DwarfInfo.h"
-#include <AK/BufferStream.h>
 #include <AK/ByteBuffer.h>
+#include <AK/MemoryStream.h>
 
-namespace Dwarf {
+namespace Debug::Dwarf {
 
 DIE::DIE(const CompilationUnit& unit, u32 offset)
     : m_compilation_unit(unit)
     , m_offset(offset)
 {
-    BufferStream stream(const_cast<ByteBuffer&>(m_compilation_unit.dwarf_info().debug_info_data()));
-    stream.advance(m_offset);
+    InputMemoryStream stream(m_compilation_unit.dwarf_info().debug_info_data());
+    stream.discard_or_error(m_offset);
     stream.read_LEB128_unsigned(m_abbreviation_code);
     m_data_offset = stream.offset();
 
     if (m_abbreviation_code == 0) {
-        // An abbrevation code of 0 ( = null DIE entry) means the end of a chain of sibilings
+        // An abbreviation code of 0 ( = null DIE entry) means the end of a chain of siblings
         m_tag = EntryTag::None;
     } else {
         auto abbreviation_info = m_compilation_unit.abbreviations_map().get(m_abbreviation_code);
@@ -52,7 +52,7 @@ DIE::DIE(const CompilationUnit& unit, u32 offset)
         m_has_children = abbreviation_info.value().has_children;
 
         // We iterate the attributes data only to calculate this DIE's size
-        for (auto attribute_spec : abbreviation_info.value().attribute_specifications) {
+        for (auto& attribute_spec : abbreviation_info.value().attribute_specifications) {
             get_attribute_value(attribute_spec.form, stream);
         }
     }
@@ -60,12 +60,21 @@ DIE::DIE(const CompilationUnit& unit, u32 offset)
 }
 
 DIE::AttributeValue DIE::get_attribute_value(AttributeDataForm form,
-    BufferStream& debug_info_stream) const
+    InputMemoryStream& debug_info_stream) const
 {
     AttributeValue value;
+
+    auto assign_raw_bytes_value = [&](size_t length) {
+        value.data.as_raw_bytes.length = length;
+        value.data.as_raw_bytes.bytes = reinterpret_cast<const u8*>(m_compilation_unit.dwarf_info().debug_info_data().data()
+            + debug_info_stream.offset());
+
+        debug_info_stream.discard_or_error(length);
+    };
+
     switch (form) {
     case AttributeDataForm::StringPointer: {
-        u32 offset = 0;
+        u32 offset;
         debug_info_stream >> offset;
         value.type = AttributeValue::Type::String;
 
@@ -74,42 +83,49 @@ DIE::AttributeValue DIE::get_attribute_value(AttributeDataForm form,
         break;
     }
     case AttributeDataForm::Data1: {
-        u8 data = 0;
+        u8 data;
         debug_info_stream >> data;
         value.type = AttributeValue::Type::UnsignedNumber;
         value.data.as_u32 = data;
         break;
     }
     case AttributeDataForm::Data2: {
-        u16 data = 0;
+        u16 data;
         debug_info_stream >> data;
         value.type = AttributeValue::Type::UnsignedNumber;
         value.data.as_u32 = data;
         break;
     }
     case AttributeDataForm::Addr: {
-        u32 address = 0;
+        u32 address;
         debug_info_stream >> address;
         value.type = AttributeValue::Type::UnsignedNumber;
         value.data.as_u32 = address;
         break;
     }
+    case AttributeDataForm::SData: {
+        ssize_t data;
+        debug_info_stream.read_LEB128_signed(data);
+        value.type = AttributeValue::Type::SignedNumber;
+        value.data.as_i32 = data;
+        break;
+    }
     case AttributeDataForm::SecOffset: {
-        u32 data = 0;
+        u32 data;
         debug_info_stream >> data;
         value.type = AttributeValue::Type::SecOffset;
         value.data.as_u32 = data;
         break;
     }
     case AttributeDataForm::Data4: {
-        u32 data = 0;
+        u32 data;
         debug_info_stream >> data;
         value.type = AttributeValue::Type::UnsignedNumber;
         value.data.as_u32 = data;
         break;
     }
     case AttributeDataForm::Ref4: {
-        u32 data = 0;
+        u32 data;
         debug_info_stream >> data;
         value.type = AttributeValue::Type::DieReference;
         value.data.as_u32 = data + m_compilation_unit.offset();
@@ -121,14 +137,10 @@ DIE::AttributeValue DIE::get_attribute_value(AttributeDataForm form,
         break;
     }
     case AttributeDataForm::ExprLoc: {
-        size_t length = 0;
+        size_t length;
         debug_info_stream.read_LEB128_unsigned(length);
         value.type = AttributeValue::Type::DwarfExpression;
-
-        value.data.as_dwarf_expression.length = length;
-        value.data.as_dwarf_expression.bytes = reinterpret_cast<const u8*>(m_compilation_unit.dwarf_info().debug_info_data().data() + debug_info_stream.offset());
-
-        debug_info_stream.advance(length);
+        assign_raw_bytes_value(length);
         break;
     }
     case AttributeDataForm::String: {
@@ -137,6 +149,34 @@ DIE::AttributeValue DIE::get_attribute_value(AttributeDataForm form,
         debug_info_stream >> str;
         value.type = AttributeValue::Type::String;
         value.data.as_string = reinterpret_cast<const char*>(str_offset + m_compilation_unit.dwarf_info().debug_info_data().data());
+        break;
+    }
+    case AttributeDataForm::Block1: {
+        value.type = AttributeValue::Type::RawBytes;
+        u8 length;
+        debug_info_stream >> length;
+        assign_raw_bytes_value(length);
+        break;
+    }
+    case AttributeDataForm::Block2: {
+        value.type = AttributeValue::Type::RawBytes;
+        u16 length;
+        debug_info_stream >> length;
+        assign_raw_bytes_value(length);
+        break;
+    }
+    case AttributeDataForm::Block4: {
+        value.type = AttributeValue::Type::RawBytes;
+        u32 length;
+        debug_info_stream >> length;
+        assign_raw_bytes_value(length);
+        break;
+    }
+    case AttributeDataForm::Block: {
+        value.type = AttributeValue::Type::RawBytes;
+        size_t length;
+        debug_info_stream.read_LEB128_unsigned(length);
+        assign_raw_bytes_value(length);
         break;
     }
     default:
@@ -148,8 +188,8 @@ DIE::AttributeValue DIE::get_attribute_value(AttributeDataForm form,
 
 Optional<DIE::AttributeValue> DIE::get_attribute(const Attribute& attribute) const
 {
-    BufferStream stream(const_cast<ByteBuffer&>(m_compilation_unit.dwarf_info().debug_info_data()));
-    stream.advance(m_data_offset);
+    InputMemoryStream stream { m_compilation_unit.dwarf_info().debug_info_data() };
+    stream.discard_or_error(m_data_offset);
 
     auto abbreviation_info = m_compilation_unit.abbreviations_map().get(m_abbreviation_code);
     ASSERT(abbreviation_info.has_value());
@@ -185,7 +225,7 @@ void DIE::for_each_child(Function<void(const DIE& child)> callback) const
         }
 
         if (!sibling.has_value()) {
-            // NOTE: According to the spec, the compiler does't have to supply the sibling information.
+            // NOTE: According to the spec, the compiler doesn't have to supply the sibling information.
             // When it doesn't, we have to recursively iterate the current child's children to find where they end
             current_child->for_each_child([&](const DIE& sub_child) {
                 sibling_offset = sub_child.offset() + sub_child.size();

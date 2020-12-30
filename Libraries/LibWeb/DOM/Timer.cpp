@@ -25,12 +25,11 @@
  */
 
 #include <LibCore/Timer.h>
-#include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Function.h>
 #include <LibWeb/DOM/Timer.h>
 #include <LibWeb/DOM/Window.h>
 
-namespace Web {
+namespace Web::DOM {
 
 NonnullRefPtr<Timer> Timer::create_interval(Window& window, int milliseconds, JS::Function& callback)
 {
@@ -55,6 +54,7 @@ Timer::Timer(Window& window, Type type, int milliseconds, JS::Function& callback
 
 Timer::~Timer()
 {
+    m_window.deallocate_timer_id({}, m_id);
 }
 
 }

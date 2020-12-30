@@ -32,6 +32,7 @@
 #include <AK/SharedBuffer.h>
 #include <LibCore/File.h>
 #include <LibCore/ProcessStatisticsReader.h>
+#include <LibGUI/FileIconProvider.h>
 #include <fcntl.h>
 #include <stdio.h>
 
@@ -47,10 +48,10 @@ ProcessModel::ProcessModel()
 {
     ASSERT(!s_the);
     s_the = this;
-    m_generic_process_icon = Gfx::Bitmap::load_from_file("/res/icons/gear16.png");
-    m_high_priority_icon = Gfx::Bitmap::load_from_file("/res/icons/highpriority16.png");
-    m_low_priority_icon = Gfx::Bitmap::load_from_file("/res/icons/lowpriority16.png");
-    m_normal_priority_icon = Gfx::Bitmap::load_from_file("/res/icons/normalpriority16.png");
+    m_generic_process_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/gear.png");
+    m_high_priority_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/highpriority.png");
+    m_low_priority_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/lowpriority.png");
+    m_normal_priority_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/normalpriority.png");
 
     auto file = Core::File::construct("/proc/cpuinfo");
     if (file->open(Core::IODevice::ReadOnly)) {
@@ -90,6 +91,12 @@ String ProcessModel::column_name(int column) const
         return "PID";
     case Column::TID:
         return "TID";
+    case Column::PPID:
+        return "PPID";
+    case Column::PGID:
+        return "PGID";
+    case Column::SID:
+        return "SID";
     case Column::State:
         return "State";
     case Column::User:
@@ -147,14 +154,14 @@ String ProcessModel::column_name(int column) const
 
 static String pretty_byte_size(size_t size)
 {
-    return String::format("%uK", size / 1024);
+    return String::formatted("{}K", size / 1024);
 }
 
-GUI::Variant ProcessModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant ProcessModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
     ASSERT(is_valid(index));
 
-    if (role == Role::TextAlignment) {
+    if (role == GUI::ModelRole::TextAlignment) {
         switch (index.column()) {
         case Column::Icon:
         case Column::Name:
@@ -165,6 +172,9 @@ GUI::Variant ProcessModel::data(const GUI::ModelIndex& index, Role role) const
             return Gfx::TextAlignment::CenterLeft;
         case Column::PID:
         case Column::TID:
+        case Column::PPID:
+        case Column::PGID:
+        case Column::SID:
         case Column::Priority:
         case Column::EffectivePriority:
         case Column::Virtual:
@@ -194,7 +204,7 @@ GUI::Variant ProcessModel::data(const GUI::ModelIndex& index, Role role) const
     auto it = m_threads.find(m_pids[index.row()]);
     auto& thread = *(*it).value;
 
-    if (role == Role::Sort) {
+    if (role == GUI::ModelRole::Sort) {
         switch (index.column()) {
         case Column::Icon:
             return 0;
@@ -202,6 +212,12 @@ GUI::Variant ProcessModel::data(const GUI::ModelIndex& index, Role role) const
             return thread.current_state.pid;
         case Column::TID:
             return thread.current_state.tid;
+        case Column::PPID:
+            return thread.current_state.ppid;
+        case Column::PGID:
+            return thread.current_state.pgid;
+        case Column::SID:
+            return thread.current_state.sid;
         case Column::State:
             return thread.current_state.state;
         case Column::User:
@@ -257,22 +273,24 @@ GUI::Variant ProcessModel::data(const GUI::ModelIndex& index, Role role) const
         return {};
     }
 
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Display) {
         switch (index.column()) {
-        case Column::Icon:
-            if (thread.current_state.icon_id != -1) {
-                auto icon_buffer = SharedBuffer::create_from_shbuf_id(thread.current_state.icon_id);
-                if (icon_buffer) {
-                    auto icon_bitmap = Gfx::Bitmap::create_with_shared_buffer(Gfx::BitmapFormat::RGBA32, *icon_buffer, { 16, 16 });
-                    if (icon_bitmap)
-                        return *icon_bitmap;
-                }
-            }
+        case Column::Icon: {
+            auto icon = GUI::FileIconProvider::icon_for_executable(thread.current_state.executable);
+            if (auto* bitmap = icon.bitmap_for_size(16))
+                return *bitmap;
             return *m_generic_process_icon;
+        }
         case Column::PID:
             return thread.current_state.pid;
         case Column::TID:
             return thread.current_state.tid;
+        case Column::PPID:
+            return thread.current_state.ppid;
+        case Column::PGID:
+            return thread.current_state.pgid;
+        case Column::SID:
+            return thread.current_state.sid;
         case Column::State:
             return thread.current_state.state;
         case Column::User:
@@ -331,14 +349,15 @@ GUI::Variant ProcessModel::data(const GUI::ModelIndex& index, Role role) const
 
 void ProcessModel::update()
 {
+    auto previous_pid_count = m_pids.size();
     auto all_processes = Core::ProcessStatisticsReader::get_all();
 
-    unsigned last_sum_times_scheduled = 0;
+    u64 last_sum_ticks_scheduled = 0;
     for (auto& it : m_threads)
-        last_sum_times_scheduled += it.value->current_state.times_scheduled;
+        last_sum_ticks_scheduled += it.value->current_state.ticks_user + it.value->current_state.ticks_kernel;
 
     HashTable<PidAndTid> live_pids;
-    unsigned sum_times_scheduled = 0;
+    u64 sum_ticks_scheduled = 0;
     for (auto& it : all_processes) {
         for (auto& thread : it.value.threads) {
             ThreadState state;
@@ -362,17 +381,23 @@ void ProcessModel::update()
             state.amount_clean_inode = it.value.amount_clean_inode;
             state.amount_purgeable_volatile = it.value.amount_purgeable_volatile;
             state.amount_purgeable_nonvolatile = it.value.amount_purgeable_nonvolatile;
-            state.icon_id = it.value.icon_id;
 
             state.name = thread.name;
+            state.executable = it.value.executable;
 
+            state.ppid = it.value.ppid;
             state.tid = thread.tid;
+            state.pgid = it.value.pgid;
+            state.sid = it.value.sid;
             state.times_scheduled = thread.times_scheduled;
+            state.ticks_user = thread.ticks_user;
+            state.ticks_kernel = thread.ticks_kernel;
             state.cpu = thread.cpu;
+            state.cpu_percent = 0;
             state.priority = thread.priority;
             state.effective_priority = thread.effective_priority;
             state.state = thread.state;
-            sum_times_scheduled += thread.times_scheduled;
+            sum_ticks_scheduled += thread.ticks_user + thread.ticks_kernel;
             {
                 auto pit = m_threads.find({ it.value.pid, thread.tid });
                 if (pit == m_threads.end())
@@ -397,8 +422,9 @@ void ProcessModel::update()
             continue;
         }
         auto& process = *it.value;
-        u32 times_scheduled_diff = process.current_state.times_scheduled - process.previous_state.times_scheduled;
-        process.current_state.cpu_percent = ((float)times_scheduled_diff * 100) / (float)(sum_times_scheduled - last_sum_times_scheduled);
+        u32 times_scheduled_diff = (process.current_state.ticks_user + process.current_state.ticks_kernel)
+            - (process.previous_state.ticks_user + process.previous_state.ticks_kernel);
+        process.current_state.cpu_percent = ((float)times_scheduled_diff * 100) / (float)(sum_ticks_scheduled - last_sum_ticks_scheduled);
         if (it.key.pid != 0) {
             m_cpus[process.current_state.cpu].total_cpu_percent += process.current_state.cpu_percent;
             m_pids.append(it.key);
@@ -410,5 +436,7 @@ void ProcessModel::update()
     if (on_cpu_info_change)
         on_cpu_info_change(m_cpus);
 
-    did_update(GUI::Model::UpdateFlag::DontInvalidateIndexes);
+    // FIXME: This is a rather hackish way of invalidating indexes.
+    //        It would be good if GUI::Model had a way to orchestrate removal/insertion while preserving indexes.
+    did_update(previous_pid_count == m_pids.size() ? GUI::Model::UpdateFlag::DontInvalidateIndexes : GUI::Model::UpdateFlag::InvalidateAllIndexes);
 }

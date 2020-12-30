@@ -31,6 +31,7 @@
 #include <LibCrypto/Cipher/Cipher.h>
 #include <LibCrypto/Cipher/Mode/CBC.h>
 #include <LibCrypto/Cipher/Mode/CTR.h>
+#include <LibCrypto/Cipher/Mode/GCM.h>
 
 namespace Crypto {
 namespace Cipher {
@@ -46,16 +47,18 @@ public:
     AESCipherBlock(const u8* data, size_t length, PaddingMode mode = PaddingMode::CMS)
         : AESCipherBlock(mode)
     {
-        overwrite(data, length);
+        CipherBlock::overwrite(data, length);
     }
 
     static size_t block_size() { return BlockSizeInBits / 8; };
 
     virtual ByteBuffer get() const override { return m_data; };
     virtual const ByteBuffer& data() const override { return m_data; };
+    ReadonlyBytes bytes() const { return m_data; }
 
-    virtual void overwrite(const ByteBuffer&) override;
-    virtual void overwrite(const u8* data, size_t length) override;
+    virtual void overwrite(ReadonlyBytes) override;
+    virtual void overwrite(const ByteBuffer& buffer) override { overwrite(buffer.bytes()); }
+    virtual void overwrite(const u8* data, size_t size) override { overwrite({ data, size }); }
 
     virtual void apply_initialization_vector(const u8* ivec) override
     {
@@ -72,8 +75,8 @@ private:
 
 struct AESCipherKey : public CipherKey {
     virtual ByteBuffer data() const override { return ByteBuffer::copy(m_rd_keys, sizeof(m_rd_keys)); };
-    virtual void expand_encrypt_key(const ByteBuffer& user_key, size_t bits) override;
-    virtual void expand_decrypt_key(const ByteBuffer& user_key, size_t bits) override;
+    virtual void expand_encrypt_key(ReadonlyBytes user_key, size_t bits) override;
+    virtual void expand_decrypt_key(ReadonlyBytes user_key, size_t bits) override;
     static bool is_valid_key_size(size_t bits) { return bits == 128 || bits == 192 || bits == 256; };
     String to_string() const;
     const u32* round_keys() const
@@ -81,7 +84,7 @@ struct AESCipherKey : public CipherKey {
         return (const u32*)m_rd_keys;
     }
 
-    AESCipherKey(const ByteBuffer& user_key, size_t key_bits, Intent intent)
+    AESCipherKey(ReadonlyBytes user_key, size_t key_bits, Intent intent)
         : m_bits(key_bits)
     {
         if (intent == Intent::Encryption)
@@ -112,10 +115,11 @@ class AESCipher final : public Cipher<AESCipherKey, AESCipherBlock> {
 public:
     using CBCMode = CBC<AESCipher>;
     using CTRMode = CTR<AESCipher>;
+    using GCMMode = GCM<AESCipher>;
 
     constexpr static size_t BlockSizeInBits = BlockType::BlockSizeInBits;
 
-    AESCipher(const ByteBuffer& user_key, size_t key_bits, Intent intent = Intent::Encryption, PaddingMode mode = PaddingMode::CMS)
+    AESCipher(ReadonlyBytes user_key, size_t key_bits, Intent intent = Intent::Encryption, PaddingMode mode = PaddingMode::CMS)
         : Cipher<AESCipherKey, AESCipherBlock>(mode)
         , m_key(user_key, key_bits, intent)
     {

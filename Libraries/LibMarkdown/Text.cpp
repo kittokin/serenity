@@ -29,6 +29,8 @@
 #include <LibMarkdown/Text.h>
 #include <string.h>
 
+//#define DEBUG_MARKDOWN
+
 namespace Markdown {
 
 static String unescape(const StringView& text)
@@ -43,6 +45,11 @@ static String unescape(const StringView& text)
         builder.append(text[i]);
     }
     return builder.build();
+}
+
+Text::Text(String&& text)
+{
+    m_spans.append({ move(text), Style {} });
 }
 
 String Text::render_to_html() const
@@ -213,7 +220,7 @@ Optional<Text> Text::parse(const StringView& str)
         bool is_special_character = false;
         is_special_character |= ch == '`';
         if (!current_style.code)
-            is_special_character |= ch == '*' || ch == '_' || ch == '[' || ch == ']' || ch == '!';
+            is_special_character |= ch == '*' || ch == '_' || ch == '[' || ch == ']' || (ch == '!' && offset + 1 < str.length() && str[offset + 1] == '[');
         if (!is_special_character)
             continue;
 
@@ -233,18 +240,20 @@ Optional<Text> Text::parse(const StringView& str)
             }
             break;
         case '!':
-            if (offset + 1 >= str.length() || str[offset + 1] != '[')
-                continue;
             current_link_is_actually_img = true;
             break;
         case '[':
+#ifdef DEBUG_MARKDOWN
             if (first_span_in_the_current_link != -1)
                 dbg() << "Dropping the outer link";
+#endif
             first_span_in_the_current_link = spans.size();
             break;
         case ']': {
             if (first_span_in_the_current_link == -1) {
+#ifdef DEBUG_MARKDOWN
                 dbg() << "Unmatched ]";
+#endif
                 continue;
             }
             ScopeGuard guard = [&] {

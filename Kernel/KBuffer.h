@@ -48,11 +48,30 @@ namespace Kernel {
 
 class KBufferImpl : public RefCounted<KBufferImpl> {
 public:
-    static NonnullRefPtr<KBufferImpl> create_with_size(size_t size, u8 access, const char* name)
+    static RefPtr<KBufferImpl> try_create_with_size(size_t size, u8 access, const char* name)
     {
         auto region = MM.allocate_kernel_region(PAGE_ROUND_UP(size), name, access, false, false);
-        ASSERT(region);
+        if (!region)
+            return nullptr;
         return adopt(*new KBufferImpl(region.release_nonnull(), size));
+    }
+
+    static RefPtr<KBufferImpl> try_create_with_bytes(ReadonlyBytes bytes, u8 access, const char* name)
+    {
+        auto region = MM.allocate_kernel_region(PAGE_ROUND_UP(bytes.size()), name, access, false, false);
+        if (!region)
+            return nullptr;
+        if (!region->commit())
+            return nullptr;
+        memcpy(region->vaddr().as_ptr(), bytes.data(), bytes.size());
+        return adopt(*new KBufferImpl(region.release_nonnull(), bytes.size()));
+    }
+
+    static NonnullRefPtr<KBufferImpl> create_with_size(size_t size, u8 access, const char* name)
+    {
+        auto impl = try_create_with_size(size, access, name);
+        ASSERT(impl);
+        return impl.release_nonnull();
     }
 
     static NonnullRefPtr<KBufferImpl> copy(const void* data, size_t size, u8 access, const char* name)
@@ -90,6 +109,22 @@ private:
 
 class KBuffer {
 public:
+    static OwnPtr<KBuffer> try_create_with_size(size_t size, u8 access = Region::Access::Read | Region::Access::Write, const char* name = "KBuffer")
+    {
+        auto impl = KBufferImpl::try_create_with_size(size, access, name);
+        if (!impl)
+            return nullptr;
+        return adopt_own(*new KBuffer(impl.release_nonnull()));
+    }
+
+    static OwnPtr<KBuffer> try_create_with_bytes(ReadonlyBytes bytes, u8 access = Region::Access::Read | Region::Access::Write, const char* name = "KBuffer")
+    {
+        auto impl = KBufferImpl::try_create_with_bytes(bytes, access, name);
+        if (!impl)
+            return nullptr;
+        return adopt_own(*new KBuffer(impl.release_nonnull()));
+    }
+
     static KBuffer create_with_size(size_t size, u8 access = Region::Access::Read | Region::Access::Write, const char* name = "KBuffer")
     {
         return KBuffer(KBufferImpl::create_with_size(size, access, name));
@@ -104,6 +139,9 @@ public:
     const u8* data() const { return m_impl->data(); }
     size_t size() const { return m_impl->size(); }
     size_t capacity() const { return m_impl->capacity(); }
+
+    void* end_pointer() { return data() + size(); }
+    const void* end_pointer() const { return data() + size(); }
 
     void set_size(size_t size) { m_impl->set_size(size); }
 

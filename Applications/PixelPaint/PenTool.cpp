@@ -28,8 +28,11 @@
 #include "ImageEditor.h"
 #include "Layer.h"
 #include <LibGUI/Action.h>
+#include <LibGUI/BoxLayout.h>
+#include <LibGUI/Label.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Painter.h>
+#include <LibGUI/Slider.h>
 
 namespace PixelPaint {
 
@@ -54,8 +57,10 @@ void PenTool::on_mousedown(Layer& layer, GUI::MouseEvent& event, GUI::MouseEvent
 
 void PenTool::on_mouseup(Layer&, GUI::MouseEvent& event, GUI::MouseEvent&)
 {
-    if (event.button() == GUI::MouseButton::Left || event.button() == GUI::MouseButton::Right)
+    if (event.button() == GUI::MouseButton::Left || event.button() == GUI::MouseButton::Right) {
         m_last_drawing_event_position = { -1, -1 };
+        m_editor->did_complete_action();
+    }
 }
 
 void PenTool::on_mousemove(Layer& layer, GUI::MouseEvent& event, GUI::MouseEvent&)
@@ -92,6 +97,32 @@ void PenTool::on_tool_button_contextmenu(GUI::ContextMenuEvent& event)
         insert_action(4);
     }
     m_context_menu->popup(event.screen_position());
+}
+
+GUI::Widget* PenTool::get_properties_widget()
+{
+    if (!m_properties_widget) {
+        m_properties_widget = GUI::Widget::construct();
+        m_properties_widget->set_layout<GUI::VerticalBoxLayout>();
+
+        auto& thickness_container = m_properties_widget->add<GUI::Widget>();
+        thickness_container.set_fixed_height(20);
+        thickness_container.set_layout<GUI::HorizontalBoxLayout>();
+
+        auto& thickness_label = thickness_container.add<GUI::Label>("Thickness:");
+        thickness_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
+        thickness_label.set_fixed_size(80, 20);
+
+        auto& thickness_slider = thickness_container.add<GUI::HorizontalSlider>();
+        thickness_slider.set_fixed_height(20);
+        thickness_slider.set_range(1, 20);
+        thickness_slider.set_value(m_thickness);
+        thickness_slider.on_change = [this](int value) {
+            m_thickness = value;
+        };
+    }
+
+    return m_properties_widget.ptr();
 }
 
 }

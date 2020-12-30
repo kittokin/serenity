@@ -41,6 +41,7 @@ struct ext2_super_block;
 namespace Kernel {
 
 class Ext2FS;
+struct Ext2FSDirectoryEntry;
 
 class Ext2FSInode final : public Inode {
     friend class Ext2FS;
@@ -57,12 +58,12 @@ public:
 
 private:
     // ^Inode
-    virtual ssize_t read_bytes(off_t, ssize_t, u8* buffer, FileDescription*) const override;
+    virtual ssize_t read_bytes(off_t, ssize_t, UserOrKernelBuffer& buffer, FileDescription*) const override;
     virtual InodeMetadata metadata() const override;
-    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntry&)>) const override;
+    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntryView&)>) const override;
     virtual RefPtr<Inode> lookup(StringView name) override;
     virtual void flush_metadata() override;
-    virtual ssize_t write_bytes(off_t, ssize_t, const u8* data, FileDescription*) override;
+    virtual ssize_t write_bytes(off_t, ssize_t, const UserOrKernelBuffer& data, FileDescription*) override;
     virtual KResultOr<NonnullRefPtr<Inode>> create_child(const String& name, mode_t, dev_t, uid_t, gid_t) override;
     virtual KResult add_child(Inode& child, const StringView& name, mode_t) override;
     virtual KResult remove_child(const StringView& name) override;
@@ -71,14 +72,16 @@ private:
     virtual int set_mtime(time_t) override;
     virtual KResult increment_link_count() override;
     virtual KResult decrement_link_count() override;
-    virtual size_t directory_entry_count() const override;
+    virtual KResultOr<size_t> directory_entry_count() const override;
     virtual KResult chmod(mode_t) override;
     virtual KResult chown(uid_t, gid_t) override;
     virtual KResult truncate(u64) override;
 
-    bool write_directory(const Vector<FS::DirectoryEntry>&);
+    bool write_directory(const Vector<Ext2FSDirectoryEntry>&);
     void populate_lookup_cache() const;
     KResult resize(u64);
+
+    static u8 file_type_for_directory_entry(const ext2_dir_entry_2&);
 
     Ext2FS& fs();
     const Ext2FS& fs() const;
@@ -107,6 +110,8 @@ public:
 
     virtual bool supports_watchers() const override { return true; }
 
+    virtual u8 internal_file_type_to_directory_entry_type(const DirectoryEntryView& entry) const override;
+
 private:
     typedef unsigned BlockIndex;
     typedef unsigned GroupIndex;
@@ -115,8 +120,8 @@ private:
 
     const ext2_super_block& super_block() const { return m_super_block; }
     const ext2_group_desc& group_descriptor(GroupIndex) const;
-    ext2_group_desc* block_group_descriptors() { return (ext2_group_desc*)m_cached_group_descriptor_table.value().data(); }
-    const ext2_group_desc* block_group_descriptors() const { return (const ext2_group_desc*)m_cached_group_descriptor_table.value().data(); }
+    ext2_group_desc* block_group_descriptors() { return (ext2_group_desc*)m_cached_group_descriptor_table->data(); }
+    const ext2_group_desc* block_group_descriptors() const { return (const ext2_group_desc*)m_cached_group_descriptor_table->data(); }
     void flush_block_group_descriptor_table();
     unsigned inodes_per_block() const;
     unsigned inodes_per_group() const;
@@ -160,12 +165,12 @@ private:
         unsigned meta_blocks { 0 };
     };
 
-    BlockListShape compute_block_list_shape(unsigned blocks);
+    BlockListShape compute_block_list_shape(unsigned blocks) const;
 
     unsigned m_block_group_count { 0 };
 
     mutable ext2_super_block m_super_block;
-    mutable Optional<KBuffer> m_cached_group_descriptor_table;
+    mutable OwnPtr<KBuffer> m_cached_group_descriptor_table;
 
     mutable HashMap<InodeIndex, RefPtr<Ext2FSInode>> m_inode_cache;
 

@@ -29,7 +29,9 @@
 #include <AK/MappedFile.h>
 #include <LibGfx/BMPLoader.h>
 
-#define BMP_DEBUG 0
+#ifndef BMP_DEBUG
+#    define BMP_DEBUG 0
+#endif
 
 #define IF_BMP_DEBUG(x) \
     if (BMP_DEBUG)      \
@@ -138,8 +140,8 @@ struct BMPLoadingContext {
     };
     State state { State::NotDecoded };
 
-    const u8* data { nullptr };
-    size_t data_size { 0 };
+    const u8* file_bytes { nullptr };
+    size_t file_size { 0 };
     u32 data_offset { 0 };
 
     DIB dib;
@@ -148,7 +150,7 @@ struct BMPLoadingContext {
     Vector<u32> color_table;
     RefPtr<Gfx::Bitmap> bitmap;
 
-    u8 dib_size() const
+    u32 dib_size() const
     {
         switch (dib_type) {
         case DIBType::Core:
@@ -186,12 +188,20 @@ RefPtr<Gfx::Bitmap> load_bmp(const StringView& path)
     return bitmap;
 }
 
-const LogStream& operator<<(const LogStream& out, Endpoint<i32> ep)
+RefPtr<Gfx::Bitmap> load_bmp_from_memory(const u8* data, size_t length)
+{
+    auto bitmap = load_bmp_impl(data, length);
+    if (bitmap)
+        bitmap->set_mmap_name(String::format("Gfx::Bitmap [%dx%d] - Decoded BMP: <memory>", bitmap->width(), bitmap->height()));
+    return bitmap;
+}
+
+static const LogStream& operator<<(const LogStream& out, Endpoint<i32> ep)
 {
     return out << "(" << ep.x << ", " << ep.y << ", " << ep.z << ")";
 }
 
-const LogStream& operator<<(const LogStream& out, Endpoint<u32> ep)
+static const LogStream& operator<<(const LogStream& out, Endpoint<u32> ep)
 {
     return out << "(" << ep.x << ", " << ep.y << ", " << ep.z << ")";
 }
@@ -246,7 +256,6 @@ public:
     bool has_u32() const { return m_size_remaining >= 4; }
 
     size_t remaining() const { return m_size_remaining; }
-    void set_remaining(size_t remaining) { m_size_remaining = remaining; }
 
 private:
     const u8* m_data_ptr { nullptr };
@@ -254,7 +263,7 @@ private:
 };
 
 // Lookup table for distributing all possible 2-bit numbers evenly into 8-bit numbers
-u8 scaling_factors_2bit[4] = {
+static u8 scaling_factors_2bit[4] = {
     0x00,
     0x55,
     0xaa,
@@ -262,7 +271,7 @@ u8 scaling_factors_2bit[4] = {
 };
 
 // Lookup table for distributing all possible 3-bit numbers evenly into 8-bit numbers
-u8 scaling_factors_3bit[8] = {
+static u8 scaling_factors_3bit[8] = {
     0x00,
     0x24,
     0x48,
@@ -273,7 +282,7 @@ u8 scaling_factors_3bit[8] = {
     0xff,
 };
 
-u8 scale_masked_8bit_number(u8 number, u8 bits_set)
+static u8 scale_masked_8bit_number(u8 number, u8 bits_set)
 {
     // If there are more than 4 bit set, an easy way to scale the number is to
     // just copy the most significant bits into the least significant bits
@@ -288,7 +297,7 @@ u8 scale_masked_8bit_number(u8 number, u8 bits_set)
     return scaling_factors_3bit[number >> 5];
 }
 
-u8 get_scaled_color(u32 data, u8 mask_size, i8 mask_shift)
+static u8 get_scaled_color(u32 data, u8 mask_size, i8 mask_shift)
 {
     // A negative mask_shift indicates we actually need to left shift
     // the result in order to get out a valid 8-bit color (for example, the blue
@@ -307,8 +316,10 @@ u8 get_scaled_color(u32 data, u8 mask_size, i8 mask_shift)
 //   consider, as an example, a 5 bit number (so the bottom 3 bits are ignored).
 //   The purest white you could get is 0xf8, which is 248 in RGB-land. We need
 //   to scale the values in order to reach the proper value of 255.
-u32 int_to_scaled_rgb(BMPLoadingContext& context, u32 data)
+static u32 int_to_scaled_rgb(BMPLoadingContext& context, u32 data)
 {
+    IF_BMP_DEBUG(dbg() << "DIB info sizes before access: #masks=" << context.dib.info.masks.size() << ", #mask_sizes=" << context.dib.info.mask_sizes.size() << ", #mask_shifts=" << context.dib.info.mask_shifts.size());
+
     u8 r = get_scaled_color(data & context.dib.info.masks[0], context.dib.info.mask_sizes[0], context.dib.info.mask_shifts[0]);
     u8 g = get_scaled_color(data & context.dib.info.masks[1], context.dib.info.mask_sizes[1], context.dib.info.mask_shifts[1]);
     u8 b = get_scaled_color(data & context.dib.info.masks[2], context.dib.info.mask_sizes[2], context.dib.info.mask_shifts[2]);
@@ -325,16 +336,16 @@ u32 int_to_scaled_rgb(BMPLoadingContext& context, u32 data)
     return color;
 }
 
-void populate_dib_mask_info(BMPLoadingContext& context)
+static void populate_dib_mask_info_if_needed(BMPLoadingContext& context)
 {
     if (context.dib.info.masks.is_empty())
         return;
 
     // Mask shift is the number of right shifts needed to align the MSb of the
-    //   mask to the MSb of the LSB.
+    // mask to the MSb of the LSB. Note that this can be a negative number.
     // Mask size is the number of set bits in the mask. This is required for
-    //   color scaling (for example, ensuring that a 4-bit color value spans the
-    //   entire 256 value color spectrum.
+    // color scaling (for example, ensuring that a 4-bit color value spans the
+    // entire 256 value color spectrum.
     auto& masks = context.dib.info.masks;
     auto& mask_shifts = context.dib.info.mask_shifts;
     auto& mask_sizes = context.dib.info.mask_sizes;
@@ -349,29 +360,15 @@ void populate_dib_mask_info(BMPLoadingContext& context)
 
     for (size_t i = 0; i < masks.size(); ++i) {
         u32 mask = masks[i];
-        u8 shift = 0;
-        u8 size = 0;
-        bool found_set_bit = false;
-
-        while (shift <= 32) {
-            u8 bit = (mask >> shift) & 0x1;
-            if (found_set_bit)
-                size++;
-            if (!found_set_bit && bit) {
-                found_set_bit = true;
-            } else if (found_set_bit && !bit) {
-                break;
-            }
-            shift++;
-        }
-
-        if (shift > 32) {
+        if (!mask) {
             mask_shifts.append(0);
             mask_sizes.append(0);
-        } else {
-            mask_shifts.append(shift - 8);
-            mask_sizes.append(size);
+            continue;
         }
+        int trailing_zeros = count_trailing_zeroes_32(mask);
+        int size = count_trailing_zeroes_32(~(mask >> trailing_zeros));
+        mask_shifts.append(trailing_zeros - 8);
+        mask_sizes.append(size);
     }
 }
 
@@ -389,8 +386,28 @@ static bool check_for_invalid_bitmask_combinations(BMPLoadingContext& context)
             return false;
         break;
     case DIBType::Info:
-        if ((compression == Compression::BITFIELDS || compression == Compression::ALPHABITFIELDS) && bpp != 16 && bpp != 32)
+        switch (compression) {
+        case Compression::BITFIELDS:
+        case Compression::ALPHABITFIELDS:
+            if (bpp != 16 && bpp != 32)
+                return false;
+            break;
+        case Compression::RGB:
+            break;
+        case Compression::RLE8:
+            if (bpp > 8)
+                return false;
+            break;
+        case Compression::RLE4:
+            // TODO: This is a guess
+            if (bpp > 4)
+                return false;
+            break;
+        default:
+            // Other compressions are not officially supported.
+            // Technically, we could even drop ALPHABITFIELDS.
             return false;
+        }
         break;
     case DIBType::OSV2Short:
     case DIBType::OSV2:
@@ -422,21 +439,18 @@ static bool set_dib_bitmasks(BMPLoadingContext& context, Streamer& streamer)
         context.dib.info.masks.append({ 0x7c00, 0x03e0, 0x001f });
         context.dib.info.mask_shifts.append({ 7, 2, -3 });
         context.dib.info.mask_sizes.append({ 5, 5, 5 });
-
-        populate_dib_mask_info(context);
     } else if (type == DIBType::Info && (compression == Compression::BITFIELDS || compression == Compression::ALPHABITFIELDS)) {
         // Consume the extra BITFIELDS bytes
         auto number_of_mask_fields = compression == Compression::ALPHABITFIELDS ? 4 : 3;
-        streamer.set_remaining(number_of_mask_fields * 4);
 
-        for (auto i = 0; i < number_of_mask_fields; i++)
+        for (auto i = 0; i < number_of_mask_fields; i++) {
+            if (!streamer.has_u32())
+                return false;
             context.dib.info.masks.append(streamer.read_u32());
-
-        populate_dib_mask_info(context);
-    } else if (type >= DIBType::V2 && compression == Compression::BITFIELDS) {
-        populate_dib_mask_info(context);
+        }
     }
 
+    populate_dib_mask_info_if_needed(context);
     return true;
 }
 
@@ -448,13 +462,13 @@ static bool decode_bmp_header(BMPLoadingContext& context)
     if (context.state >= BMPLoadingContext::State::HeaderDecoded)
         return true;
 
-    if (!context.data || context.data_size < bmp_header_size) {
+    if (!context.file_bytes || context.file_size < bmp_header_size) {
         IF_BMP_DEBUG(dbg() << "Missing BMP header");
         context.state = BMPLoadingContext::State::Error;
         return false;
     }
 
-    Streamer streamer(context.data, bmp_header_size);
+    Streamer streamer(context.file_bytes, bmp_header_size);
 
     u16 header = streamer.read_u16();
     if (header != 0x4d42) {
@@ -470,14 +484,19 @@ static bool decode_bmp_header(BMPLoadingContext& context)
     // value of the file size.
     streamer.drop_bytes(4);
 
-    // Ingore reserved bytes
+    // Ignore reserved bytes
     streamer.drop_bytes(4);
     context.data_offset = streamer.read_u32();
-    context.state = BMPLoadingContext::State::HeaderDecoded;
 
-    IF_BMP_DEBUG(dbg() << "BMP data size: " << context.data_size);
+    IF_BMP_DEBUG(dbg() << "BMP file size: " << context.file_size);
     IF_BMP_DEBUG(dbg() << "BMP data offset: " << context.data_offset);
 
+    if (context.data_offset >= context.file_size) {
+        IF_BMP_DEBUG(dbg() << "BMP data offset is beyond file end?!");
+        return false;
+    }
+
+    context.state = BMPLoadingContext::State::HeaderDecoded;
     return true;
 }
 
@@ -499,6 +518,11 @@ static bool decode_bmp_core_dib(BMPLoadingContext& context, Streamer& streamer)
         return false;
     }
 
+    if (static_cast<size_t>(core.width) > maximum_width_for_decoded_images || static_cast<size_t>(abs(core.height)) > maximum_height_for_decoded_images) {
+        dbgln("This BMP is too large for comfort: {}x{}", core.width, abs(core.height));
+        return false;
+    }
+
     auto color_planes = streamer.read_u16();
     if (color_planes != 1) {
         IF_BMP_DEBUG(dbg() << "BMP has an invalid number of color planes: " << color_planes);
@@ -506,7 +530,6 @@ static bool decode_bmp_core_dib(BMPLoadingContext& context, Streamer& streamer)
     }
 
     core.bpp = streamer.read_u16();
-
     switch (core.bpp) {
     case 1:
     case 2:
@@ -529,6 +552,13 @@ static bool decode_bmp_core_dib(BMPLoadingContext& context, Streamer& streamer)
     return true;
 }
 
+ALWAYS_INLINE static bool is_supported_compression_format(BMPLoadingContext& context, u32 compression)
+{
+    return compression == Compression::RGB || compression == Compression::BITFIELDS
+        || compression == Compression::ALPHABITFIELDS || compression == Compression::RLE8
+        || compression == Compression::RLE4 || (compression == Compression::RLE24 && context.dib_type <= DIBType::OSV2);
+}
+
 static bool decode_bmp_osv2_dib(BMPLoadingContext& context, Streamer& streamer, bool short_variant = false)
 {
     auto& core = context.dib.core;
@@ -548,6 +578,19 @@ static bool decode_bmp_osv2_dib(BMPLoadingContext& context, Streamer& streamer, 
     }
 
     core.bpp = streamer.read_u16();
+    switch (core.bpp) {
+    case 1:
+    case 2:
+    case 4:
+    case 8:
+    case 24:
+        break;
+    default:
+        // OS/2 didn't expect 16- or 32-bpp to be popular.
+        IF_BMP_DEBUG(dbg() << "BMP has an invalid bpp: " << core.bpp);
+        context.state = BMPLoadingContext::State::Error;
+        return false;
+    }
 
     IF_BMP_DEBUG(dbg() << "BMP width: " << core.width);
     IF_BMP_DEBUG(dbg() << "BMP height: " << core.height);
@@ -565,6 +608,11 @@ static bool decode_bmp_osv2_dib(BMPLoadingContext& context, Streamer& streamer, 
     info.vertical_resolution = streamer.read_u32();
     info.number_of_palette_colors = streamer.read_u32();
     info.number_of_important_palette_colors = streamer.read_u32();
+
+    if (!is_supported_compression_format(context, info.compression)) {
+        IF_BMP_DEBUG(dbg() << "BMP has unsupported compression value: " << info.compression);
+        return false;
+    }
 
     if (info.number_of_palette_colors > color_palette_limit || info.number_of_important_palette_colors > color_palette_limit) {
         IF_BMP_DEBUG(dbg() << "BMP header indicates too many palette colors: " << info.number_of_palette_colors);
@@ -590,13 +638,6 @@ static bool decode_bmp_osv2_dib(BMPLoadingContext& context, Streamer& streamer, 
     IF_BMP_DEBUG(dbg() << "BMP important colors: " << info.number_of_important_palette_colors);
 
     return true;
-}
-
-ALWAYS_INLINE bool is_supported_compression_format(BMPLoadingContext& context, u8 compression)
-{
-    return compression == Compression::RGB || compression == Compression::BITFIELDS
-        || compression == Compression::ALPHABITFIELDS || compression == Compression::RLE8
-        || compression == Compression::RLE4 || (compression == Compression::RLE24 && context.dib_type <= DIBType::OSV2);
 }
 
 static bool decode_bmp_info_dib(BMPLoadingContext& context, Streamer& streamer)
@@ -727,16 +768,20 @@ static bool decode_bmp_dib(BMPLoadingContext& context)
     if (context.state < BMPLoadingContext::State::HeaderDecoded && !decode_bmp_header(context))
         return false;
 
-    if (context.data_size < bmp_header_size + 4)
+    if (context.file_size < bmp_header_size + 4)
         return false;
 
-    Streamer streamer(context.data + bmp_header_size, 4);
+    Streamer streamer(context.file_bytes + bmp_header_size, 4);
     u32 dib_size = streamer.read_u32();
 
-    if (context.data_size < bmp_header_size + dib_size)
+    if (context.file_size < bmp_header_size + dib_size)
         return false;
+    if (context.data_offset < bmp_header_size + dib_size) {
+        IF_BMP_DEBUG(dbg() << "Shenanigans! BMP pixel data and header usually don't overlap.");
+        return false;
+    }
 
-    streamer.set_remaining(dib_size - 4);
+    streamer = Streamer(context.file_bytes + bmp_header_size + 4, context.data_offset - bmp_header_size - 4);
 
     IF_BMP_DEBUG(dbg() << "BMP dib size: " << dib_size);
 
@@ -779,6 +824,22 @@ static bool decode_bmp_dib(BMPLoadingContext& context)
         error = true;
     }
 
+    switch (context.dib.info.compression) {
+    case Compression::RGB:
+    case Compression::RLE8:
+    case Compression::RLE4:
+    case Compression::BITFIELDS:
+    case Compression::RLE24:
+    case Compression::PNG:
+    case Compression::ALPHABITFIELDS:
+    case Compression::CMYK:
+    case Compression::CMYKRLE8:
+    case Compression::CMYKRLE4:
+        break;
+    default:
+        error = true;
+    }
+
     if (!error && !set_dib_bitmasks(context, streamer))
         error = true;
 
@@ -811,6 +872,7 @@ static bool decode_bmp_color_table(BMPLoadingContext& context)
 
     auto bytes_per_color = context.dib_type == DIBType::Core ? 3 : 4;
     u32 max_colors = 1 << context.dib.core.bpp;
+    ASSERT(context.data_offset >= bmp_header_size + context.dib_size());
     auto size_of_color_table = context.data_offset - bmp_header_size - context.dib_size();
 
     if (context.dib_type <= DIBType::OSV2) {
@@ -822,11 +884,15 @@ static bool decode_bmp_color_table(BMPLoadingContext& context)
         }
     }
 
-    Streamer streamer(context.data + bmp_header_size + context.dib_size(), size_of_color_table);
+    Streamer streamer(context.file_bytes + bmp_header_size + context.dib_size(), size_of_color_table);
     for (u32 i = 0; !streamer.at_end() && i < max_colors; ++i) {
         if (bytes_per_color == 4) {
+            if (!streamer.has_u32())
+                return false;
             context.color_table.append(streamer.read_u32());
         } else {
+            if (!streamer.has_u24())
+                return false;
             context.color_table.append(streamer.read_u24());
         }
     }
@@ -852,7 +918,7 @@ static bool uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuffer& buff
         return false;
     }
 
-    Streamer streamer(context.data + context.data_offset, context.data_size);
+    Streamer streamer(context.file_bytes + context.data_offset, context.file_size - context.data_offset);
 
     auto compression = context.dib.info.compression;
 
@@ -863,11 +929,20 @@ static bool uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuffer& buff
     auto currently_consuming = RLEState::PixelCount;
     i16 pixel_count = 0;
 
+    // ByteBuffer asserts that allocating the memory never fails.
+    // FIXME: ByteBuffer should return either RefPtr<> or Optional<>.
+    // Decoding the RLE data on-the-fly might actually be faster, and avoids this topic entirely.
+    u32 buffer_size;
     if (compression == Compression::RLE24) {
-        buffer = ByteBuffer::create_zeroed(total_rows * round_up_to_power_of_two(total_columns, 4) * 4);
+        buffer_size = total_rows * round_up_to_power_of_two(total_columns, 4) * 4;
     } else {
-        buffer = ByteBuffer::create_zeroed(total_rows * round_up_to_power_of_two(total_columns, 4));
+        buffer_size = total_rows * round_up_to_power_of_two(total_columns, 4);
     }
+    if (buffer_size > 300 * MiB) {
+        IF_BMP_DEBUG(dbg() << "Suspiciously large amount of RLE data");
+        return false;
+    }
+    buffer = ByteBuffer::create_zeroed(buffer_size);
 
     // Avoid as many if statements as possible by pulling out
     // compression-dependent actions into separate lambdas
@@ -905,7 +980,7 @@ static bool uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuffer& buff
                 row++;
             }
             auto index = get_buffer_index();
-            if (index >= buffer.size()) {
+            if (index + 3 >= buffer.size()) {
                 IF_BMP_DEBUG(dbg() << "BMP has badly-formatted RLE data");
                 return false;
             }
@@ -984,7 +1059,7 @@ static bool uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuffer& buff
             if (!result.has_value())
                 return false;
             byte = result.value();
-            for (u8 i = 0; i < pixel_count; ++i) {
+            for (u16 i = 0; i < pixel_count; ++i) {
                 if (compression != Compression::RLE4) {
                     if (!set_byte(byte, true))
                         return false;
@@ -1011,7 +1086,11 @@ static bool uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuffer& buff
             if (byte == 1)
                 return true;
             if (byte == 2) {
+                if (!streamer.has_u8())
+                    return false;
                 u8 offset_x = streamer.read_u8();
+                if (!streamer.has_u8())
+                    return false;
                 u8 offset_y = streamer.read_u8();
                 column += offset_x;
                 if (column >= total_columns) {
@@ -1042,10 +1121,14 @@ static bool uncompress_bmp_rle_data(BMPLoadingContext& context, ByteBuffer& buff
             // Optionally consume a padding byte
             if (compression != Compression::RLE4) {
                 if (pixel_count % 2) {
+                    if (!streamer.has_u8())
+                        return false;
                     byte = streamer.read_u8();
                 }
             } else {
                 if (((pixel_count + 1) / 2) % 2) {
+                    if (!streamer.has_u8())
+                        return false;
                     byte = streamer.read_u8();
                 }
             }
@@ -1104,15 +1187,17 @@ static bool decode_bmp_pixel_data(BMPLoadingContext& context)
         return false;
     }
 
-    auto buffer = ByteBuffer::wrap(context.data + context.data_offset, context.data_size);
+    ByteBuffer rle_buffer;
+    ReadonlyBytes bytes { context.file_bytes + context.data_offset, context.file_size - context.data_offset };
 
     if (context.dib.info.compression == Compression::RLE4 || context.dib.info.compression == Compression::RLE8
         || context.dib.info.compression == Compression::RLE24) {
-        if (!uncompress_bmp_rle_data(context, buffer))
+        if (!uncompress_bmp_rle_data(context, rle_buffer))
             return false;
+        bytes = rle_buffer.bytes();
     }
 
-    Streamer streamer(buffer.data(), buffer.size());
+    Streamer streamer(bytes.data(), bytes.size());
 
     auto process_row = [&](u32 row) -> bool {
         u32 space_remaining_before_consuming_row = streamer.remaining();
@@ -1226,8 +1311,8 @@ static bool decode_bmp_pixel_data(BMPLoadingContext& context)
 static RefPtr<Bitmap> load_bmp_impl(const u8* data, size_t data_size)
 {
     BMPLoadingContext context;
-    context.data = data;
-    context.data_size = data_size;
+    context.file_bytes = data;
+    context.file_size = data_size;
 
     // Forces a decode of the header, dib, and color table as well
     if (!decode_bmp_pixel_data(context)) {
@@ -1241,8 +1326,8 @@ static RefPtr<Bitmap> load_bmp_impl(const u8* data, size_t data_size)
 BMPImageDecoderPlugin::BMPImageDecoderPlugin(const u8* data, size_t data_size)
 {
     m_context = make<BMPLoadingContext>();
-    m_context->data = data;
-    m_context->data_size = data_size;
+    m_context->file_bytes = data;
+    m_context->file_size = data_size;
 }
 
 BMPImageDecoderPlugin::~BMPImageDecoderPlugin()

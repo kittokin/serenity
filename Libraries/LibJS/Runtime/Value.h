@@ -27,8 +27,9 @@
 #pragma once
 
 #include <AK/Assertions.h>
+#include <AK/Format.h>
 #include <AK/Forward.h>
-#include <AK/LogStream.h>
+#include <AK/String.h>
 #include <AK/Types.h>
 #include <LibJS/Forward.h>
 #include <math.h>
@@ -71,9 +72,11 @@ public:
     bool is_accessor() const { return m_type == Type::Accessor; };
     bool is_bigint() const { return m_type == Type::BigInt; };
     bool is_native_property() const { return m_type == Type::NativeProperty; }
+    bool is_nullish() const { return is_null() || is_undefined(); }
     bool is_cell() const { return is_string() || is_accessor() || is_object() || is_bigint() || is_symbol() || is_native_property(); }
     bool is_array() const;
     bool is_function() const;
+    bool is_regexp(GlobalObject& global_object) const;
 
     bool is_nan() const { return is_number() && __builtin_isnan(as_double()); }
     bool is_infinity() const { return is_number() && __builtin_isinf(as_double()); }
@@ -119,40 +122,40 @@ public:
         m_value.as_double = value;
     }
 
-    Value(Object* object)
+    Value(const Object* object)
         : m_type(object ? Type::Object : Type::Null)
     {
-        m_value.as_object = object;
+        m_value.as_object = const_cast<Object*>(object);
     }
 
-    Value(PrimitiveString* string)
+    Value(const PrimitiveString* string)
         : m_type(Type::String)
     {
-        m_value.as_string = string;
+        m_value.as_string = const_cast<PrimitiveString*>(string);
     }
 
-    Value(Symbol* symbol)
+    Value(const Symbol* symbol)
         : m_type(Type::Symbol)
     {
-        m_value.as_symbol = symbol;
+        m_value.as_symbol = const_cast<Symbol*>(symbol);
     }
 
-    Value(Accessor* accessor)
+    Value(const Accessor* accessor)
         : m_type(Type::Accessor)
     {
-        m_value.as_accessor = accessor;
+        m_value.as_accessor = const_cast<Accessor*>(accessor);
     }
 
-    Value(BigInt* bigint)
+    Value(const BigInt* bigint)
         : m_type(Type::BigInt)
     {
-        m_value.as_bigint = bigint;
+        m_value.as_bigint = const_cast<BigInt*>(bigint);
     }
 
-    Value(NativeProperty* native_property)
+    Value(const NativeProperty* native_property)
         : m_type(Type::NativeProperty)
     {
-        m_value.as_native_property = native_property;
+        m_value.as_native_property = const_cast<NativeProperty*>(native_property);
     }
 
     explicit Value(Type type)
@@ -240,16 +243,19 @@ public:
     i32 as_i32() const;
     size_t as_size_t() const;
 
-    String to_string(Interpreter&) const;
-    PrimitiveString* to_primitive_string(Interpreter&);
-    Value to_primitive(Interpreter&, PreferredType preferred_type = PreferredType::Default) const;
-    Object* to_object(Interpreter&, GlobalObject&) const;
-    Value to_numeric(Interpreter&) const;
-    Value to_number(Interpreter&) const;
-    BigInt* to_bigint(Interpreter&) const;
-    double to_double(Interpreter&) const;
-    i32 to_i32(Interpreter&) const;
-    size_t to_size_t(Interpreter&) const;
+    String to_string(GlobalObject&, bool legacy_null_to_empty_string = false) const;
+    PrimitiveString* to_primitive_string(GlobalObject&);
+    Value to_primitive(PreferredType preferred_type = PreferredType::Default) const;
+    Object* to_object(GlobalObject&) const;
+    Value to_numeric(GlobalObject&) const;
+    Value to_number(GlobalObject&) const;
+    BigInt* to_bigint(GlobalObject&) const;
+    double to_double(GlobalObject&) const;
+    i32 to_i32(GlobalObject&) const;
+    size_t to_size_t(GlobalObject&) const;
+    size_t to_length(GlobalObject&) const;
+    size_t to_index(GlobalObject&) const;
+    double to_integer_or_infinity(GlobalObject&) const;
     bool to_boolean() const;
 
     String to_string_without_side_effects() const;
@@ -302,37 +308,47 @@ inline Value js_negative_infinity()
     return Value(-INFINITY);
 }
 
-Value greater_than(Interpreter&, Value lhs, Value rhs);
-Value greater_than_equals(Interpreter&, Value lhs, Value rhs);
-Value less_than(Interpreter&, Value lhs, Value rhs);
-Value less_than_equals(Interpreter&, Value lhs, Value rhs);
-Value bitwise_and(Interpreter&, Value lhs, Value rhs);
-Value bitwise_or(Interpreter&, Value lhs, Value rhs);
-Value bitwise_xor(Interpreter&, Value lhs, Value rhs);
-Value bitwise_not(Interpreter&, Value);
-Value unary_plus(Interpreter&, Value);
-Value unary_minus(Interpreter&, Value);
-Value left_shift(Interpreter&, Value lhs, Value rhs);
-Value right_shift(Interpreter&, Value lhs, Value rhs);
-Value unsigned_right_shift(Interpreter&, Value lhs, Value rhs);
-Value add(Interpreter&, Value lhs, Value rhs);
-Value sub(Interpreter&, Value lhs, Value rhs);
-Value mul(Interpreter&, Value lhs, Value rhs);
-Value div(Interpreter&, Value lhs, Value rhs);
-Value mod(Interpreter&, Value lhs, Value rhs);
-Value exp(Interpreter&, Value lhs, Value rhs);
-Value in(Interpreter&, Value lhs, Value rhs);
-Value instance_of(Interpreter&, Value lhs, Value rhs);
-Value ordinary_has_instance(Interpreter& interpreter, Value lhs, Value rhs);
+Value greater_than(GlobalObject&, Value lhs, Value rhs);
+Value greater_than_equals(GlobalObject&, Value lhs, Value rhs);
+Value less_than(GlobalObject&, Value lhs, Value rhs);
+Value less_than_equals(GlobalObject&, Value lhs, Value rhs);
+Value bitwise_and(GlobalObject&, Value lhs, Value rhs);
+Value bitwise_or(GlobalObject&, Value lhs, Value rhs);
+Value bitwise_xor(GlobalObject&, Value lhs, Value rhs);
+Value bitwise_not(GlobalObject&, Value);
+Value unary_plus(GlobalObject&, Value);
+Value unary_minus(GlobalObject&, Value);
+Value left_shift(GlobalObject&, Value lhs, Value rhs);
+Value right_shift(GlobalObject&, Value lhs, Value rhs);
+Value unsigned_right_shift(GlobalObject&, Value lhs, Value rhs);
+Value add(GlobalObject&, Value lhs, Value rhs);
+Value sub(GlobalObject&, Value lhs, Value rhs);
+Value mul(GlobalObject&, Value lhs, Value rhs);
+Value div(GlobalObject&, Value lhs, Value rhs);
+Value mod(GlobalObject&, Value lhs, Value rhs);
+Value exp(GlobalObject&, Value lhs, Value rhs);
+Value in(GlobalObject&, Value lhs, Value rhs);
+Value instance_of(GlobalObject&, Value lhs, Value rhs);
+Value ordinary_has_instance(GlobalObject&, Value lhs, Value rhs);
 
-bool abstract_eq(Interpreter&, Value lhs, Value rhs);
-bool strict_eq(Interpreter&, Value lhs, Value rhs);
-bool same_value(Interpreter&, Value lhs, Value rhs);
-bool same_value_zero(Interpreter&, Value lhs, Value rhs);
-bool same_value_non_numeric(Interpreter&, Value lhs, Value rhs);
-TriState abstract_relation(Interpreter&, bool left_first, Value lhs, Value rhs);
-size_t length_of_array_like(Interpreter&, Value);
+bool abstract_eq(GlobalObject&, Value lhs, Value rhs);
+bool strict_eq(Value lhs, Value rhs);
+bool same_value(Value lhs, Value rhs);
+bool same_value_zero(Value lhs, Value rhs);
+bool same_value_non_numeric(Value lhs, Value rhs);
+TriState abstract_relation(GlobalObject&, bool left_first, Value lhs, Value rhs);
+size_t length_of_array_like(GlobalObject&, Value);
 
-const LogStream& operator<<(const LogStream&, const Value&);
+}
+
+namespace AK {
+
+template<>
+struct Formatter<JS::Value> : Formatter<StringView> {
+    void format(FormatBuilder& builder, const JS::Value& value)
+    {
+        Formatter<StringView>::format(builder, value.is_empty() ? "<empty>" : value.to_string_without_side_effects());
+    }
+};
 
 }

@@ -54,6 +54,7 @@ typedef int64_t time_t;
 struct tm* localtime(const time_t*);
 struct tm* gmtime(const time_t*);
 time_t mktime(struct tm*);
+time_t timegm(struct tm*);
 time_t time(time_t*);
 char* ctime(const time_t*);
 void tzset();
@@ -71,6 +72,9 @@ typedef int clockid_t;
 
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
+#define CLOCK_MONOTONIC_RAW 4
+#define CLOCK_REALTIME_COARSE 5
+#define CLOCK_MONOTONIC_COARSE 6
 #define TIMER_ABSTIME 99
 
 int clock_gettime(clockid_t, struct timespec*);
@@ -82,8 +86,6 @@ struct tm* gmtime_r(const time_t* timep, struct tm* result);
 struct tm* localtime_r(const time_t* timep, struct tm* result);
 
 double difftime(time_t, time_t);
-size_t strftime(char* s, size_t max, const char* format, const struct tm*);
-
-#define difftime(t1, t0) (double)(t1 - t0)
+size_t strftime(char* s, size_t max, const char* format, const struct tm*) __attribute__((format(strftime, 3, 0)));
 
 __END_DECLS

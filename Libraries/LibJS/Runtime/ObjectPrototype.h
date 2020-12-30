@@ -35,7 +35,7 @@ class ObjectPrototype final : public Object {
 
 public:
     explicit ObjectPrototype(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~ObjectPrototype() override;
 
     // public to serve as intrinsic function %Object.prototype.toString%
@@ -45,6 +45,8 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(has_own_property);
     JS_DECLARE_NATIVE_FUNCTION(to_locale_string);
     JS_DECLARE_NATIVE_FUNCTION(value_of);
+    JS_DECLARE_NATIVE_FUNCTION(property_is_enumerable);
+    JS_DECLARE_NATIVE_FUNCTION(is_prototype_of);
 };
 
 }

@@ -109,6 +109,7 @@ void MenuManager::draw()
             menu.title_font(),
             Gfx::TextAlignment::CenterLeft,
             text_color);
+        //painter.draw_rect(menu.text_rect_in_menubar(), Color::Magenta);
         return IterationDecision::Continue;
     });
 
@@ -146,7 +147,7 @@ void MenuManager::event(Core::Event& event)
         if (m_current_menu && event.type() == Event::KeyDown
             && ((key_event.key() >= Key_A && key_event.key() <= Key_Z)
                 || (key_event.key() >= Key_0 && key_event.key() <= Key_9))) {
-            m_current_search.append_codepoint(key_event.code_point());
+            m_current_search.append_code_point(key_event.code_point());
             m_search_timer->restart(s_search_timeout);
             for (int i = 0; i < m_current_menu->item_count(); ++i) {
                 auto text = m_current_menu->item(i).text();
@@ -180,8 +181,7 @@ void MenuManager::event(Core::Event& event)
 
             if (key_event.key() == Key_Return) {
                 auto hovered_item = m_current_menu->hovered_item();
-
-                if (!hovered_item->is_enabled())
+                if (!hovered_item || !hovered_item->is_enabled())
                     return;
                 if (hovered_item->is_submenu())
                     m_current_menu->descend_into_submenu_at_hovered_item();
@@ -391,7 +391,7 @@ void MenuManager::open_menu(Menu& menu, bool as_current_menu)
     }
 
     if (m_open_menu_stack.find([&menu](auto& other) { return &menu == other.ptr(); }).is_end())
-        m_open_menu_stack.append(menu.make_weak_ptr());
+        m_open_menu_stack.append(menu);
 
     if (as_current_menu || !current_menu()) {
         // Only make this menu the current menu if requested, or if no
@@ -428,13 +428,13 @@ void MenuManager::set_current_menu(Menu* menu)
     m_current_search.clear();
 
     Menu* previous_current_menu = m_current_menu;
-    m_current_menu = menu->make_weak_ptr();
+    m_current_menu = menu;
 
     auto& wm = WindowManager::the();
     if (!previous_current_menu) {
         // When opening the first menu, store the current active input window
         if (auto* active_input = wm.active_input_window())
-            m_previous_input_window = active_input->make_weak_ptr();
+            m_previous_input_window = *active_input;
         else
             m_previous_input_window = nullptr;
     }
@@ -456,7 +456,7 @@ Gfx::IntRect MenuManager::menubar_rect() const
 void MenuManager::set_current_menubar(MenuBar* menubar)
 {
     if (menubar)
-        m_current_menubar = menubar->make_weak_ptr();
+        m_current_menubar = *menubar;
     else
         m_current_menubar = nullptr;
 #ifdef DEBUG_MENUS
@@ -466,7 +466,10 @@ void MenuManager::set_current_menubar(MenuBar* menubar)
     for_each_active_menubar_menu([&](Menu& menu) {
         int text_width = menu.title_font().width(menu.name());
         menu.set_rect_in_menubar({ next_menu_location.x() - MenuManager::menubar_menu_margin() / 2, 0, text_width + MenuManager::menubar_menu_margin(), menubar_rect().height() - 1 });
-        menu.set_text_rect_in_menubar({ next_menu_location, { text_width, menubar_rect().height() } });
+
+        Gfx::IntRect text_rect { next_menu_location.translated(0, 1), { text_width, menubar_rect().height() - 3 } };
+
+        menu.set_text_rect_in_menubar(text_rect);
         next_menu_location.move_by(menu.rect_in_menubar().width(), 0);
         return IterationDecision::Continue;
     });
@@ -481,7 +484,7 @@ void MenuManager::close_menubar(MenuBar& menubar)
 
 void MenuManager::set_system_menu(Menu& menu)
 {
-    m_system_menu = menu.make_weak_ptr();
+    m_system_menu = menu;
     set_current_menubar(m_current_menubar);
 }
 

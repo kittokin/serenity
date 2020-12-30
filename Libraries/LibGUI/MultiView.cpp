@@ -41,21 +41,16 @@ MultiView::MultiView()
     set_content_margins({ 2, 2, 2, 2 });
     m_icon_view = add<IconView>();
     m_table_view = add<TableView>();
-
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     m_columns_view = add<ColumnsView>();
-#endif
 
     m_icon_view->on_activation = [&](auto& index) {
         if (on_activation)
             on_activation(index);
     };
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     m_columns_view->on_activation = [&](auto& index) {
         if (on_activation)
             on_activation(index);
     };
-#endif
     m_table_view->on_activation = [&](auto& index) {
         if (on_activation)
             on_activation(index);
@@ -69,12 +64,10 @@ MultiView::MultiView()
         if (on_selection_change)
             on_selection_change();
     };
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     m_columns_view->on_selection_change = [this] {
         if (on_selection_change)
             on_selection_change();
     };
-#endif
 
     m_table_view->on_context_menu_request = [this](auto& index, auto& event) {
         if (on_context_menu_request)
@@ -84,12 +77,10 @@ MultiView::MultiView()
         if (on_context_menu_request)
             on_context_menu_request(index, event);
     };
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     m_columns_view->on_context_menu_request = [this](auto& index, auto& event) {
         if (on_context_menu_request)
             on_context_menu_request(index, event);
     };
-#endif
 
     m_table_view->on_drop = [this](auto& index, auto& event) {
         if (on_drop)
@@ -99,16 +90,13 @@ MultiView::MultiView()
         if (on_drop)
             on_drop(index, event);
     };
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     m_columns_view->on_drop = [this](auto& index, auto& event) {
         if (on_drop)
             on_drop(index, event);
     };
-#endif
 
     build_actions();
     set_view_mode(ViewMode::Icon);
-    apply_multi_select();
 }
 
 MultiView::~MultiView()
@@ -126,13 +114,11 @@ void MultiView::set_view_mode(ViewMode mode)
         m_view_as_table_action->set_checked(true);
         return;
     }
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     if (mode == ViewMode::Columns) {
         set_active_widget(m_columns_view);
         m_view_as_columns_action->set_checked(true);
         return;
     }
-#endif
     if (mode == ViewMode::Icon) {
         set_active_widget(m_icon_view);
         m_view_as_icons_action->set_checked(true);
@@ -157,9 +143,7 @@ void MultiView::set_model_column(int column)
         return;
     m_model_column = column;
     m_icon_view->set_model_column(column);
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     m_columns_view->set_model_column(column);
-#endif
 }
 
 void MultiView::set_column_hidden(int column_index, bool hidden)
@@ -179,37 +163,35 @@ void MultiView::build_actions()
             set_view_mode(ViewMode::Icon);
         });
 
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     m_view_as_columns_action = Action::create_checkable(
         "Columns view", Gfx::Bitmap::load_from_file("/res/icons/16x16/columns-view.png"), [this](auto&) {
             set_view_mode(ViewMode::Columns);
         });
-#endif
 
     m_view_type_action_group = make<ActionGroup>();
     m_view_type_action_group->set_exclusive(true);
     m_view_type_action_group->add_action(*m_view_as_table_action);
     m_view_type_action_group->add_action(*m_view_as_icons_action);
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
     m_view_type_action_group->add_action(*m_view_as_columns_action);
-#endif
 }
 
-void MultiView::apply_multi_select()
+AbstractView::SelectionMode MultiView::selection_mode() const
 {
-    m_table_view->set_multi_select(m_multi_select);
-    m_icon_view->set_multi_select(m_multi_select);
-#ifdef MULTIVIEW_WITH_COLUMNSVIEW
-    //m_columns_view->set_multi_select(m_multi_select);
-#endif
+    return m_table_view->selection_mode();
 }
 
-void MultiView::set_multi_select(bool multi_select)
+void MultiView::set_selection_mode(AbstractView::SelectionMode selection_mode)
 {
-    if (m_multi_select == multi_select)
-        return;
-    m_multi_select = multi_select;
-    apply_multi_select();
+    m_table_view->set_selection_mode(selection_mode);
+    m_icon_view->set_selection_mode(selection_mode);
+    m_columns_view->set_selection_mode(selection_mode);
+}
+
+void MultiView::set_key_column_and_sort_order(int column, SortOrder sort_order)
+{
+    for_each_view_implementation([&](auto& view) {
+        view.set_key_column_and_sort_order(column, sort_order);
+    });
 }
 
 }

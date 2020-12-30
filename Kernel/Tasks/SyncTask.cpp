@@ -33,12 +33,12 @@ namespace Kernel {
 
 void SyncTask::spawn()
 {
-    Thread* syncd_thread = nullptr;
+    RefPtr<Thread> syncd_thread;
     Process::create_kernel_process(syncd_thread, "SyncTask", [] {
         dbg() << "SyncTask is running";
         for (;;) {
             VFS::the().sync();
-            Thread::current()->sleep(1 * TimeManagement::the().ticks_per_second());
+            Thread::current()->sleep({ 1, 0 });
         }
     });
 }

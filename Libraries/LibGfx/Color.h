@@ -26,7 +26,10 @@
 
 #pragma once
 
+#include <AK/Assertions.h>
+#include <AK/Format.h>
 #include <AK/Forward.h>
+#include <AK/SIMD.h>
 #include <AK/StdLibExtras.h>
 #include <LibIPC/Forward.h>
 
@@ -35,7 +38,7 @@ namespace Gfx {
 enum class ColorRole;
 typedef u32 RGBA32;
 
-inline constexpr u32 make_rgb(u8 r, u8 g, u8 b)
+constexpr u32 make_rgb(u8 r, u8 g, u8 b)
 {
     return ((r << 16) | (g << 8) | b);
 }
@@ -87,10 +90,10 @@ public:
     static constexpr Color from_rgb(unsigned rgb) { return Color(rgb | 0xff000000); }
     static constexpr Color from_rgba(unsigned rgba) { return Color(rgba); }
 
-    u8 red() const { return (m_value >> 16) & 0xff; }
-    u8 green() const { return (m_value >> 8) & 0xff; }
-    u8 blue() const { return m_value & 0xff; }
-    u8 alpha() const { return (m_value >> 24) & 0xff; }
+    constexpr u8 red() const { return (m_value >> 16) & 0xff; }
+    constexpr u8 green() const { return (m_value >> 8) & 0xff; }
+    constexpr u8 blue() const { return m_value & 0xff; }
+    constexpr u8 alpha() const { return (m_value >> 24) & 0xff; }
 
     void set_alpha(u8 value)
     {
@@ -98,25 +101,25 @@ public:
         m_value |= value << 24;
     }
 
-    void set_red(u8 value)
+    constexpr void set_red(u8 value)
     {
         m_value &= 0xff00ffff;
         m_value |= value << 16;
     }
 
-    void set_green(u8 value)
+    constexpr void set_green(u8 value)
     {
         m_value &= 0xffff00ff;
         m_value |= value << 8;
     }
 
-    void set_blue(u8 value)
+    constexpr void set_blue(u8 value)
     {
         m_value &= 0xffffff00;
         m_value |= value;
     }
 
-    Color with_alpha(u8 alpha)
+    Color with_alpha(u8 alpha) const
     {
         return Color((m_value & 0x00ffffff) | alpha << 24);
     }
@@ -129,12 +132,31 @@ public:
         if (!source.alpha())
             return *this;
 
+#ifdef __SSE__
+        using AK::SIMD::i32x4;
+
+        const i32x4 color = {
+            red(),
+            green(),
+            blue()
+        };
+        const i32x4 source_color = {
+            source.red(),
+            source.green(),
+            source.blue()
+        };
+
+        const int d = 255 * (alpha() + source.alpha()) - alpha() * source.alpha();
+        const i32x4 out = (color * alpha() * (255 - source.alpha()) + 255 * source.alpha() * source_color) / d;
+        return Color(out[0], out[1], out[2], d / 255);
+#else
         int d = 255 * (alpha() + source.alpha()) - alpha() * source.alpha();
         u8 r = (red() * alpha() * (255 - source.alpha()) + 255 * source.alpha() * source.red()) / d;
         u8 g = (green() * alpha() * (255 - source.alpha()) + 255 * source.alpha() * source.green()) / d;
         u8 b = (blue() * alpha() * (255 - source.alpha()) + 255 * source.alpha() * source.blue()) / d;
         u8 a = d / 255;
         return Color(r, g, b, a);
+#endif
     }
 
     Color to_grayscale() const
@@ -155,7 +177,12 @@ public:
 
     Color inverted() const
     {
-        return Color(~red(), ~green(), ~blue());
+        return Color(~red(), ~green(), ~blue(), alpha());
+    }
+
+    Color xored(const Color& other) const
+    {
+        return Color(((other.m_value ^ m_value) & 0x00ffffff) | (m_value & 0xff000000));
     }
 
     RGBA32 value() const { return m_value; }
@@ -196,14 +223,17 @@ public:
         if (hsv.hue >= 360.0)
             hsv.hue -= 360.0;
 
-        hsv.hue /= 360.0;
-
         if (!max)
             hsv.saturation = 0;
         else
             hsv.saturation = chroma / max;
 
         hsv.value = max;
+
+        ASSERT(hsv.hue >= 0.0 && hsv.hue < 360.0);
+        ASSERT(hsv.saturation >= 0.0 && hsv.saturation <= 1.0);
+        ASSERT(hsv.value >= 0.0 && hsv.value <= 1.0);
+
         return hsv;
     }
 
@@ -214,9 +244,13 @@ public:
 
     static Color from_hsv(const HSV& hsv)
     {
-        double hue = hsv.hue * 2.0;
-        double saturation = hsv.saturation / 255.0;
-        double value = hsv.value / 255.0;
+        ASSERT(hsv.hue >= 0.0 && hsv.hue < 360.0);
+        ASSERT(hsv.saturation >= 0.0 && hsv.saturation <= 1.0);
+        ASSERT(hsv.value >= 0.0 && hsv.value <= 1.0);
+
+        double hue = hsv.hue;
+        double saturation = hsv.saturation;
+        double value = hsv.value;
 
         int high = static_cast<int>(hue / 60.0) % 6;
         double f = (hue / 60.0) - high;
@@ -282,7 +316,18 @@ const LogStream& operator<<(const LogStream&, Color);
 
 using Gfx::Color;
 
+namespace AK {
+
+template<>
+struct Formatter<Gfx::Color> : public Formatter<StringView> {
+    void format(FormatBuilder& builder, const Gfx::Color& value);
+};
+
+}
+
 namespace IPC {
+
 bool encode(Encoder&, const Gfx::Color&);
 bool decode(Decoder&, Gfx::Color&);
+
 }

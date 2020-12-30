@@ -27,6 +27,7 @@
 #include "BackgroundWidget.h"
 #include "TextWidget.h"
 #include "UnuncheckableButton.h"
+#include <AK/ByteBuffer.h>
 #include <AK/Optional.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
@@ -35,14 +36,14 @@
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
-#include <LibGUI/Desktop.h>
-#include <LibGUI/Image.h>
+#include <LibGUI/ImageWidget.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/StackWidget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -53,35 +54,27 @@ struct ContentPage {
     Vector<String> content;
 };
 
-Optional<Vector<ContentPage>> parse_welcome_file(const String& path)
+static Optional<Vector<ContentPage>> parse_welcome_file(const String& path)
 {
-    const auto error = Optional<Vector<ContentPage>>();
     auto file = Core::File::construct(path);
-
     if (!file->open(Core::IODevice::ReadOnly))
-        return error;
+        return {};
 
     Vector<ContentPage> pages;
     StringBuilder current_output_line;
     bool started = false;
     ContentPage current;
-    while (true) {
-        auto buffer = file->read_line(4096);
-        if (buffer.is_null()) {
-            if (file->error()) {
-                file->close();
-                return error;
-            }
-
-            break;
+    while (file->can_read_line()) {
+        auto line = file->read_line();
+        if (line.is_empty()) {
+            if (!current_output_line.to_string().is_empty())
+                current.content.append(current_output_line.to_string());
+            current_output_line.clear();
+            continue;
         }
-
-        auto line = String((char*)buffer.data());
-        if (line.length() > 1)
-            line = line.substring(0, line.length() - 1); // remove newline
         switch (line[0]) {
         case '*':
-            dbg() << "menu_item line:\t" << line;
+            dbgln("menu_item line:\t{}", line);
             if (started)
                 pages.append(current);
             else
@@ -91,25 +84,18 @@ Optional<Vector<ContentPage>> parse_welcome_file(const String& path)
             current.menu_name = line.substring(2, line.length() - 2);
             break;
         case '$':
-            dbg() << "icon line: \t" << line;
+            dbgln("icon line: \t{}", line);
             current.icon = line.substring(2, line.length() - 2);
             break;
         case '>':
-            dbg() << "title line:\t" << line;
+            dbgln("title line:\t{}", line);
             current.title = line.substring(2, line.length() - 2);
             break;
-        case '\n':
-            dbg() << "newline";
-
-            if (!current_output_line.to_string().is_empty())
-                current.content.append(current_output_line.to_string());
-            current_output_line.clear();
-            break;
         case '#':
-            dbg() << "comment line:\t" << line;
+            dbgln("comment line:\t{}", line);
             break;
         default:
-            dbg() << "content line:\t" << line;
+            dbgln("content line:\t", line);
             if (current_output_line.length() != 0)
                 current_output_line.append(' ');
             current_output_line.append(line);
@@ -122,7 +108,6 @@ Optional<Vector<ContentPage>> parse_welcome_file(const String& path)
         pages.append(current);
     }
 
-    file->close();
     return pages;
 }
 
@@ -156,28 +141,24 @@ int main(int argc, char** argv)
 
     auto window = GUI::Window::construct();
     window->set_title("Welcome");
-    Gfx::IntRect window_rect { 0, 0, 640, 360 };
-    window_rect.center_within(GUI::Desktop::the().rect());
-    window->set_resizable(true);
-    window->set_rect(window_rect);
+    window->resize(640, 360);
+    window->center_on_screen();
 
     auto& background = window->set_main_widget<BackgroundWidget>();
     background.set_fill_with_background_color(false);
     background.set_layout<GUI::VerticalBoxLayout>();
     background.layout()->set_margins({ 16, 8, 16, 8 });
     background.layout()->set_spacing(8);
-    background.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fill);
 
     //
     // header
     //
 
     auto& header = background.add<GUI::Label>();
-    header.set_font(Gfx::Font::load_from_file("/res/fonts/PebbletonBold11.font"));
+    header.set_font(Gfx::Font::load_from_file("/res/fonts/PebbletonBold14.font"));
     header.set_text("Welcome to SerenityOS!");
     header.set_text_alignment(Gfx::TextAlignment::CenterLeft);
-    header.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    header.set_preferred_size(0, 30);
+    header.set_fixed_height(30);
 
     //
     // main section
@@ -187,17 +168,14 @@ int main(int argc, char** argv)
     main_section.set_layout<GUI::HorizontalBoxLayout>();
     main_section.layout()->set_margins({ 0, 0, 0, 0 });
     main_section.layout()->set_spacing(8);
-    main_section.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fill);
 
     auto& menu = main_section.add<GUI::Widget>();
     menu.set_layout<GUI::VerticalBoxLayout>();
     menu.layout()->set_margins({ 0, 0, 0, 0 });
     menu.layout()->set_spacing(4);
-    menu.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    menu.set_preferred_size(100, 0);
+    menu.set_fixed_width(100);
 
     auto& stack = main_section.add<GUI::StackWidget>();
-    stack.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fill);
 
     bool first = true;
     for (auto& page : pages) {
@@ -205,31 +183,27 @@ int main(int argc, char** argv)
         content.set_layout<GUI::VerticalBoxLayout>();
         content.layout()->set_margins({ 0, 0, 0, 0 });
         content.layout()->set_spacing(8);
-        content.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fill);
 
         auto& title_box = content.add<GUI::Widget>();
         title_box.set_layout<GUI::HorizontalBoxLayout>();
         title_box.layout()->set_spacing(4);
-        title_box.set_preferred_size(0, 16);
-        title_box.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
+        title_box.set_fixed_height(16);
 
         if (!page.icon.is_empty()) {
-            auto& icon = title_box.add<GUI::Image>();
-            icon.set_preferred_size(16, 16);
-            icon.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
+            auto& icon = title_box.add<GUI::ImageWidget>();
+            icon.set_fixed_size(16, 16);
             icon.load_from_file(page.icon);
         }
 
         auto& content_title = title_box.add<GUI::Label>();
-        content_title.set_font(Gfx::Font::default_bold_font());
+        content_title.set_font(Gfx::FontDatabase::default_bold_font());
         content_title.set_text(page.title);
         content_title.set_text_alignment(Gfx::TextAlignment::CenterLeft);
-        content_title.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-        content_title.set_preferred_size(0, 10);
+        content_title.set_fixed_height(10);
 
         for (auto& paragraph : page.content) {
             auto& content_text = content.add<TextWidget>();
-            content_text.set_font(Gfx::Font::default_font());
+            content_text.set_font(Gfx::FontDatabase::default_font());
             content_text.set_text(paragraph);
             content_text.set_text_alignment(Gfx::TextAlignment::TopLeft);
             content_text.set_line_height(12);
@@ -237,11 +211,10 @@ int main(int argc, char** argv)
         }
 
         auto& menu_option = menu.add<UnuncheckableButton>();
-        menu_option.set_font(Gfx::Font::default_font());
+        menu_option.set_font(Gfx::FontDatabase::default_font());
         menu_option.set_text(page.menu_name);
         menu_option.set_text_alignment(Gfx::TextAlignment::CenterLeft);
-        menu_option.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-        menu_option.set_preferred_size(0, 20);
+        menu_option.set_fixed_height(20);
         menu_option.set_checkable(true);
         menu_option.set_exclusive(true);
 

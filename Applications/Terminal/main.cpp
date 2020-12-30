@@ -30,13 +30,18 @@
 #include <LibGUI/ActionGroup.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
-#include <LibGUI/FontDatabase.h>
+#include <LibGUI/Button.h>
+#include <LibGUI/CheckBox.h>
+#include <LibGUI/Event.h>
+#include <LibGUI/FontPicker.h>
 #include <LibGUI/GroupBox.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/MenuBar.h>
 #include <LibGUI/RadioButton.h>
 #include <LibGUI/Slider.h>
 #include <LibGUI/SpinBox.h>
+#include <LibGUI/TextBox.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Font.h>
@@ -46,6 +51,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pwd.h>
+#include <serenity.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
@@ -53,15 +59,49 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-static void run_command(int ptm_fd, String command)
+static void utmp_update(const char* tty, pid_t pid, bool create)
+{
+    if (!tty)
+        return;
+    int utmpupdate_pid = fork();
+    if (utmpupdate_pid < 0) {
+        perror("fork");
+        return;
+    }
+    if (utmpupdate_pid == 0) {
+        // Be careful here! Because fork() only clones one thread it's
+        // possible that we deadlock on anything involving a mutex,
+        // including the heap! So resort to low-level APIs
+        char pid_str[32];
+        snprintf(pid_str, sizeof(pid_str), "%d", pid);
+        execl("/bin/utmpupdate", "/bin/utmpupdate", "-f", "Terminal", "-p", pid_str, (create ? "-c" : "-d"), tty, nullptr);
+    } else {
+    wait_again:
+        int status = 0;
+        if (waitpid(utmpupdate_pid, &status, 0) < 0) {
+            int err = errno;
+            if (err == EINTR)
+                goto wait_again;
+            perror("waitpid");
+            return;
+        }
+        if (WIFEXITED(status) && WEXITSTATUS(status) != 0)
+            dbgln("Terminal: utmpupdate exited with status {}", WEXITSTATUS(status));
+        else if (WIFSIGNALED(status))
+            dbgln("Terminal: utmpupdate exited due to unhandled signal {}", WTERMSIG(status));
+    }
+}
+
+static pid_t run_command(int ptm_fd, String command)
 {
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork");
-        dbg() << "run_command: could not fork to run '" << command << "'";
-        return;
+        dbgln("run_command: could not fork to run '{}'", command);
+        return pid;
     }
 
     if (pid == 0) {
@@ -131,14 +171,16 @@ static void run_command(int ptm_fd, String command)
         }
         ASSERT_NOT_REACHED();
     }
+
+    return pid;
 }
 
-RefPtr<GUI::Window> create_settings_window(TerminalWidget& terminal)
+static RefPtr<GUI::Window> create_settings_window(TerminalWidget& terminal)
 {
     auto window = GUI::Window::construct();
-    window->set_title("Terminal Settings");
+    window->set_title("Terminal settings");
     window->set_resizable(false);
-    window->set_rect(50, 50, 200, 185);
+    window->resize(200, 210);
     window->set_modal(true);
 
     auto& settings = window->set_main_widget<GUI::Widget>();
@@ -147,45 +189,131 @@ RefPtr<GUI::Window> create_settings_window(TerminalWidget& terminal)
     settings.set_layout<GUI::VerticalBoxLayout>();
     settings.layout()->set_margins({ 4, 4, 4, 4 });
 
-    auto& radio_container = settings.add<GUI::GroupBox>("Bell Mode");
+    auto& radio_container = settings.add<GUI::GroupBox>("Bell mode");
     radio_container.set_layout<GUI::VerticalBoxLayout>();
     radio_container.layout()->set_margins({ 6, 16, 6, 6 });
-    radio_container.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    radio_container.set_preferred_size(100, 70);
+    radio_container.set_fixed_height(94);
 
-    auto& sysbell_radio = radio_container.add<GUI::RadioButton>("Use (Audible) System Bell");
-    auto& visbell_radio = radio_container.add<GUI::RadioButton>("Use (Visual) Terminal Bell");
-    sysbell_radio.set_checked(terminal.should_beep());
-    visbell_radio.set_checked(!terminal.should_beep());
-    sysbell_radio.on_checked = [&terminal](const bool checked) {
-        terminal.set_should_beep(checked);
+    auto& sysbell_radio = radio_container.add<GUI::RadioButton>("Use (audible) system Bell");
+    auto& visbell_radio = radio_container.add<GUI::RadioButton>("Use (visual) bell");
+    auto& nobell_radio = radio_container.add<GUI::RadioButton>("Disable bell");
+
+    switch (terminal.bell_mode()) {
+    case TerminalWidget::BellMode::Visible:
+        visbell_radio.set_checked(true);
+        break;
+    case TerminalWidget::BellMode::AudibleBeep:
+        sysbell_radio.set_checked(true);
+        break;
+    case TerminalWidget::BellMode::Disabled:
+        nobell_radio.set_checked(true);
+        break;
+    }
+
+    sysbell_radio.on_checked = [&terminal](const bool) {
+        terminal.set_bell_mode(TerminalWidget::BellMode::AudibleBeep);
+    };
+    visbell_radio.on_checked = [&terminal](const bool) {
+        terminal.set_bell_mode(TerminalWidget::BellMode::Visible);
+    };
+    nobell_radio.on_checked = [&terminal](const bool) {
+        terminal.set_bell_mode(TerminalWidget::BellMode::Disabled);
     };
 
-    auto& slider_container = settings.add<GUI::GroupBox>("Background Opacity");
+    auto& slider_container = settings.add<GUI::GroupBox>("Background opacity");
     slider_container.set_layout<GUI::VerticalBoxLayout>();
     slider_container.layout()->set_margins({ 6, 16, 6, 6 });
-    slider_container.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    slider_container.set_preferred_size(100, 50);
+    slider_container.set_fixed_height(50);
     auto& slider = slider_container.add<GUI::HorizontalSlider>();
 
-    slider.on_value_changed = [&terminal](int value) {
+    slider.on_change = [&terminal](int value) {
         terminal.set_opacity(value);
     };
 
     slider.set_range(0, 255);
     slider.set_value(terminal.opacity());
 
-    auto& spinbox_container = settings.add<GUI::GroupBox>("Scroll Length");
-    spinbox_container.set_layout<GUI::VerticalBoxLayout>();
-    spinbox_container.layout()->set_margins({ 6, 16, 6, 6 });
-    spinbox_container.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    spinbox_container.set_preferred_size(100, 46);
+    auto& history_size_spinbox_container = settings.add<GUI::GroupBox>("Maximum scrollback history lines");
+    history_size_spinbox_container.set_layout<GUI::VerticalBoxLayout>();
+    history_size_spinbox_container.layout()->set_margins({ 6, 16, 6, 6 });
+    history_size_spinbox_container.set_fixed_height(46);
 
-    auto& spinbox = spinbox_container.add<GUI::SpinBox>();
-    spinbox.set_min(1);
-    spinbox.set_value(terminal.scroll_length());
-    spinbox.on_change = [&terminal](int value) {
-        terminal.set_scroll_length(value);
+    auto& history_size_spinbox = history_size_spinbox_container.add<GUI::SpinBox>();
+    history_size_spinbox.set_range(0, 40960);
+    history_size_spinbox.set_value(terminal.max_history_size());
+    history_size_spinbox.on_change = [&terminal](int value) {
+        terminal.set_max_history_size(value);
+    };
+
+    return window;
+}
+
+static RefPtr<GUI::Window> create_find_window(TerminalWidget& terminal)
+{
+    auto window = GUI::Window::construct();
+    window->set_title("Find in Terminal");
+    window->set_resizable(false);
+    window->resize(300, 90);
+    window->set_modal(true);
+
+    auto& search = window->set_main_widget<GUI::Widget>();
+    search.set_fill_with_background_color(true);
+    search.set_background_role(ColorRole::Button);
+    search.set_layout<GUI::VerticalBoxLayout>();
+    search.layout()->set_margins({ 4, 4, 4, 4 });
+
+    auto& find = search.add<GUI::Widget>();
+    find.set_layout<GUI::HorizontalBoxLayout>();
+    find.layout()->set_margins({ 4, 4, 4, 4 });
+    find.set_fixed_height(30);
+
+    auto& find_textbox = find.add<GUI::TextBox>();
+    find_textbox.set_fixed_width(230);
+    find_textbox.set_focus(true);
+    if (terminal.has_selection()) {
+        String selected_text = terminal.selected_text();
+        selected_text.replace("\n", " ", true);
+        find_textbox.set_text(selected_text);
+    }
+    auto& find_backwards = find.add<GUI::Button>();
+    find_backwards.set_fixed_width(25);
+    find_backwards.set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/upward-triangle.png"));
+    auto& find_forwards = find.add<GUI::Button>();
+    find_forwards.set_fixed_width(25);
+    find_forwards.set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/downward-triangle.png"));
+
+    find_textbox.on_return_pressed = [&]() {
+        find_backwards.click();
+    };
+
+    auto& match_case = search.add<GUI::CheckBox>("Case sensitive");
+    auto& wrap_around = search.add<GUI::CheckBox>("Wrap around");
+
+    find_backwards.on_click = [&](auto) {
+        auto needle = find_textbox.text();
+        if (needle.is_empty()) {
+            return;
+        }
+
+        auto found_range = terminal.find_previous(needle, terminal.normalized_selection().start(), match_case.is_checked(), wrap_around.is_checked());
+
+        if (found_range.is_valid()) {
+            terminal.scroll_to_row(found_range.start().row());
+            terminal.set_selection(found_range);
+        }
+    };
+    find_forwards.on_click = [&](auto) {
+        auto needle = find_textbox.text();
+        if (needle.is_empty()) {
+            return;
+        }
+
+        auto found_range = terminal.find_next(needle, terminal.normalized_selection().end(), match_case.is_checked(), wrap_around.is_checked());
+
+        if (found_range.is_valid()) {
+            terminal.scroll_to_row(found_range.start().row());
+            terminal.set_selection(found_range);
+        }
     };
 
     return window;
@@ -238,10 +366,17 @@ int main(int argc, char** argv)
 
     RefPtr<Core::ConfigFile> config = Core::ConfigFile::get_for_app("Terminal");
 
+    pid_t shell_pid = 0;
+
     if (command_to_execute)
-        run_command(ptm_fd, command_to_execute);
+        shell_pid = run_command(ptm_fd, command_to_execute);
     else
-        run_command(ptm_fd, config->read_entry("Startup", "Command", ""));
+        shell_pid = run_command(ptm_fd, config->read_entry("Startup", "Command", ""));
+
+    auto* pts_name = ptsname(ptm_fd);
+    utmp_update(pts_name, shell_pid, true);
+
+    auto app_icon = GUI::Icon::default_icon("app-terminal");
 
     auto window = GUI::Window::construct();
     window->set_title("Terminal");
@@ -255,27 +390,30 @@ int main(int argc, char** argv)
     terminal.on_title_change = [&](auto& title) {
         window->set_title(title);
     };
-    window->move_to(300, 300);
     terminal.apply_size_increments_to_window(*window);
     window->show();
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-terminal.png"));
-    terminal.set_should_beep(config->read_bool_entry("Window", "AudibleBeep", false));
+    window->set_icon(app_icon.bitmap_for_size(16));
+
+    auto bell = config->read_entry("Window", "Bell", "Visible");
+    if (bell == "AudibleBeep") {
+        terminal.set_bell_mode(TerminalWidget::BellMode::AudibleBeep);
+    } else if (bell == "Disabled") {
+        terminal.set_bell_mode(TerminalWidget::BellMode::Disabled);
+    } else {
+        terminal.set_bell_mode(TerminalWidget::BellMode::Visible);
+    }
 
     RefPtr<GUI::Window> settings_window;
+    RefPtr<GUI::Window> find_window;
 
     auto new_opacity = config->read_num_entry("Window", "Opacity", 255);
     terminal.set_opacity(new_opacity);
     window->set_has_alpha_channel(new_opacity < 255);
 
-    auto menubar = GUI::MenuBar::construct();
+    auto new_scrollback_size = config->read_num_entry("Terminal", "MaxHistorySize", terminal.max_history_size());
+    terminal.set_max_history_size(new_scrollback_size);
 
-    auto& app_menu = menubar->add_menu("Terminal");
-    app_menu.add_action(GUI::Action::create("Open new terminal", { Mod_Ctrl | Mod_Shift, Key_N }, Gfx::Bitmap::load_from_file("/res/icons/16x16/app-terminal.png"), [&](auto&) {
-        pid_t child;
-        const char* argv[] = { "Terminal", nullptr };
-        posix_spawn(&child, "/bin/Terminal", nullptr, nullptr, const_cast<char**>(argv), environ);
-    }));
-    app_menu.add_action(GUI::Action::create("Settings...", Gfx::Bitmap::load_from_file("/res/icons/gear16.png"),
+    auto open_settings_action = GUI::Action::create("Settings...", Gfx::Bitmap::load_from_file("/res/icons/16x16/gear.png"),
         [&](const GUI::Action&) {
             if (!settings_window) {
                 settings_window = create_settings_window(terminal);
@@ -284,43 +422,75 @@ int main(int argc, char** argv)
                     return GUI::Window::CloseRequestDecision::Close;
                 };
             }
-            settings_window->show();
+            if (!settings_window->is_visible()) {
+                settings_window->center_within(*window);
+                settings_window->show();
+            }
             settings_window->move_to_front();
-        }));
+        });
+
+    terminal.context_menu().add_separator();
+    auto pick_font_action = GUI::Action::create("Terminal font...", Gfx::Bitmap::load_from_file("/res/icons/16x16/app-font-editor.png"),
+        [&](auto&) {
+            auto picker = GUI::FontPicker::construct(window, &terminal.font(), true);
+            if (picker->exec() == GUI::Dialog::ExecOK) {
+                terminal.set_font(picker->font());
+                config->write_entry("Text", "Font", picker->font()->qualified_name());
+                config->sync();
+            }
+        });
+
+    terminal.context_menu().add_action(pick_font_action);
+
+    terminal.context_menu().add_separator();
+    terminal.context_menu().add_action(open_settings_action);
+
+    auto menubar = GUI::MenuBar::construct();
+
+    auto& app_menu = menubar->add_menu("Terminal");
+    app_menu.add_action(GUI::Action::create("Open new terminal", { Mod_Ctrl | Mod_Shift, Key_N }, Gfx::Bitmap::load_from_file("/res/icons/16x16/app-terminal.png"), [&](auto&) {
+        pid_t child;
+        const char* argv[] = { "Terminal", nullptr };
+        if ((errno = posix_spawn(&child, "/bin/Terminal", nullptr, nullptr, const_cast<char**>(argv), environ))) {
+            perror("posix_spawn");
+        } else {
+            if (disown(child) < 0)
+                perror("disown");
+        }
+    }));
+
+    app_menu.add_action(open_settings_action);
     app_menu.add_separator();
     app_menu.add_action(GUI::CommonActions::make_quit_action([](auto&) {
-        dbgprintf("Terminal: Quit menu activated!\n");
+        dbgln("Terminal: Quit menu activated!");
         GUI::Application::the()->quit();
     }));
 
     auto& edit_menu = menubar->add_menu("Edit");
     edit_menu.add_action(terminal.copy_action());
     edit_menu.add_action(terminal.paste_action());
+    edit_menu.add_separator();
+    edit_menu.add_action(GUI::Action::create("Find", { Mod_Ctrl | Mod_Shift, Key_F }, Gfx::Bitmap::load_from_file("/res/icons/16x16/find.png"),
+        [&](auto&) {
+            if (!find_window) {
+                find_window = create_find_window(terminal);
+                find_window->on_close_request = [&] {
+                    find_window = nullptr;
+                    return GUI::Window::CloseRequestDecision::Close;
+                };
+            }
+            find_window->show();
+            find_window->move_to_front();
+        }));
 
     auto& view_menu = menubar->add_menu("View");
     view_menu.add_action(terminal.clear_including_history_action());
-
-    GUI::ActionGroup font_action_group;
-    font_action_group.set_exclusive(true);
-    auto& font_menu = menubar->add_menu("Font");
-    GUI::FontDatabase::the().for_each_fixed_width_font([&](const StringView& font_name) {
-        auto action = GUI::Action::create_checkable(font_name, [&](auto& action) {
-            terminal.set_font(GUI::FontDatabase::the().get_by_name(action.text()));
-            auto metadata = GUI::FontDatabase::the().get_metadata_by_name(action.text());
-            ASSERT(metadata.has_value());
-            config->write_entry("Text", "Font", metadata.value().path);
-            config->sync();
-            terminal.force_repaint();
-        });
-        font_action_group.add_action(*action);
-        if (terminal.font().name() == font_name)
-            action->set_checked(true);
-        font_menu.add_action(*action);
-    });
+    view_menu.add_separator();
+    view_menu.add_action(pick_font_action);
 
     auto& help_menu = menubar->add_menu("Help");
     help_menu.add_action(GUI::Action::create("About", [&](auto&) {
-        GUI::AboutDialog::show("Terminal", Gfx::Bitmap::load_from_file("/res/icons/32x32/app-terminal.png"), window);
+        GUI::AboutDialog::show("Terminal", app_icon.bitmap_for_size(32), window);
     }));
 
     app->set_menubar(move(menubar));
@@ -330,7 +500,22 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (unveil("/bin", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
     if (unveil("/bin/Terminal", "x") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil("/bin/utmpupdate", "x") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil("/etc/FileIconProvider.ini", "r") < 0) {
         perror("unveil");
         return 1;
     }
@@ -348,5 +533,8 @@ int main(int argc, char** argv)
     unveil(nullptr, nullptr);
 
     config->sync();
-    return app->exec();
+    int result = app->exec();
+    dbgln("Exiting terminal, updating utmp");
+    utmp_update(pts_name, 0, false);
+    return result;
 }

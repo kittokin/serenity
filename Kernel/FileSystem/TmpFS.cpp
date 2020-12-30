@@ -27,6 +27,7 @@
 #include <Kernel/FileSystem/TmpFS.h>
 #include <Kernel/Process.h>
 #include <Kernel/Thread.h>
+#include <LibC/limits.h>
 
 namespace Kernel {
 
@@ -113,6 +114,10 @@ NonnullRefPtr<TmpFSInode> TmpFSInode::create(TmpFS& fs, InodeMetadata metadata, 
 NonnullRefPtr<TmpFSInode> TmpFSInode::create_root(TmpFS& fs)
 {
     InodeMetadata metadata;
+    auto now = kgettimeofday();
+    metadata.atime = now.tv_sec;
+    metadata.ctime = now.tv_sec;
+    metadata.mtime = now.tv_sec;
     metadata.mode = S_IFDIR | S_ISVTX | 0777;
     return create(fs, metadata, { fs.fsid(), 1 });
 }
@@ -124,7 +129,7 @@ InodeMetadata TmpFSInode::metadata() const
     return m_metadata;
 }
 
-KResult TmpFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntry&)> callback) const
+KResult TmpFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntryView&)> callback) const
 {
     LOCKER(m_lock, Lock::Mode::Shared);
 
@@ -134,19 +139,21 @@ KResult TmpFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntry
     callback({ ".", identifier(), 0 });
     callback({ "..", m_parent, 0 });
 
-    for (auto& it : m_children)
-        callback(it.value.entry);
+    for (auto& it : m_children) {
+        auto& entry = it.value;
+        callback({ entry.name, entry.inode->identifier(), 0 });
+    }
     return KSuccess;
 }
 
-ssize_t TmpFSInode::read_bytes(off_t offset, ssize_t size, u8* buffer, FileDescription*) const
+ssize_t TmpFSInode::read_bytes(off_t offset, ssize_t size, UserOrKernelBuffer& buffer, FileDescription*) const
 {
     LOCKER(m_lock, Lock::Mode::Shared);
     ASSERT(!is_directory());
     ASSERT(size >= 0);
     ASSERT(offset >= 0);
 
-    if (!m_content.has_value())
+    if (!m_content)
         return 0;
 
     if (offset >= m_metadata.size)
@@ -155,11 +162,12 @@ ssize_t TmpFSInode::read_bytes(off_t offset, ssize_t size, u8* buffer, FileDescr
     if (static_cast<off_t>(size) > m_metadata.size - offset)
         size = m_metadata.size - offset;
 
-    memcpy(buffer, m_content.value().data() + offset, size);
+    if (!buffer.write(m_content->data() + offset, size))
+        return -EFAULT;
     return size;
 }
 
-ssize_t TmpFSInode::write_bytes(off_t offset, ssize_t size, const u8* buffer, FileDescription*)
+ssize_t TmpFSInode::write_bytes(off_t offset, ssize_t size, const UserOrKernelBuffer& buffer, FileDescription*)
 {
     LOCKER(m_lock);
     ASSERT(!is_directory());
@@ -175,20 +183,22 @@ ssize_t TmpFSInode::write_bytes(off_t offset, ssize_t size, const u8* buffer, Fi
         new_size = offset + size;
 
     if (new_size > old_size) {
-        if (m_content.has_value() && m_content.value().capacity() >= (size_t)new_size) {
-            m_content.value().set_size(new_size);
+        if (m_content && m_content->capacity() >= (size_t)new_size) {
+            m_content->set_size(new_size);
         } else {
-            // Grow the content buffer 2x the new sizeto accomodate repeating write() calls.
+            // Grow the content buffer 2x the new sizeto accommodate repeating write() calls.
             // Note that we're not actually committing physical memory to the buffer
             // until it's needed. We only grow VM here.
 
             // FIXME: Fix this so that no memcpy() is necessary, and we can just grow the
             //        KBuffer and it will add physical pages as needed while keeping the
             //        existing ones.
-            auto tmp = KBuffer::create_with_size(new_size * 2);
-            tmp.set_size(new_size);
-            if (m_content.has_value())
-                memcpy(tmp.data(), m_content.value().data(), old_size);
+            auto tmp = KBuffer::try_create_with_size(new_size * 2);
+            if (!tmp)
+                return -ENOMEM;
+            tmp->set_size(new_size);
+            if (m_content)
+                memcpy(tmp->data(), m_content->data(), old_size);
             m_content = move(tmp);
         }
         m_metadata.size = new_size;
@@ -197,7 +207,8 @@ ssize_t TmpFSInode::write_bytes(off_t offset, ssize_t size, const u8* buffer, Fi
         inode_size_changed(old_size, new_size);
     }
 
-    memcpy(m_content.value().data() + offset, buffer, size);
+    if (!buffer.read(m_content->data() + offset, size)) // TODO: partial reads?
+        return -EFAULT;
     inode_contents_changed(offset, size, buffer);
 
     return size;
@@ -216,10 +227,10 @@ RefPtr<Inode> TmpFSInode::lookup(StringView name)
     auto it = m_children.find(name);
     if (it == m_children.end())
         return {};
-    return fs().get_inode(it->value.entry.inode);
+    return fs().get_inode(it->value.inode->identifier());
 }
 
-size_t TmpFSInode::directory_entry_count() const
+KResultOr<size_t> TmpFSInode::directory_entry_count() const
 {
     LOCKER(m_lock, Lock::Mode::Shared);
     ASSERT(is_directory());
@@ -293,11 +304,11 @@ KResult TmpFSInode::add_child(Inode& child, const StringView& name, mode_t)
     ASSERT(is_directory());
     ASSERT(child.fsid() == fsid());
 
-    String owned_name = name;
-    FS::DirectoryEntry entry = { owned_name.characters(), owned_name.length(), child.identifier(), 0 };
+    if (name.length() > NAME_MAX)
+        return KResult(-ENAMETOOLONG);
 
-    m_children.set(owned_name, { entry, static_cast<TmpFSInode&>(child) });
-    did_add_child(name);
+    m_children.set(name, { name, static_cast<TmpFSInode&>(child) });
+    did_add_child(child.identifier());
     return KSuccess;
 }
 
@@ -312,8 +323,9 @@ KResult TmpFSInode::remove_child(const StringView& name)
     auto it = m_children.find(name);
     if (it == m_children.end())
         return KResult(-ENOENT);
+    auto child_id = it->value.inode->identifier();
     m_children.remove(it);
-    did_remove_child(name);
+    did_remove_child(child_id);
     return KSuccess;
 }
 
@@ -324,17 +336,21 @@ KResult TmpFSInode::truncate(u64 size)
 
     if (size == 0)
         m_content.clear();
-    else if (!m_content.has_value()) {
-        m_content = KBuffer::create_with_size(size);
-    } else if (static_cast<size_t>(size) < m_content.value().capacity()) {
+    else if (!m_content) {
+        m_content = KBuffer::try_create_with_size(size);
+        if (!m_content)
+            return KResult(-ENOMEM);
+    } else if (static_cast<size_t>(size) < m_content->capacity()) {
         size_t prev_size = m_metadata.size;
-        m_content.value().set_size(size);
+        m_content->set_size(size);
         if (prev_size < static_cast<size_t>(size))
-            memset(m_content.value().data() + prev_size, 0, size - prev_size);
+            memset(m_content->data() + prev_size, 0, size - prev_size);
     } else {
         size_t prev_size = m_metadata.size;
-        KBuffer tmp = KBuffer::create_with_size(size);
-        memcpy(tmp.data(), m_content.value().data(), prev_size);
+        auto tmp = KBuffer::try_create_with_size(size);
+        if (!tmp)
+            return KResult(-ENOMEM);
+        memcpy(tmp->data(), m_content->data(), prev_size);
         m_content = move(tmp);
     }
 
@@ -344,8 +360,10 @@ KResult TmpFSInode::truncate(u64 size)
 
     if (old_size != (size_t)size) {
         inode_size_changed(old_size, size);
-        if (m_content.has_value())
-            inode_contents_changed(0, size, m_content.value().data());
+        if (m_content) {
+            auto buffer = UserOrKernelBuffer::for_kernel_buffer(m_content->data());
+            inode_contents_changed(0, size, buffer);
+        }
     }
 
     return KSuccess;

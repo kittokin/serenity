@@ -25,9 +25,9 @@
  */
 
 #include <LibWeb/DOM/Text.h>
-#include <LibWeb/Layout/LayoutText.h>
+#include <LibWeb/Layout/TextNode.h>
 
-namespace Web {
+namespace Web::DOM {
 
 Text::Text(Document& document, const String& data)
     : CharacterData(document, NodeType::TEXT_NODE, data)
@@ -38,9 +38,9 @@ Text::~Text()
 {
 }
 
-RefPtr<LayoutNode> Text::create_layout_node(const StyleProperties*)
+RefPtr<Layout::Node> Text::create_layout_node(const CSS::StyleProperties*)
 {
-    return adopt(*new LayoutText(document(), *this));
+    return adopt(*new Layout::TextNode(document(), *this));
 }
 
 }

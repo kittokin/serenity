@@ -76,6 +76,7 @@ public:
     void set_text_alignment(Gfx::TextAlignment alignment) { m_text_alignment = alignment; }
     Gfx::TextAlignment text_alignment() const { return m_text_alignment; }
 
+    bool uniform_tabs() const { return m_uniform_tabs; }
     void set_uniform_tabs(bool uniform_tabs) { m_uniform_tabs = uniform_tabs; }
     int uniform_tab_width() const;
 
@@ -104,6 +105,7 @@ private:
     Gfx::IntRect bar_rect() const;
     Gfx::IntRect container_rect() const;
     void update_bar();
+    void update_focus_policy();
 
     RefPtr<Widget> m_active_widget;
 

@@ -30,12 +30,44 @@
 #include <AK/RefCounted.h>
 #include <AK/String.h>
 #include <AK/Types.h>
+#include <AK/Weakable.h>
 #include <Kernel/Forward.h>
 #include <Kernel/KResult.h>
 #include <Kernel/UnixTypes.h>
+#include <Kernel/UserOrKernelBuffer.h>
 #include <Kernel/VirtualAddress.h>
 
 namespace Kernel {
+
+class File;
+
+class FileBlockCondition : public Thread::BlockCondition {
+public:
+    FileBlockCondition(File& file)
+        : m_file(file)
+    {
+    }
+
+    virtual bool should_add_blocker(Thread::Blocker& b, void* data) override
+    {
+        ASSERT(b.blocker_type() == Thread::Blocker::Type::File);
+        auto& blocker = static_cast<Thread::FileBlocker&>(b);
+        return !blocker.unblock(true, data);
+    }
+
+    void unblock()
+    {
+        ScopedSpinLock lock(m_lock);
+        do_unblock([&](auto& b, void* data, bool&) {
+            ASSERT(b.blocker_type() == Thread::Blocker::Type::File);
+            auto& blocker = static_cast<Thread::FileBlocker&>(b);
+            return blocker.unblock(false, data);
+        });
+    }
+
+private:
+    File& m_file;
+};
 
 // File is the base class for anything that can be referenced by a FileDescription.
 //
@@ -64,7 +96,9 @@ namespace Kernel {
 //   - Called by mmap() when userspace wants to memory-map this File somewhere.
 //   - Should create a Region in the Process and return it if successful.
 
-class File : public RefCounted<File> {
+class File
+    : public RefCounted<File>
+    , public Weakable<File> {
 public:
     virtual ~File();
 
@@ -74,10 +108,11 @@ public:
     virtual bool can_read(const FileDescription&, size_t) const = 0;
     virtual bool can_write(const FileDescription&, size_t) const = 0;
 
-    virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) = 0;
-    virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) = 0;
+    virtual KResultOr<size_t> read(FileDescription&, size_t, UserOrKernelBuffer&, size_t) = 0;
+    virtual KResultOr<size_t> write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t) = 0;
     virtual int ioctl(FileDescription&, unsigned request, FlatPtr arg);
     virtual KResultOr<Region*> mmap(Process&, FileDescription&, VirtualAddress preferred_vaddr, size_t offset, size_t size, int prot, bool shared);
+    virtual KResult stat(::stat&) const { return KResult(-EBADF); }
 
     virtual String absolute_path(const FileDescription&) const = 0;
 
@@ -98,8 +133,34 @@ public:
     virtual bool is_character_device() const { return false; }
     virtual bool is_socket() const { return false; }
 
+    virtual FileBlockCondition& block_condition() { return m_block_condition; }
+
 protected:
     File();
+
+    void evaluate_block_conditions()
+    {
+        if (Processor::current().in_irq()) {
+            // If called from an IRQ handler we need to delay evaluation
+            // and unblocking of waiting threads. Note that this File
+            // instance may be deleted until the deferred call is executed!
+            Processor::deferred_call_queue([self = make_weak_ptr()]() {
+                if (auto file = self.strong_ref())
+                    file->do_evaluate_block_conditions();
+            });
+        } else {
+            do_evaluate_block_conditions();
+        }
+    }
+
+private:
+    ALWAYS_INLINE void do_evaluate_block_conditions()
+    {
+        ASSERT(!Processor::current().in_irq());
+        block_condition().unblock();
+    }
+
+    FileBlockCondition m_block_condition;
 };
 
 }

@@ -25,31 +25,43 @@
  */
 
 #include "Editor.h"
+#include "Debugger/Debugger.h"
 #include "EditorWrapper.h"
+#include "HackStudio.h"
+#include "Language.h"
 #include <AK/ByteBuffer.h>
 #include <AK/LexicalPath.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
 #include <LibGUI/Application.h>
+#include <LibGUI/CppSyntaxHighlighter.h>
+#include <LibGUI/GMLSyntaxHighlighter.h>
+#include <LibGUI/INISyntaxHighlighter.h>
+#include <LibGUI/JSSyntaxHighlighter.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/ScrollBar.h>
+#include <LibGUI/ShellSyntaxHighlighter.h>
 #include <LibGUI/SyntaxHighlighter.h>
 #include <LibGUI/Window.h>
 #include <LibMarkdown/Document.h>
 #include <LibWeb/DOM/ElementFactory.h>
-#include <LibWeb/DOM/HTMLHeadElement.h>
 #include <LibWeb/DOM/Text.h>
-#include <LibWeb/PageView.h>
+#include <LibWeb/HTML/HTMLHeadElement.h>
+#include <LibWeb/OutOfProcessWebView.h>
+#include <fcntl.h>
 
 // #define EDITOR_DEBUG
 
+namespace HackStudio {
+
 Editor::Editor()
 {
+    set_document(CodeDocument::create());
     m_documentation_tooltip_window = GUI::Window::construct();
     m_documentation_tooltip_window->set_rect(0, 0, 500, 400);
     m_documentation_tooltip_window->set_window_type(GUI::WindowType::Tooltip);
-    m_documentation_page_view = m_documentation_tooltip_window->set_main_widget<Web::PageView>();
+    m_documentation_page_view = m_documentation_tooltip_window->set_main_widget<Web::OutOfProcessWebView>();
 }
 
 Editor::~Editor()
@@ -65,7 +77,7 @@ const EditorWrapper& Editor::wrapper() const
     return static_cast<const EditorWrapper&>(*parent());
 }
 
-void Editor::focusin_event(Core::Event& event)
+void Editor::focusin_event(GUI::FocusEvent& event)
 {
     wrapper().set_editor_has_focus({}, true);
     if (on_focus)
@@ -73,7 +85,7 @@ void Editor::focusin_event(Core::Event& event)
     GUI::TextEditor::focusin_event(event);
 }
 
-void Editor::focusout_event(Core::Event& event)
+void Editor::focusout_event(GUI::FocusEvent& event)
 {
     wrapper().set_editor_has_focus({}, false);
     GUI::TextEditor::focusout_event(event);
@@ -109,16 +121,16 @@ void Editor::paint_event(GUI::PaintEvent& event)
     if (ruler_visible()) {
         size_t first_visible_line = text_position_at(event.rect().top_left()).line();
         size_t last_visible_line = text_position_at(event.rect().bottom_right()).line();
-        for (size_t line : m_breakpoint_lines) {
+        for (size_t line : breakpoint_lines()) {
             if (line < first_visible_line || line > last_visible_line) {
                 continue;
             }
             const auto& icon = breakpoint_icon_bitmap();
             painter.blit(breakpoint_icon_rect(line).center(), icon, icon.rect());
         }
-        if (m_execution_position.has_value()) {
+        if (execution_position().has_value()) {
             const auto& icon = current_position_icon_bitmap();
-            painter.blit(breakpoint_icon_rect(m_execution_position.value()).center(), icon, icon.rect());
+            painter.blit(breakpoint_icon_rect(execution_position().value()).center(), icon, icon.rect());
         }
     }
 }
@@ -130,7 +142,7 @@ static HashMap<String, String>& man_paths()
         // FIXME: This should also search man3, possibly other places..
         Core::DirIterator it("/usr/share/man/man2", Core::DirIterator::Flags::SkipDots);
         while (it.has_next()) {
-            auto path = String::format("/usr/share/man/man2/%s", it.next_path().characters());
+            auto path = String::formatted("/usr/share/man/man2/{}", it.next_path());
             auto title = LexicalPath(path).title();
             paths.set(title, path);
         }
@@ -144,7 +156,7 @@ void Editor::show_documentation_tooltip_if_available(const String& hovered_token
     auto it = man_paths().find(hovered_token);
     if (it == man_paths().end()) {
 #ifdef EDITOR_DEBUG
-        dbg() << "no man path for " << hovered_token;
+        dbgln("no man path for {}", hovered_token);
 #endif
         m_documentation_tooltip_window->hide();
         return;
@@ -155,28 +167,29 @@ void Editor::show_documentation_tooltip_if_available(const String& hovered_token
     }
 
 #ifdef EDITOR_DEBUG
-    dbg() << "opening " << it->value;
+    dbgln("opening {}", it->value);
 #endif
     auto file = Core::File::construct(it->value);
     if (!file->open(Core::File::ReadOnly)) {
-        dbg() << "failed to open " << it->value << " " << file->error_string();
+        dbgln("failed to open {}, {}", it->value, file->error_string());
         return;
     }
 
     auto man_document = Markdown::Document::parse(file->read_all());
 
     if (!man_document) {
-        dbg() << "failed to parse markdown";
+        dbgln("failed to parse markdown");
         return;
     }
 
-    auto html_text = man_document->render_to_html();
-
-    m_documentation_page_view->load_html(html_text, {});
-
-    if (auto* document = m_documentation_page_view->document()) {
-        const_cast<Web::HTMLElement*>(document->body())->set_attribute(Web::HTML::AttributeNames::style, "background-color: #dac7b5;");
-    }
+    StringBuilder html;
+    // FIXME: With the InProcessWebView we used to manipulate the document body directly,
+    // With OutOfProcessWebView this isn't possible (at the moment). The ideal solution
+    // is probably to tweak Markdown::Document::render_to_html() so we can inject styles
+    // into the rendered HTML easily.
+    html.append(man_document->render_to_html());
+    html.append("<style>body { background-color: #dac7b5; }</style>");
+    m_documentation_page_view->load_html(html.build(), {});
 
     m_documentation_tooltip_window->move_to(screen_location.translated(4, 4));
     m_documentation_tooltip_window->show();
@@ -207,9 +220,9 @@ void Editor::mousemove_event(GUI::MouseEvent& event)
     auto ruler_line_rect = ruler_content_rect(text_position.line());
     auto hovering_lines_ruler = (event.position().x() < ruler_line_rect.width());
     if (hovering_lines_ruler && !is_in_drag_select())
-        window()->set_override_cursor(GUI::StandardCursor::Arrow);
+        set_override_cursor(Gfx::StandardCursor::Arrow);
     else if (m_hovering_editor)
-        window()->set_override_cursor(m_hovering_link && m_holding_ctrl ? GUI::StandardCursor::Hand : GUI::StandardCursor::IBeam);
+        set_override_cursor(m_hovering_link && event.ctrl() ? Gfx::StandardCursor::Hand : Gfx::StandardCursor::IBeam);
 
     for (auto& span : document().spans()) {
         if (span.range.contains(m_previous_text_position) && !span.range.contains(text_position)) {
@@ -225,7 +238,7 @@ void Editor::mousemove_event(GUI::MouseEvent& event)
             adjusted_range.end().set_column(min(end_line_length, adjusted_range.end().column() + 1));
             auto hovered_span_text = document().text_in_range(adjusted_range);
 #ifdef EDITOR_DEBUG
-            dbg() << "Hovering: " << adjusted_range << " \"" << hovered_span_text << "\"";
+            dbgln("Hovering: {} \"{}\"", adjusted_range, hovered_span_text);
 #endif
 
             if (highlighter->is_navigatable(span.data)) {
@@ -261,12 +274,12 @@ void Editor::mousedown_event(GUI::MouseEvent& event)
     auto text_position = text_position_at(event.position());
     auto ruler_line_rect = ruler_content_rect(text_position.line());
     if (event.button() == GUI::MouseButton::Left && event.position().x() < ruler_line_rect.width()) {
-        if (!m_breakpoint_lines.contains_slow(text_position.line())) {
-            m_breakpoint_lines.append(text_position.line());
-            on_breakpoint_change(wrapper().filename_label().text(), text_position.line(), BreakpointChange::Added);
+        if (!breakpoint_lines().contains_slow(text_position.line())) {
+            breakpoint_lines().append(text_position.line());
+            Debugger::on_breakpoint_change(wrapper().filename_label().text(), text_position.line(), BreakpointChange::Added);
         } else {
-            m_breakpoint_lines.remove_first_matching([&](size_t line) { return line == text_position.line(); });
-            on_breakpoint_change(wrapper().filename_label().text(), text_position.line(), BreakpointChange::Removed);
+            breakpoint_lines().remove_first_matching([&](size_t line) { return line == text_position.line(); });
+            Debugger::on_breakpoint_change(wrapper().filename_label().text(), text_position.line(), BreakpointChange::Removed);
         }
     }
 
@@ -280,40 +293,24 @@ void Editor::mousedown_event(GUI::MouseEvent& event)
         return;
     }
 
-    for (auto& span : document().spans()) {
-        if (span.range.contains(text_position)) {
-            if (!highlighter->is_navigatable(span.data)) {
-                GUI::TextEditor::mousedown_event(event);
-                return;
-            }
-
-            auto adjusted_range = span.range;
-            adjusted_range.end().set_column(adjusted_range.end().column() + 1);
-            auto span_text = document().text_in_range(adjusted_range);
-            auto header_path = span_text.substring(1, span_text.length() - 2);
-#ifdef EDITOR_DEBUG
-            dbg() << "Ctrl+click: " << adjusted_range << " \"" << header_path << "\"";
-#endif
-            navigate_to_include_if_available(header_path);
+    if (auto* span = document().span_at(text_position)) {
+        if (!highlighter->is_navigatable(span->data)) {
+            GUI::TextEditor::mousedown_event(event);
             return;
         }
+
+        auto adjusted_range = span->range;
+        adjusted_range.end().set_column(adjusted_range.end().column() + 1);
+        auto span_text = document().text_in_range(adjusted_range);
+        auto header_path = span_text.substring(1, span_text.length() - 2);
+#ifdef EDITOR_DEBUG
+        dbgln("Ctrl+click: {} \"{}\"", adjusted_range, header_path);
+#endif
+        navigate_to_include_if_available(header_path);
+        return;
     }
 
     GUI::TextEditor::mousedown_event(event);
-}
-
-void Editor::keydown_event(GUI::KeyEvent& event)
-{
-    if (event.key() == Key_Control)
-        m_holding_ctrl = true;
-    GUI::TextEditor::keydown_event(event);
-}
-
-void Editor::keyup_event(GUI::KeyEvent& event)
-{
-    if (event.key() == Key_Control)
-        m_holding_ctrl = false;
-    GUI::TextEditor::keyup_event(event);
 }
 
 void Editor::enter_event(Core::Event& event)
@@ -339,7 +336,7 @@ static HashMap<String, String>& include_paths()
             if (!Core::File::is_directory(path)) {
                 auto key = path.substring(base.length() + 1, path.length() - base.length() - 1);
 #ifdef EDITOR_DEBUG
-                dbg() << "Adding header \"" << key << "\" in path \"" << path << "\"";
+                dbgln("Adding header \"{}\" in path \"{}\"", key, path);
 #endif
                 paths.set(key, path);
             } else {
@@ -363,7 +360,7 @@ void Editor::navigate_to_include_if_available(String path)
     auto it = include_paths().find(path);
     if (it == include_paths().end()) {
 #ifdef EDITOR_DEBUG
-        dbg() << "no header " << path << " found.";
+        dbgln("no header {} found.", path);
 #endif
         return;
     }
@@ -373,24 +370,24 @@ void Editor::navigate_to_include_if_available(String path)
 
 void Editor::set_execution_position(size_t line_number)
 {
-    m_execution_position = line_number;
+    code_document().set_execution_position(line_number);
     scroll_position_into_view({ line_number, 0 });
     update(breakpoint_icon_rect(line_number));
 }
 
 void Editor::clear_execution_position()
 {
-    if (!m_execution_position.has_value()) {
+    if (!execution_position().has_value()) {
         return;
     }
-    size_t previous_position = m_execution_position.value();
-    m_execution_position = {};
+    size_t previous_position = execution_position().value();
+    code_document().clear_execution_position();
     update(breakpoint_icon_rect(previous_position));
 }
 
 const Gfx::Bitmap& Editor::breakpoint_icon_bitmap()
 {
-    static auto bitmap = Gfx::Bitmap::load_from_file("/res/icons/breakpoint.png");
+    static auto bitmap = Gfx::Bitmap::load_from_file("/res/icons/16x16/breakpoint.png");
     return *bitmap;
 }
 
@@ -398,4 +395,136 @@ const Gfx::Bitmap& Editor::current_position_icon_bitmap()
 {
     static auto bitmap = Gfx::Bitmap::load_from_file("/res/icons/16x16/go-forward.png");
     return *bitmap;
+}
+
+const CodeDocument& Editor::code_document() const
+{
+    const auto& doc = document();
+    ASSERT(doc.is_code_document());
+    return static_cast<const CodeDocument&>(doc);
+}
+
+CodeDocument& Editor::code_document()
+{
+    return const_cast<CodeDocument&>(static_cast<const Editor&>(*this).code_document());
+}
+
+void Editor::set_document(GUI::TextDocument& doc)
+{
+    ASSERT(doc.is_code_document());
+    GUI::TextEditor::set_document(doc);
+
+    set_override_cursor(Gfx::StandardCursor::IBeam);
+
+    CodeDocument& code_document = static_cast<CodeDocument&>(doc);
+    switch (code_document.language()) {
+    case Language::Cpp:
+        set_syntax_highlighter(make<GUI::CppSyntaxHighlighter>());
+        m_language_client = get_language_client<LanguageClients::Cpp::ServerConnection>(project().root_path());
+        break;
+    case Language::GML:
+        set_syntax_highlighter(make<GUI::GMLSyntaxHighlighter>());
+        break;
+    case Language::JavaScript:
+        set_syntax_highlighter(make<GUI::JSSyntaxHighlighter>());
+        break;
+    case Language::Ini:
+        set_syntax_highlighter(make<GUI::IniSyntaxHighlighter>());
+        break;
+    case Language::Shell:
+        set_syntax_highlighter(make<GUI::ShellSyntaxHighlighter>());
+        m_language_client = get_language_client<LanguageClients::Shell::ServerConnection>(project().root_path());
+        break;
+    default:
+        set_syntax_highlighter(nullptr);
+    }
+
+    if (m_language_client) {
+        set_autocomplete_provider(make<LanguageServerAidedAutocompleteProvider>(*m_language_client));
+        dbgln("Opening {}", code_document.file_path());
+        int fd = open(code_document.file_path().characters(), O_RDONLY | O_NOCTTY);
+        if (fd < 0) {
+            perror("open");
+            return;
+        }
+        m_language_client->open_file(code_document.file_path(), fd);
+        close(fd);
+    }
+}
+
+Optional<Editor::AutoCompleteRequestData> Editor::get_autocomplete_request_data()
+{
+    if (!wrapper().editor().m_language_client)
+        return {};
+
+    return Editor::AutoCompleteRequestData { cursor() };
+}
+
+void Editor::LanguageServerAidedAutocompleteProvider::provide_completions(Function<void(Vector<Entry>)> callback)
+{
+    auto& editor = static_cast<Editor&>(*m_editor).wrapper().editor();
+    auto data = editor.get_autocomplete_request_data();
+    if (!data.has_value())
+        callback({});
+
+    m_language_client.on_autocomplete_suggestions = [callback = move(callback)](auto suggestions) {
+        callback(suggestions);
+    };
+
+    m_language_client.request_autocomplete(
+        editor.code_document().file_path(),
+        data.value().position.line(),
+        data.value().position.column());
+}
+
+void Editor::on_edit_action(const GUI::Command& command)
+{
+    if (!m_language_client)
+        return;
+
+    if (command.is_insert_text()) {
+        const GUI::InsertTextCommand& insert_command = static_cast<const GUI::InsertTextCommand&>(command);
+        m_language_client->insert_text(
+            code_document().file_path(),
+            insert_command.text(),
+            insert_command.range().start().line(),
+            insert_command.range().start().column());
+        return;
+    }
+
+    if (command.is_remove_text()) {
+        const GUI::RemoveTextCommand& remove_command = static_cast<const GUI::RemoveTextCommand&>(command);
+        m_language_client->remove_text(
+            code_document().file_path(),
+            remove_command.range().start().line(),
+            remove_command.range().start().column(),
+            remove_command.range().end().line(),
+            remove_command.range().end().column());
+        return;
+    }
+
+    ASSERT_NOT_REACHED();
+}
+
+void Editor::undo()
+{
+    TextEditor::undo();
+    flush_file_content_to_langauge_server();
+}
+
+void Editor::redo()
+{
+    TextEditor::redo();
+    flush_file_content_to_langauge_server();
+}
+
+void Editor::flush_file_content_to_langauge_server()
+{
+    if (!m_language_client)
+        return;
+
+    m_language_client->set_file_content(
+        code_document().file_path(),
+        document().text());
+}
 }

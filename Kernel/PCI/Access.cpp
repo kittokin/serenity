@@ -24,8 +24,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <Kernel/IO.h>
 #include <Kernel/PCI/Access.h>
 #include <Kernel/PCI/IOAccess.h>
+
+//#define PCI_DEBUG
 
 namespace Kernel {
 namespace PCI {
@@ -57,18 +60,64 @@ Access::Access()
     s_access = this;
 }
 
-static u16 read_type(Address address)
+PhysicalID Access::get_physical_id(Address address) const
 {
-    return (read8(address, PCI_CLASS) << 8u) | read8(address, PCI_SUBCLASS);
+    for (auto physical_id : m_physical_ids) {
+        if (physical_id.address().seg() == address.seg()
+            && physical_id.address().bus() == address.bus()
+            && physical_id.address().slot() == address.slot()
+            && physical_id.address().function() == address.function()) {
+            return physical_id;
+        }
+    }
+    ASSERT_NOT_REACHED();
+}
+
+u8 Access::early_read8_field(Address address, u32 field)
+{
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Early reading 8-bit field 0x" << String::formatted("{:08x}", field) << " for " << address;
+#endif
+    IO::out32(PCI_ADDRESS_PORT, address.io_address_for_field(field));
+    return IO::in8(PCI_VALUE_PORT + (field & 3));
+}
+
+u16 Access::early_read16_field(Address address, u32 field)
+{
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Early reading 16-bit field 0x" << String::formatted("{:08x}", field) << " for " << address;
+#endif
+    IO::out32(PCI_ADDRESS_PORT, address.io_address_for_field(field));
+    return IO::in16(PCI_VALUE_PORT + (field & 2));
+}
+
+u32 Access::early_read32_field(Address address, u32 field)
+{
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Early reading 32-bit field 0x" << String::formatted("{:08x}", field) << " for " << address;
+#endif
+    IO::out32(PCI_ADDRESS_PORT, address.io_address_for_field(field));
+    return IO::in32(PCI_VALUE_PORT);
+}
+
+u16 Access::early_read_type(Address address)
+{
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Early reading type for " << address;
+#endif
+    return (early_read8_field(address, PCI_CLASS) << 8u) | early_read8_field(address, PCI_SUBCLASS);
 }
 
 void Access::enumerate_functions(int type, u8 bus, u8 slot, u8 function, Function<void(Address, ID)>& callback)
 {
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Enumerating function type=" << type << ", bus=" << bus << ", slot=" << slot << ", function=" << function;
+#endif
     Address address(0, bus, slot, function);
-    if (type == -1 || type == read_type(address))
-        callback(address, { read16_field(address, PCI_VENDOR_ID), read16_field(address, PCI_DEVICE_ID) });
-    if (read_type(address) == PCI_TYPE_BRIDGE) {
-        u8 secondary_bus = read8_field(address, PCI_SECONDARY_BUS);
+    if (type == -1 || type == early_read_type(address))
+        callback(address, { early_read16_field(address, PCI_VENDOR_ID), early_read16_field(address, PCI_DEVICE_ID) });
+    if (early_read_type(address) == PCI_TYPE_BRIDGE) {
+        u8 secondary_bus = early_read8_field(address, PCI_SECONDARY_BUS);
 #ifdef PCI_DEBUG
         klog() << "PCI: Found secondary bus: " << secondary_bus;
 #endif
@@ -79,21 +128,27 @@ void Access::enumerate_functions(int type, u8 bus, u8 slot, u8 function, Functio
 
 void Access::enumerate_slot(int type, u8 bus, u8 slot, Function<void(Address, ID)>& callback)
 {
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Enumerating slot type=" << type << ", bus=" << bus << ", slot=" << slot;
+#endif
     Address address(0, bus, slot, 0);
-    if (read16_field(address, PCI_VENDOR_ID) == PCI_NONE)
+    if (early_read16_field(address, PCI_VENDOR_ID) == PCI_NONE)
         return;
     enumerate_functions(type, bus, slot, 0, callback);
-    if (!(read8_field(address, PCI_HEADER_TYPE) & 0x80))
+    if (!(early_read8_field(address, PCI_HEADER_TYPE) & 0x80))
         return;
     for (u8 function = 1; function < 8; ++function) {
         Address address(0, bus, slot, function);
-        if (read16_field(address, PCI_VENDOR_ID) != PCI_NONE)
+        if (early_read16_field(address, PCI_VENDOR_ID) != PCI_NONE)
             enumerate_functions(type, bus, slot, function, callback);
     }
 }
 
 void Access::enumerate_bus(int type, u8 bus, Function<void(Address, ID)>& callback)
 {
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Enumerating bus type=" << type << ", bus=" << bus;
+#endif
     for (u8 slot = 0; slot < 32; ++slot)
         enumerate_slot(type, bus, slot, callback);
 }
@@ -108,6 +163,54 @@ void Access::enumerate(Function<void(Address, ID)>& callback) const
 void enumerate(Function<void(Address, ID)> callback)
 {
     Access::the().enumerate(callback);
+}
+
+Optional<u8> get_capabilities_pointer(Address address)
+{
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Getting capabilities pointer for " << address;
+#endif
+    if (PCI::read16(address, PCI_STATUS) & (1 << 4)) {
+#ifdef PCI_DEBUG
+        dbg() << "PCI: Found capabilities pointer for " << address;
+#endif
+        return PCI::read8(address, PCI_CAPABILITIES_POINTER);
+    }
+#ifdef PCI_DEBUG
+    dbg() << "PCI: No capabilities pointer for " << address;
+#endif
+    return {};
+}
+
+PhysicalID get_physical_id(Address address)
+{
+    return Access::the().get_physical_id(address);
+}
+
+Vector<Capability> get_capabilities(Address address)
+{
+#ifdef PCI_DEBUG
+    dbg() << "PCI: Getting capabilities for " << address;
+#endif
+    auto capabilities_pointer = PCI::get_capabilities_pointer(address);
+    if (!capabilities_pointer.has_value()) {
+#ifdef PCI_DEBUG
+        dbg() << "PCI: No capabilities for " << address;
+#endif
+        return {};
+    }
+    Vector<Capability> capabilities;
+    auto capability_pointer = capabilities_pointer.value();
+    while (capability_pointer != 0) {
+#ifdef PCI_DEBUG
+        dbg() << "PCI: Reading in capability at 0x" << String::formatted("{:02x}", capability_pointer) << " for " << address;
+#endif
+        u16 capability_header = PCI::read16(address, capability_pointer);
+        u8 capability_id = capability_header & 0xff;
+        capability_pointer = capability_header >> 8;
+        capabilities.append({ capability_id, capability_pointer });
+    }
+    return capabilities;
 }
 
 void raw_access(Address address, u32 field, size_t access_size, u32 value)
@@ -191,6 +294,11 @@ u8 get_subclass(Address address)
 u8 get_class(Address address)
 {
     return read8(address, PCI_CLASS);
+}
+
+u8 get_programming_interface(Address address)
+{
+    return read8(address, PCI_PROG_IF);
 }
 
 u16 get_subsystem_id(Address address)

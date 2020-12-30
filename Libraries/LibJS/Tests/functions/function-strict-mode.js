@@ -1,6 +1,3 @@
-// This file must not be formatted by prettier. Make sure your IDE
-// respects the .prettierignore file!
-
 test("non strict-mode by default", () => {
     expect(isStrictMode()).toBeFalse();
 });
@@ -10,37 +7,47 @@ test("use strict with double quotes", () => {
     expect(isStrictMode()).toBeTrue();
 });
 
+// prettier-ignore
 test("use strict with single quotes", () => {
     'use strict';
     expect(isStrictMode()).toBeTrue();
 });
 
+// prettier-ignore
 test("use strict with backticks does not yield strict mode", () => {
     `use strict`;
     expect(isStrictMode()).toBeFalse();
 });
 
+// prettier-ignore
 test("use strict with single quotes after statement does not yield strict mode code", () => {
     ;'use strict';
     expect(isStrictMode()).toBeFalse();
 });
 
+// prettier-ignore
 test("use strict with double quotes after statement does not yield strict mode code", () => {
     ;"use strict";
     expect(isStrictMode()).toBeFalse();
 });
 
-test("strict mode propogates down the scope chain", () => {
+test("use strict interrupted by a line continuation does not yield strict mode code", () => {
+    "use \
+strict";
+    expect(isStrictMode()).toBeFalse();
+});
+
+test("strict mode propagates down the scope chain", () => {
     "use strict";
     expect(isStrictMode()).toBeTrue();
-    (function() {
+    (function () {
         expect(isStrictMode()).toBeTrue();
     })();
 });
 
-test("strict mode does not propogate up the scope chain", () => {
+test("strict mode does not propagate up the scope chain", () => {
     expect(isStrictMode()).toBeFalse();
-    (function() {
+    (function () {
         "use strict";
         expect(isStrictMode()).toBeTrue();
     })();

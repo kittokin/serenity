@@ -45,6 +45,25 @@ Socket::Socket(Type type, Object* parent)
     : IODevice(parent)
     , m_type(type)
 {
+    register_property(
+        "source_address", [this] { return m_source_address.to_string(); },
+        [](auto&) { return false; });
+
+    register_property(
+        "destination_address", [this] { return m_destination_address.to_string(); },
+        [](auto&) { return false; });
+
+    register_property(
+        "source_port", [this] { return m_source_port; },
+        [](auto&) { return false; });
+
+    register_property(
+        "destination_port", [this] { return m_destination_port; },
+        [](auto&) { return false; });
+
+    register_property(
+        "connected", [this] { return m_connected; },
+        [](auto&) { return false; });
 }
 
 Socket::~Socket()
@@ -111,8 +130,13 @@ bool Socket::connect(const SocketAddress& address)
 
     sockaddr_un saddr;
     saddr.sun_family = AF_LOCAL;
-    strcpy(saddr.sun_path, address.to_string().characters());
-
+    auto dest_address = address.to_string();
+    bool fits = dest_address.copy_characters_to_buffer(saddr.sun_path, sizeof(saddr.sun_path));
+    if (!fits) {
+        fprintf(stderr, "Core::Socket: Failed to connect() to %s: Path is too long!\n", dest_address.characters());
+        errno = EINVAL;
+        return false;
+    }
     m_destination_address = address;
 
     return common_connect((const sockaddr*)&saddr, sizeof(saddr));
@@ -160,14 +184,12 @@ bool Socket::common_connect(const struct sockaddr* addr, socklen_t addrlen)
 ByteBuffer Socket::receive(int max_size)
 {
     auto buffer = read(max_size);
-    if (eof()) {
-        dbg() << *this << " connection appears to have closed in receive().";
+    if (eof())
         m_connected = false;
-    }
     return buffer;
 }
 
-bool Socket::send(const ByteBuffer& data)
+bool Socket::send(ReadonlyBytes data)
 {
     ssize_t nsent = ::send(fd(), data.data(), data.size(), 0);
     if (nsent < 0) {
@@ -182,8 +204,8 @@ void Socket::did_update_fd(int fd)
 {
     if (fd < 0) {
         if (m_read_notifier) {
-             m_read_notifier->remove_from_parent();
-             m_read_notifier = nullptr;
+            m_read_notifier->remove_from_parent();
+            m_read_notifier = nullptr;
         }
         if (m_notifier) {
             m_notifier->remove_from_parent();

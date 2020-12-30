@@ -39,6 +39,18 @@ describe("correct behavior", () => {
         expect(object[symbol]).toBe(2);
     });
 
+    test("numeric keys", () => {
+        const hex = { 0x10: "16" };
+        const oct = { 0o10: "8" };
+        const bin = { 0b10: "2" };
+        const float = { 0.5: "0.5" };
+
+        expect(hex["16"]).toBe("16");
+        expect(oct["8"]).toBe("8");
+        expect(bin["2"]).toBe("2");
+        expect(float["0.5"]).toBe("0.5");
+    });
+
     test("computed properties", () => {
         const foo = "bar";
         const computed = "computed";
@@ -75,8 +87,7 @@ describe("correct behavior", () => {
     test("floating point keys", () => {
         const math = { 3.14: "pi" };
         expect(math["3.14"]).toBe("pi");
-        // FIXME: Floating point literals are coerced to i32
-        // expect(math[3.14]).toBe("pi");
+        expect(math[3.14]).toBe("pi");
     });
 
     test("keywords as property keys", () => {
@@ -151,6 +162,7 @@ describe("errors", () => {
         expect("({ get ...[foo] })").not.toEval();
         expect("({ get foo(bar) {} })").not.toEval();
         expect("({ set foo() {} })").not.toEval();
+        expect("({ set foo(...bar) {} })").not.toEval();
         expect("({ set foo(bar, baz) {} })").not.toEval();
         expect("({ ...foo: bar })").not.toEval();
     });

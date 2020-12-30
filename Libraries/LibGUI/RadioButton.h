@@ -31,14 +31,15 @@
 namespace GUI {
 
 class RadioButton : public AbstractButton {
-    C_OBJECT(RadioButton)
+    C_OBJECT(RadioButton);
+
 public:
     virtual ~RadioButton() override;
 
     virtual void click(unsigned modifiers = 0) override;
 
 protected:
-    explicit RadioButton(const StringView& text = {});
+    explicit RadioButton(String text = {});
     virtual void paint_event(PaintEvent&) override;
 
 private:
@@ -55,10 +56,6 @@ private:
 
 }
 
-template<>
-inline bool Core::is<GUI::RadioButton>(const Core::Object& object)
-{
-    if (!is<GUI::Widget>(object))
-        return false;
-    return to<GUI::Widget>(object).is_radio_button();
-}
+AK_BEGIN_TYPE_TRAITS(GUI::RadioButton)
+static bool is_type(const Core::Object& object) { return is<GUI::Widget>(object) && downcast<GUI::Widget>(object).is_radio_button(); }
+AK_END_TYPE_TRAITS()

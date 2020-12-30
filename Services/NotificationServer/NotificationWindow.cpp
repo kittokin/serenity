@@ -29,18 +29,19 @@
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/Desktop.h>
+#include <LibGUI/ImageWidget.h>
 #include <LibGUI/Label.h>
-#include <LibGUI/Image.h>
 #include <LibGUI/Widget.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/ShareableBitmap.h>
 
 namespace NotificationServer {
 
 static Vector<RefPtr<NotificationWindow>> s_windows;
 
-void update_notification_window_locations()
+static void update_notification_window_locations()
 {
     Gfx::IntRect last_window_rect;
     for (auto& window : s_windows) {
@@ -91,7 +92,7 @@ NotificationWindow::NotificationWindow(const String& text, const String& title, 
     widget.layout()->set_spacing(6);
 
     if (icon.is_valid()) {
-        auto& image = widget.add<GUI::Image>();
+        auto& image = widget.add<GUI::ImageWidget>();
         image.set_bitmap(icon.bitmap());
     }
 
@@ -99,14 +100,13 @@ NotificationWindow::NotificationWindow(const String& text, const String& title, 
     left_container.set_layout<GUI::VerticalBoxLayout>();
 
     auto& title_label = left_container.add<GUI::Label>(title);
-    title_label.set_font(Gfx::Font::default_bold_font());
+    title_label.set_font(Gfx::FontDatabase::default_bold_font());
     title_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
     auto& text_label = left_container.add<GUI::Label>(text);
     text_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
 
     auto& right_container = widget.add<GUI::Widget>();
-    right_container.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    right_container.set_preferred_size(36, 0);
+    right_container.set_fixed_width(36);
     right_container.set_layout<GUI::HorizontalBoxLayout>();
 
     on_close_request = [this] {

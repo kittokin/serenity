@@ -26,6 +26,7 @@
 
 #include "IRCAppWindow.h"
 #include "IRCClient.h"
+#include <LibCore/StandardPaths.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/MessageBox.h>
 #include <stdio.h>
@@ -38,7 +39,7 @@ int main(int argc, char** argv)
     }
 
     if (getuid() == 0) {
-        fprintf(stderr, "Refusing to run as root\n");
+        warnln("Refusing to run as root");
         return 1;
     }
 
@@ -49,22 +50,52 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (unveil("/tmp/portal/lookup", "rw") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil("/tmp/portal/notify", "rw") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil("/etc/passwd", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(Core::StandardPaths::home_directory().characters(), "rwc") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(nullptr, nullptr) < 0) {
+        perror("unveil");
+        return 1;
+    }
+
     URL url = "";
     if (app->args().size() >= 1) {
         url = URL::create_with_url_or_path(app->args()[0]);
 
         if (url.protocol().to_lowercase() == "ircs") {
-            fprintf(stderr, "Secure IRC over SSL/TLS (ircs) is not supported\n");
+            warnln("Secure IRC over SSL/TLS (ircs) is not supported");
             return 1;
         }
 
         if (url.protocol().to_lowercase() != "irc") {
-            fprintf(stderr, "Unsupported protocol\n");
+            warnln("Unsupported protocol");
             return 1;
         }
 
         if (url.host().is_empty()) {
-            fprintf(stderr, "Invalid URL\n");
+            warnln("Invalid URL");
             return 1;
         }
 

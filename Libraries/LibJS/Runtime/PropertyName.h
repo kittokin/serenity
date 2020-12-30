@@ -40,15 +40,18 @@ public:
         Symbol,
     };
 
-    static PropertyName from_value(Interpreter& interpreter, Value value)
+    static PropertyName from_value(GlobalObject& global_object, Value value)
     {
+        if (value.is_empty())
+            return {};
         if (value.is_symbol())
             return &value.as_symbol();
-        if (value.is_number())
+        if (value.is_integer() && value.as_i32() >= 0)
             return value.as_i32();
-        if (!value.is_empty())
-            return value.to_string(interpreter);
-        return {};
+        auto string = value.to_string(global_object);
+        if (string.is_null())
+            return {};
+        return string;
     }
 
     PropertyName() { }
@@ -70,18 +73,21 @@ public:
         : m_type(Type::String)
         , m_string(FlyString(string))
     {
+        ASSERT(!string.is_null());
     }
 
     PropertyName(const FlyString& string)
         : m_type(Type::String)
         , m_string(string)
     {
+        ASSERT(!string.is_null());
     }
 
     PropertyName(Symbol* symbol)
         : m_type(Type::Symbol)
         , m_symbol(symbol)
     {
+        ASSERT(symbol);
     }
 
     PropertyName(const StringOrSymbol& string_or_symbol)
@@ -136,10 +142,10 @@ public:
         return StringOrSymbol(as_symbol());
     }
 
-    Value to_value(Interpreter& interpreter) const
+    Value to_value(VM& vm) const
     {
         if (is_string())
-            return js_string(interpreter, m_string);
+            return js_string(vm, m_string);
         if (is_number())
             return Value(m_number);
         if (is_symbol())

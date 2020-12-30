@@ -37,7 +37,7 @@ namespace WebContent {
 static HashMap<int, RefPtr<ClientConnection>> s_connections;
 
 ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket, int client_id)
-    : IPC::ClientConnection<WebContentServerEndpoint>(*this, move(socket), client_id)
+    : IPC::ClientConnection<WebContentClientEndpoint, WebContentServerEndpoint>(*this, move(socket), client_id)
     , m_page_host(PageHost::create(*this))
 {
     s_connections.set(client_id, *this);
@@ -89,6 +89,14 @@ void ClientConnection::handle(const Messages::WebContentServer::LoadURL& message
     dbg() << "handle: WebContentServer::LoadURL: url=" << message.url();
 #endif
     page().load(message.url());
+}
+
+void ClientConnection::handle(const Messages::WebContentServer::LoadHTML& message)
+{
+#ifdef DEBUG_SPAM
+    dbg() << "handle: WebContentServer::LoadHTML: html=" << message.html() << ", url=" << message.url();
+#endif
+    page().load_html(message.html(), message.url());
 }
 
 void ClientConnection::handle(const Messages::WebContentServer::SetViewportRect& message)
@@ -151,6 +159,11 @@ void ClientConnection::handle(const Messages::WebContentServer::MouseMove& messa
 void ClientConnection::handle(const Messages::WebContentServer::MouseUp& message)
 {
     page().handle_mouseup(message.position(), message.button(), message.modifiers());
+}
+
+void ClientConnection::handle(const Messages::WebContentServer::KeyDown& message)
+{
+    page().handle_keydown((KeyCode)message.key(), message.modifiers(), message.code_point());
 }
 
 }

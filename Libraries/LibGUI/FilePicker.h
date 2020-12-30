@@ -30,13 +30,16 @@
 #include <AK/Optional.h>
 #include <LibCore/StandardPaths.h>
 #include <LibGUI/Dialog.h>
-#include <LibGUI/Image.h>
+#include <LibGUI/ImageWidget.h>
 #include <LibGUI/Model.h>
 
 namespace GUI {
 
-class FilePicker final : public Dialog, private ModelClient {
-    C_OBJECT(FilePicker)
+class FilePicker final
+    : public Dialog
+    , private ModelClient {
+    C_OBJECT(FilePicker);
+
 public:
     enum class Mode {
         Open,
@@ -67,7 +70,10 @@ private:
     void clear_preview();
     void on_file_return();
 
-    virtual void on_model_update(unsigned) override;
+    void set_path(const String&);
+
+    // ^GUI::ModelClient
+    virtual void model_did_update(unsigned) override;
 
     FilePicker(Window* parent_window, Mode type = Mode::Open, Options = Options::None, const StringView& file_name = "Untitled", const StringView& path = Core::StandardPaths::home_directory());
 
@@ -91,7 +97,7 @@ private:
     RefPtr<TextBox> m_filename_textbox;
     RefPtr<TextBox> m_location_textbox;
     RefPtr<Frame> m_preview_container;
-    RefPtr<Image> m_preview_image;
+    RefPtr<ImageWidget> m_preview_image;
     RefPtr<Label> m_preview_name_label;
     RefPtr<Label> m_preview_geometry_label;
     Mode m_mode { Mode::Open };

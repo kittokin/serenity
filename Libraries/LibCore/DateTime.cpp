@@ -25,6 +25,7 @@
  */
 
 #include <AK/StringBuilder.h>
+#include <AK/Time.h>
 #include <LibCore/DateTime.h>
 #include <sys/time.h>
 #include <time.h>
@@ -39,24 +40,7 @@ DateTime DateTime::now()
 DateTime DateTime::create(unsigned year, unsigned month, unsigned day, unsigned hour, unsigned minute, unsigned second)
 {
     DateTime dt;
-    dt.m_year = year;
-    dt.m_month = month;
-    dt.m_day = day;
-    dt.m_hour = hour;
-    dt.m_minute = minute;
-    dt.m_second = second;
-
-    struct tm tm = {};
-    tm.tm_sec = (int)second;
-    tm.tm_min = (int)minute;
-    tm.tm_hour = (int)hour;
-    tm.tm_mday = (int)day;
-    tm.tm_mon = (int)month - 1;
-    tm.tm_year = (int)year - 1900;
-    tm.tm_wday = (int)dt.weekday();
-    tm.tm_yday = (int)dt.day_of_year();
-    dt.m_timestamp = mktime(&tm);
-
+    dt.set_time(year, month, day, hour, minute, second);
     return dt;
 }
 
@@ -77,49 +61,26 @@ DateTime DateTime::from_timestamp(time_t timestamp)
 
 unsigned DateTime::weekday() const
 {
-    int target_year = m_year;
-    static const int seek_table[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
-    if (m_month < 3)
-        --target_year;
-
-    return (target_year + target_year / 4 - target_year / 100 + target_year / 400 + seek_table[m_month - 1] + m_day) % 7;
+    return ::day_of_week(m_year, m_month, m_day);
 }
 
 unsigned DateTime::days_in_month() const
 {
-    bool is_long_month = (m_month == 1 || m_month == 3 || m_month == 5 || m_month == 7 || m_month == 8 || m_month == 10 || m_month == 12);
-
-    if (m_month == 2)
-        return is_leap_year() ? 29 : 28;
-
-    return is_long_month ? 31 : 30;
+    return ::days_in_month(m_year, m_month);
 }
 
 unsigned DateTime::day_of_year() const
 {
-    static const int seek_table[] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
-    int day_of_year = seek_table[m_month - 1] + m_day;
-
-    if (is_leap_year() && m_month > 3)
-        day_of_year++;
-
-    return day_of_year - 1;
+    return ::day_of_year(m_year, m_month, m_day);
 }
 
 bool DateTime::is_leap_year() const
 {
-    return ((m_year % 400 == 0) || (m_year % 4 == 0 && m_year % 100 != 0));
+    return ::is_leap_year(m_year);
 }
 
 void DateTime::set_time(unsigned year, unsigned month, unsigned day, unsigned hour, unsigned minute, unsigned second)
 {
-    m_year = year;
-    m_month = month;
-    m_day = day;
-    m_hour = hour;
-    m_minute = minute;
-    m_second = second;
-
     struct tm tm = {};
     tm.tm_sec = (int)second;
     tm.tm_min = (int)minute;
@@ -127,9 +88,18 @@ void DateTime::set_time(unsigned year, unsigned month, unsigned day, unsigned ho
     tm.tm_mday = (int)day;
     tm.tm_mon = (int)month - 1;
     tm.tm_year = (int)year - 1900;
-    tm.tm_wday = (int)weekday();
-    tm.tm_yday = (int)day_of_year();
+    tm.tm_isdst = -1;
+    // mktime() doesn't read tm.tm_wday and tm.tm_yday, no need to fill them in.
+
     m_timestamp = mktime(&tm);
+
+    // mktime() normalizes the components to the right ranges (Jan 32 -> Feb 1 etc), so read fields back out from tm.
+    m_year = tm.tm_year + 1900;
+    m_month = tm.tm_mon + 1;
+    m_day = tm.tm_mday;
+    m_hour = tm.tm_hour;
+    m_minute = tm.tm_min;
+    m_second = tm.tm_sec;
 }
 
 String DateTime::to_string(const String& format) const
@@ -147,7 +117,7 @@ String DateTime::to_string(const String& format) const
     };
     const char mon_long_names[12][10] = {
         "January", "February", "March", "April", "May", "June",
-        "July", "Auguest", "September", "October", "November", "December"
+        "July", "August", "September", "October", "November", "December"
     };
 
     struct tm tm;
@@ -242,8 +212,7 @@ String DateTime::to_string(const String& format) const
                     if (tm.tm_yday >= 7 - wday_of_year_beginning)
                         --week_number;
                     else {
-                        const bool last_year_is_leap = ((tm.tm_year + 1900 - 1) % 4 == 0 && (tm.tm_year + 1900 - 1) % 100 != 0) || (tm.tm_year + 1900 - 1) % 400 == 0;
-                        const int days_of_last_year = 365 + last_year_is_leap;
+                        const int days_of_last_year = days_in_year(tm.tm_year + 1900 - 1);
                         const int wday_of_last_year_beginning = (wday_of_year_beginning + 6 * days_of_last_year) % 7;
                         week_number = (days_of_last_year + wday_of_last_year_beginning) / 7 + 1;
                         if (wday_of_last_year_beginning > 3)
@@ -282,7 +251,7 @@ String DateTime::to_string(const String& format) const
 
 bool DateTime::is_before(const String& other) const
 {
-    auto now_string = String::format("%04d%02d%02d%02d%02d%02dZ", year(), month(), weekday(), hour(), minute(), second());
+    auto now_string = String::formatted("{:04}{:02}{:02}{:02}{:02}{:02}Z", year(), month(), weekday(), hour(), minute(), second());
     return __builtin_strcasecmp(now_string.characters(), other.characters()) < 0;
 }
 
@@ -290,4 +259,5 @@ const LogStream& operator<<(const LogStream& stream, const DateTime& value)
 {
     return stream << value.to_string();
 }
+
 }

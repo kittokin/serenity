@@ -27,17 +27,16 @@
 
 #pragma once
 
-#include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Function.h>
-#include <LibJS/Runtime/MarkedValueList.h>
+#include <LibJS/Runtime/VM.h>
 
 namespace JS {
 
 class Accessor final : public Cell {
 public:
-    static Accessor* create(Interpreter& interpreter, GlobalObject& global_object, Function* getter, Function* setter)
+    static Accessor* create(VM& vm, Function* getter, Function* setter)
     {
-        return interpreter.heap().allocate<Accessor>(global_object, getter, setter);
+        return vm.heap().allocate_without_global_object<Accessor>(getter, setter);
     }
 
     Accessor(Function* getter, Function* setter)
@@ -56,19 +55,18 @@ public:
     {
         if (!m_getter)
             return js_undefined();
-        return interpreter().call(*m_getter, this_value);
+        return vm().call(*m_getter, this_value);
     }
 
     void call_setter(Value this_value, Value setter_value)
     {
         if (!m_setter)
             return;
-        MarkedValueList arguments(interpreter().heap());
-        arguments.append(setter_value);
-        interpreter().call(*m_setter, this_value, move(arguments));
+        // FIXME: It might be nice if we had a way to communicate to our caller if an exception happened after this.
+        [[maybe_unused]] auto rc = vm().call(*m_setter, this_value, setter_value);
     }
 
-    void visit_children(Cell::Visitor& visitor) override
+    void visit_edges(Cell::Visitor& visitor) override
     {
         visitor.visit(m_getter);
         visitor.visit(m_setter);

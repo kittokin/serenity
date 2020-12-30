@@ -24,15 +24,15 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/BufferStream.h>
 #include <AK/ByteBuffer.h>
 #include <AK/LexicalPath.h>
 #include <AK/MappedFile.h>
+#include <AK/MemoryStream.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/Types.h>
 #include <LibGfx/ICOLoader.h>
 #include <LibGfx/PNGLoader.h>
-#include <LibM/math.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -42,9 +42,9 @@ namespace Gfx {
 
 // FIXME: This is in little-endian order. Maybe need a NetworkOrdered<T> equivalent eventually.
 struct ICONDIR {
-    u16 must_be_0;
-    u16 must_be_1;
-    u16 image_count;
+    u16 must_be_0 = 0;
+    u16 must_be_1 = 0;
+    u16 image_count = 0;
 };
 static_assert(sizeof(ICONDIR) == 6);
 
@@ -137,11 +137,11 @@ RefPtr<Gfx::Bitmap> load_ico_from_memory(const u8* data, size_t length)
     return bitmap;
 }
 
-static Optional<size_t> decode_ico_header(BufferStream& stream)
+static Optional<size_t> decode_ico_header(InputMemoryStream& stream)
 {
     ICONDIR header;
-    stream.read_raw((uint8_t*)&header, sizeof(header));
-    if (stream.handle_read_failure())
+    stream >> Bytes { &header, sizeof(header) };
+    if (stream.handle_any_error())
         return {};
 
     if (header.must_be_0 != 0 || header.must_be_1 != 1)
@@ -149,11 +149,11 @@ static Optional<size_t> decode_ico_header(BufferStream& stream)
     return { header.image_count };
 }
 
-static Optional<ImageDescriptor> decode_ico_direntry(BufferStream& stream)
+static Optional<ImageDescriptor> decode_ico_direntry(InputMemoryStream& stream)
 {
     ICONDIRENTRY entry;
-    stream.read_raw((uint8_t*)&entry, sizeof(entry));
-    if (stream.handle_read_failure())
+    stream >> Bytes { &entry, sizeof(entry) };
+    if (stream.handle_any_error())
         return {};
 
     ImageDescriptor desc = { entry.width, entry.height, entry.offset, entry.size, nullptr };
@@ -170,7 +170,7 @@ static size_t find_largest_image(const ICOLoadingContext& context)
     size_t max_area = 0;
     size_t index = 0;
     size_t largest_index = 0;
-    for(const auto& desc : context.images) {
+    for (const auto& desc : context.images) {
         if (desc.width * desc.height > max_area) {
             max_area = desc.width * desc.height;
             largest_index = index;
@@ -182,8 +182,8 @@ static size_t find_largest_image(const ICOLoadingContext& context)
 
 static bool load_ico_directory(ICOLoadingContext& context)
 {
-    auto buffer = ByteBuffer::wrap(context.data, context.data_size);
-    auto stream = BufferStream(buffer);
+    InputMemoryStream stream { { context.data, context.data_size } };
+
     auto image_count = decode_ico_header(stream);
     if (!image_count.has_value() || image_count.value() == 0) {
         return false;
@@ -208,7 +208,7 @@ static bool load_ico_directory(ICOLoadingContext& context)
             return false;
         }
 #ifdef ICO_DEBUG
-        printf("load_ico_directory: index %lu width: %u height: %u offset: %lu size: %lu\n",
+        printf("load_ico_directory: index %zu width: %u height: %u offset: %lu size: %lu\n",
             i, desc.width, desc.height, desc.offset, desc.size);
 #endif
         context.images.append(desc);
@@ -280,7 +280,7 @@ static bool load_ico_bmp(ICOLoadingContext& context, ImageDescriptor& desc)
     }
 
     // Mask is 1bpp, and each row must be 4-byte aligned
-    size_t mask_row_len = align_up_to(align_up_to(desc.width, 8)/8, 4);
+    size_t mask_row_len = align_up_to(align_up_to(desc.width, 8) / 8, 4);
     size_t required_len = desc.height * (desc.width * sizeof(BMP_ARGB) + mask_row_len);
     size_t available_len = desc.size - sizeof(info);
     if (required_len > available_len) {
@@ -292,6 +292,8 @@ static bool load_ico_bmp(ICOLoadingContext& context, ImageDescriptor& desc)
     }
 
     desc.bitmap = Bitmap::create_purgeable(BitmapFormat::RGBA32, { desc.width, desc.height });
+    if (!desc.bitmap)
+        return false;
     Bitmap& bitmap = *desc.bitmap;
     const u8* image_base = context.data + desc.offset + sizeof(info);
     const BMP_ARGB* data_base = (const BMP_ARGB*)image_base;
@@ -408,8 +410,7 @@ bool ICOImageDecoderPlugin::set_nonvolatile()
 
 bool ICOImageDecoderPlugin::sniff()
 {
-    auto buffer = ByteBuffer::wrap(m_context->data, m_context->data_size);
-    BufferStream stream(buffer);
+    InputMemoryStream stream { { m_context->data, m_context->data_size } };
     return decode_ico_header(stream).has_value();
 }
 

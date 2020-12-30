@@ -25,6 +25,7 @@
  */
 
 #include <AK/StringBuilder.h>
+#include <AK/Utf8View.h>
 #include <LibCore/Timer.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/DisplayLink.h>
@@ -32,44 +33,48 @@
 #include <LibJS/Interpreter.h>
 #include <LibJS/Parser.h>
 #include <LibJS/Runtime/Function.h>
-#include <LibJS/Runtime/GlobalObject.h>
 #include <LibWeb/Bindings/DocumentWrapper.h>
 #include <LibWeb/Bindings/WindowObject.h>
-#include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleResolver.h>
-#include <LibWeb/DOM/AttributeNames.h>
+#include <LibWeb/DOM/Comment.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/DocumentFragment.h>
 #include <LibWeb/DOM/DocumentType.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/ElementFactory.h>
-#include <LibWeb/DOM/HTMLBodyElement.h>
-#include <LibWeb/DOM/HTMLHeadElement.h>
-#include <LibWeb/DOM/HTMLHtmlElement.h>
-#include <LibWeb/DOM/HTMLScriptElement.h>
-#include <LibWeb/DOM/HTMLTitleElement.h>
+#include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/DOM/Window.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/Frame/Frame.h>
-#include <LibWeb/Layout/LayoutDocument.h>
-#include <LibWeb/Layout/LayoutTreeBuilder.h>
+#include <LibWeb/HTML/AttributeNames.h>
+#include <LibWeb/HTML/EventNames.h>
+#include <LibWeb/HTML/HTMLBodyElement.h>
+#include <LibWeb/HTML/HTMLFrameSetElement.h>
+#include <LibWeb/HTML/HTMLHeadElement.h>
+#include <LibWeb/HTML/HTMLHtmlElement.h>
+#include <LibWeb/HTML/HTMLScriptElement.h>
+#include <LibWeb/HTML/HTMLTitleElement.h>
+#include <LibWeb/InProcessWebView.h>
+#include <LibWeb/Layout/BlockFormattingContext.h>
+#include <LibWeb/Layout/InitialContainingBlockBox.h>
+#include <LibWeb/Layout/TreeBuilder.h>
+#include <LibWeb/Namespace.h>
 #include <LibWeb/Origin.h>
-#include <LibWeb/PageView.h>
-#include <LibWeb/Parser/CSSParser.h>
+#include <LibWeb/Page/Frame.h>
+#include <LibWeb/SVG/TagNames.h>
+#include <ctype.h>
 #include <stdio.h>
 
-namespace Web {
+namespace Web::DOM {
 
 Document::Document(const URL& url)
     : ParentNode(*this, NodeType::DOCUMENT_NODE)
-    , m_style_resolver(make<StyleResolver>(*this))
+    , m_style_resolver(make<CSS::StyleResolver>(*this))
     , m_style_sheets(CSS::StyleSheetList::create(*this))
     , m_url(url)
     , m_window(Window::create_with_document(*this))
+    , m_implementation(DOMImplementation::create(*this))
 {
-    HTML::AttributeNames::initialize();
-    HTML::TagNames::initialize();
-
     m_style_update_timer = Core::Timer::create_single_shot(0, [this] {
         update_style();
     });
@@ -79,11 +84,69 @@ Document::~Document()
 {
 }
 
+void Document::removed_last_ref()
+{
+    ASSERT(!ref_count());
+    ASSERT(!m_deletion_has_begun);
+
+    if (m_referencing_node_count) {
+        // The document has reached ref_count==0 but still has nodes keeping it alive.
+        // At this point, sever all the node links we control.
+        // If nodes remain elsewhere (e.g JS wrappers), they will keep the document alive.
+
+        // NOTE: This makes sure we stay alive across for the duration of the cleanup below.
+        increment_referencing_node_count();
+
+        m_focused_element = nullptr;
+        m_hovered_node = nullptr;
+        m_pending_parsing_blocking_script = nullptr;
+        m_inspected_node = nullptr;
+        m_scripts_to_execute_when_parsing_has_finished.clear();
+        m_scripts_to_execute_as_soon_as_possible.clear();
+        m_associated_inert_template_document = nullptr;
+
+        m_interpreter = nullptr;
+
+        {
+            // Gather up all the descendants of this document and prune them from the tree.
+            // FIXME: This could definitely be more elegant.
+            NonnullRefPtrVector<Node> descendants;
+            for_each_in_subtree([&](auto& node) {
+                if (&node != this)
+                    descendants.append(node);
+                return IterationDecision::Continue;
+            });
+
+            for (auto& node : descendants) {
+                ASSERT(&node.document() == this);
+                ASSERT(!node.is_document());
+                if (node.parent())
+                    node.parent()->remove_child(node);
+            }
+        }
+
+        m_in_removed_last_ref = false;
+        decrement_referencing_node_count();
+        return;
+    }
+
+    m_in_removed_last_ref = false;
+    m_deletion_has_begun = true;
+    delete this;
+}
+
 Origin Document::origin() const
 {
     if (!m_url.is_valid())
         return {};
     return { m_url.protocol(), m_url.host(), m_url.port() };
+}
+
+void Document::set_origin(const Origin& origin)
+{
+    m_url.set_protocol(origin.protocol());
+    m_url.set_host(origin.host());
+    m_url.set_port(origin.port());
 }
 
 void Document::schedule_style_update()
@@ -110,40 +173,63 @@ bool Document::is_child_allowed(const Node& node) const
     }
 }
 
-void Document::fixup()
+const Element* Document::document_element() const
 {
-    if (!first_child() || !is<DocumentType>(*first_child()))
-        prepend_child(adopt(*new DocumentType(*this)));
+    return first_child_of_type<Element>();
+}
 
-    if (is<HTMLHtmlElement>(first_child()->next_sibling()))
+const HTML::HTMLHtmlElement* Document::html_element() const
+{
+    auto* html = document_element();
+    if (is<HTML::HTMLHtmlElement>(html))
+        return downcast<HTML::HTMLHtmlElement>(html);
+    return nullptr;
+}
+
+const HTML::HTMLHeadElement* Document::head() const
+{
+    auto* html = html_element();
+    if (!html)
+        return nullptr;
+    return html->first_child_of_type<HTML::HTMLHeadElement>();
+}
+
+const HTML::HTMLElement* Document::body() const
+{
+    auto* html = html_element();
+    if (!html)
+        return nullptr;
+    auto* first_body = html->first_child_of_type<HTML::HTMLBodyElement>();
+    if (first_body)
+        return first_body;
+    auto* first_frameset = html->first_child_of_type<HTML::HTMLFrameSetElement>();
+    if (first_frameset)
+        return first_frameset;
+    return nullptr;
+}
+
+void Document::set_body(HTML::HTMLElement& new_body)
+{
+    if (!is<HTML::HTMLBodyElement>(new_body) && !is<HTML::HTMLFrameSetElement>(new_body)) {
+        // FIXME: throw a "HierarchyRequestError" DOMException.
         return;
+    }
 
-    auto body = create_element("body");
-    auto html = create_element("html");
-    html->append_child(body);
-    this->donate_all_children_to(body);
-    this->append_child(html);
-}
+    auto* existing_body = body();
+    if (existing_body) {
+        TODO();
+        return;
+    }
 
-const HTMLHtmlElement* Document::document_element() const
-{
-    return first_child_of_type<HTMLHtmlElement>();
-}
-
-const HTMLHeadElement* Document::head() const
-{
     auto* html = document_element();
-    if (!html)
-        return nullptr;
-    return html->first_child_of_type<HTMLHeadElement>();
-}
+    if (!html) {
+        // FIXME: throw a "HierarchyRequestError" DOMException.
+        return;
+    }
 
-const HTMLElement* Document::body() const
-{
-    auto* html = document_element();
-    if (!html)
-        return nullptr;
-    return html->first_child_of_type<HTMLBodyElement>();
+    // FIXME: Implement this once there's a non-const first_child_of_type:
+    //        "Otherwise, the body element is null, but there's a document element. Append the new value to the document element."
+    TODO();
 }
 
 String Document::title() const
@@ -152,31 +238,82 @@ String Document::title() const
     if (!head_element)
         return {};
 
-    auto* title_element = head_element->first_child_of_type<HTMLTitleElement>();
+    auto* title_element = head_element->first_child_of_type<HTML::HTMLTitleElement>();
     if (!title_element)
         return {};
 
-    return title_element->text_content();
+    auto raw_title = title_element->text_content();
+
+    StringBuilder builder;
+    bool last_was_space = false;
+    for (auto code_point : Utf8View(raw_title)) {
+        if (isspace(code_point)) {
+            last_was_space = true;
+        } else {
+            if (last_was_space && !builder.is_empty())
+                builder.append(' ');
+            builder.append_code_point(code_point);
+            last_was_space = false;
+        }
+    }
+    return builder.to_string();
+}
+
+void Document::set_title(const String& title)
+{
+    auto* head_element = const_cast<HTML::HTMLHeadElement*>(head());
+    if (!head_element)
+        return;
+
+    RefPtr<HTML::HTMLTitleElement> title_element = head_element->first_child_of_type<HTML::HTMLTitleElement>();
+    if (!title_element) {
+        title_element = static_ptr_cast<HTML::HTMLTitleElement>(create_element(HTML::TagNames::title));
+        head_element->append_child(*title_element);
+    }
+
+    while (RefPtr<Node> child = title_element->first_child())
+        title_element->remove_child(child.release_nonnull());
+
+    title_element->append_child(adopt(*new Text(*this, title)));
+
+    if (auto* page = this->page())
+        page->client().page_did_change_title(title);
 }
 
 void Document::attach_to_frame(Badge<Frame>, Frame& frame)
 {
-    m_frame = frame.make_weak_ptr();
-    for_each_in_subtree([&](auto& node) {
-        node.document_did_attach_to_frame(frame);
-        return IterationDecision::Continue;
-    });
-    layout();
+    m_frame = frame;
+    update_layout();
 }
 
 void Document::detach_from_frame(Badge<Frame>, Frame& frame)
 {
-    for_each_in_subtree([&](auto& node) {
-        node.document_will_detach_from_frame(frame);
+    ASSERT(&frame == m_frame);
+    tear_down_layout_tree();
+    m_frame = nullptr;
+}
+
+void Document::tear_down_layout_tree()
+{
+    if (!m_layout_root)
+        return;
+
+    // Gather up all the layout nodes in a vector and detach them from parents
+    // while the vector keeps them alive.
+
+    NonnullRefPtrVector<Layout::Node> layout_nodes;
+
+    m_layout_root->for_each_in_subtree([&](auto& layout_node) {
+        layout_nodes.append(layout_node);
         return IterationDecision::Continue;
     });
+
+    for (auto& layout_node : layout_nodes) {
+        if (layout_node.parent())
+            layout_node.parent()->remove_child(layout_node);
+    }
+
     m_layout_root = nullptr;
-    m_frame = nullptr;
 }
 
 Color Document::background_color(const Palette& palette) const
@@ -190,11 +327,10 @@ Color Document::background_color(const Palette& palette) const
     if (!body_layout_node)
         return default_color;
 
-    auto background_color = body_layout_node->specified_style().property(CSS::PropertyID::BackgroundColor);
-    if (!background_color.has_value() || !background_color.value()->is_color())
+    auto color = body_layout_node->style().background_color();
+    if (!color.alpha())
         return default_color;
-
-    return background_color.value()->to_color(*this);
+    return color;
 }
 
 RefPtr<Gfx::Bitmap> Document::background_image() const
@@ -211,7 +347,7 @@ RefPtr<Gfx::Bitmap> Document::background_image() const
     if (!background_image.has_value() || !background_image.value()->is_image())
         return {};
 
-    auto& image_value = static_cast<const ImageStyleValue&>(*background_image.value());
+    auto& image_value = static_cast<const CSS::ImageStyleValue&>(*background_image.value());
     if (!image_value.bitmap())
         return {};
 
@@ -225,38 +361,12 @@ URL Document::complete_url(const String& string) const
 
 void Document::invalidate_layout()
 {
-    m_layout_root = nullptr;
+    tear_down_layout_tree();
 }
 
 void Document::force_layout()
 {
     invalidate_layout();
-    layout();
-}
-
-void Document::layout()
-{
-    if (!frame())
-        return;
-
-    if (!m_layout_root) {
-        LayoutTreeBuilder tree_builder;
-        m_layout_root = static_ptr_cast<LayoutDocument>(tree_builder.build(*this));
-    }
-    m_layout_root->layout();
-    m_layout_root->set_needs_display();
-
-    if (frame()->is_main_frame())
-        frame()->page().client().page_did_layout();
-}
-
-void Document::update_style()
-{
-    for_each_in_subtree_of_type<Element>([&](auto& element) {
-        if (element.needs_style_update())
-            element.recompute_style();
-        return IterationDecision::Continue;
-    });
     update_layout();
 }
 
@@ -265,12 +375,47 @@ void Document::update_layout()
     if (!frame())
         return;
 
-    layout();
+    if (!m_layout_root) {
+        Layout::TreeBuilder tree_builder;
+        m_layout_root = static_ptr_cast<Layout::InitialContainingBlockBox>(tree_builder.build(*this));
+    }
+
+    Layout::BlockFormattingContext root_formatting_context(*m_layout_root, nullptr);
+    root_formatting_context.run(*m_layout_root, Layout::LayoutMode::Default);
+
+    m_layout_root->set_needs_display();
+
+    if (frame()->is_main_frame()) {
+        if (auto* page = this->page())
+            page->client().page_did_layout();
+    }
 }
 
-RefPtr<LayoutNode> Document::create_layout_node(const StyleProperties*)
+static void update_style_recursively(DOM::Node& node)
 {
-    return adopt(*new LayoutDocument(*this, StyleProperties::create()));
+    node.for_each_child([&](auto& child) {
+        if (child.needs_style_update()) {
+            if (is<Element>(child))
+                downcast<Element>(child).recompute_style();
+            child.set_needs_style_update(false);
+        }
+        if (child.child_needs_style_update()) {
+            update_style_recursively(child);
+            child.set_child_needs_style_update(false);
+        }
+        return IterationDecision::Continue;
+    });
+}
+
+void Document::update_style()
+{
+    update_style_recursively(*this);
+    update_layout();
+}
+
+RefPtr<Layout::Node> Document::create_layout_node(const CSS::StyleProperties*)
+{
+    return adopt(*new Layout::InitialContainingBlockBox(*this, CSS::StyleProperties::create()));
 }
 
 void Document::set_link_color(Color color)
@@ -288,14 +433,14 @@ void Document::set_visited_link_color(Color color)
     m_visited_link_color = color;
 }
 
-const LayoutDocument* Document::layout_node() const
+const Layout::InitialContainingBlockBox* Document::layout_node() const
 {
-    return static_cast<const LayoutDocument*>(Node::layout_node());
+    return static_cast<const Layout::InitialContainingBlockBox*>(Node::layout_node());
 }
 
-LayoutDocument* Document::layout_node()
+Layout::InitialContainingBlockBox* Document::layout_node()
 {
-    return static_cast<LayoutDocument*>(Node::layout_node());
+    return static_cast<Layout::InitialContainingBlockBox*>(Node::layout_node());
 }
 
 void Document::set_inspected_node(Node* node)
@@ -323,64 +468,36 @@ void Document::set_hovered_node(Node* node)
     invalidate_style();
 }
 
-Vector<const Element*> Document::get_elements_by_name(const String& name) const
+NonnullRefPtrVector<Element> Document::get_elements_by_name(const String& name) const
 {
-    Vector<const Element*> elements;
+    NonnullRefPtrVector<Element> elements;
     for_each_in_subtree_of_type<Element>([&](auto& element) {
         if (element.attribute(HTML::AttributeNames::name) == name)
-            elements.append(&element);
-        return IterationDecision::Continue;
-    });
-    return elements;
-}
-
-NonnullRefPtrVector<Element> Document::get_elements_by_tag_name(const String& tag_name) const
-{
-    NonnullRefPtrVector<Element> elements;
-    for_each_in_subtree_of_type<Element>([&](auto& element) {
-        if (element.tag_name() == tag_name)
             elements.append(element);
         return IterationDecision::Continue;
     });
     return elements;
 }
 
-RefPtr<Element> Document::query_selector(const StringView& selector_text)
+NonnullRefPtrVector<Element> Document::get_elements_by_tag_name(const FlyString& tag_name) const
 {
-    auto selector = parse_selector(CSS::ParsingContext(*this), selector_text);
-    if (!selector.has_value())
-        return {};
-
-    dump_selector(selector.value());
-
-    RefPtr<Element> result;
-    for_each_in_subtree_of_type<Element>([&](auto& element) {
-        if (SelectorEngine::matches(selector.value(), element)) {
-            result = element;
-            return IterationDecision::Break;
-        }
-        return IterationDecision::Continue;
-    });
-
-    return result;
-}
-
-NonnullRefPtrVector<Element> Document::query_selector_all(const StringView& selector_text)
-{
-    auto selector = parse_selector(CSS::ParsingContext(*this), selector_text);
-    if (!selector.has_value())
-        return {};
-
-    dump_selector(selector.value());
-
     NonnullRefPtrVector<Element> elements;
     for_each_in_subtree_of_type<Element>([&](auto& element) {
-        if (SelectorEngine::matches(selector.value(), element)) {
+        if (element.local_name() == tag_name)
             elements.append(element);
-        }
         return IterationDecision::Continue;
     });
+    return elements;
+}
 
+NonnullRefPtrVector<Element> Document::get_elements_by_class_name(const FlyString& class_name) const
+{
+    NonnullRefPtrVector<Element> elements;
+    for_each_in_subtree_of_type<Element>([&](auto& element) {
+        if (element.has_class(class_name))
+            elements.append(element);
+        return IterationDecision::Continue;
+    });
     return elements;
 }
 
@@ -388,33 +505,43 @@ Color Document::link_color() const
 {
     if (m_link_color.has_value())
         return m_link_color.value();
-    if (!frame())
+    if (!page())
         return Color::Blue;
-    return frame()->page().palette().link();
+    return page()->palette().link();
 }
 
 Color Document::active_link_color() const
 {
     if (m_active_link_color.has_value())
         return m_active_link_color.value();
-    if (!frame())
+    if (!page())
         return Color::Red;
-    return frame()->page().palette().active_link();
+    return page()->palette().active_link();
 }
 
 Color Document::visited_link_color() const
 {
     if (m_visited_link_color.has_value())
         return m_visited_link_color.value();
-    if (!frame())
+    if (!page())
         return Color::Magenta;
-    return frame()->page().palette().visited_link();
+    return page()->palette().visited_link();
+}
+
+static JS::VM& main_thread_vm()
+{
+    static RefPtr<JS::VM> vm;
+    if (!vm) {
+        vm = JS::VM::create();
+        vm->set_should_log_exceptions(true);
+    }
+    return *vm;
 }
 
 JS::Interpreter& Document::interpreter()
 {
     if (!m_interpreter)
-        m_interpreter = JS::Interpreter::create<Bindings::WindowObject>(*m_window);
+        m_interpreter = JS::Interpreter::create<Bindings::WindowObject>(main_thread_vm(), *m_window);
     return *m_interpreter;
 }
 
@@ -426,12 +553,22 @@ JS::Value Document::run_javascript(const StringView& source)
         parser.print_errors();
         return JS::js_undefined();
     }
-    return document().interpreter().run(document().interpreter().global_object(), *program);
+    auto& interpreter = document().interpreter();
+    auto result = interpreter.run(interpreter.global_object(), *program);
+    if (interpreter.exception())
+        interpreter.vm().clear_exception();
+    return result;
 }
 
 NonnullRefPtr<Element> Document::create_element(const String& tag_name)
 {
-    return Web::create_element(*this, tag_name);
+    // FIXME: Let namespace be the HTML namespace, if this is an HTML document or this’s content type is "application/xhtml+xml", and null otherwise.
+    return DOM::create_element(*this, tag_name, Namespace::HTML);
+}
+
+NonnullRefPtr<DocumentFragment> Document::create_document_fragment()
+{
+    return adopt(*new DocumentFragment(*this));
 }
 
 NonnullRefPtr<Text> Document::create_text_node(const String& data)
@@ -439,32 +576,37 @@ NonnullRefPtr<Text> Document::create_text_node(const String& data)
     return adopt(*new Text(*this, data));
 }
 
-void Document::set_pending_parsing_blocking_script(Badge<HTMLScriptElement>, HTMLScriptElement* script)
+NonnullRefPtr<Comment> Document::create_comment(const String& data)
+{
+    return adopt(*new Comment(*this, data));
+}
+
+void Document::set_pending_parsing_blocking_script(Badge<HTML::HTMLScriptElement>, HTML::HTMLScriptElement* script)
 {
     m_pending_parsing_blocking_script = script;
 }
 
-NonnullRefPtr<HTMLScriptElement> Document::take_pending_parsing_blocking_script(Badge<HTMLDocumentParser>)
+NonnullRefPtr<HTML::HTMLScriptElement> Document::take_pending_parsing_blocking_script(Badge<HTML::HTMLDocumentParser>)
 {
     return m_pending_parsing_blocking_script.release_nonnull();
 }
 
-void Document::add_script_to_execute_when_parsing_has_finished(Badge<HTMLScriptElement>, HTMLScriptElement& script)
+void Document::add_script_to_execute_when_parsing_has_finished(Badge<HTML::HTMLScriptElement>, HTML::HTMLScriptElement& script)
 {
     m_scripts_to_execute_when_parsing_has_finished.append(script);
 }
 
-NonnullRefPtrVector<HTMLScriptElement> Document::take_scripts_to_execute_when_parsing_has_finished(Badge<HTMLDocumentParser>)
+NonnullRefPtrVector<HTML::HTMLScriptElement> Document::take_scripts_to_execute_when_parsing_has_finished(Badge<HTML::HTMLDocumentParser>)
 {
     return move(m_scripts_to_execute_when_parsing_has_finished);
 }
 
-void Document::add_script_to_execute_as_soon_as_possible(Badge<HTMLScriptElement>, HTMLScriptElement& script)
+void Document::add_script_to_execute_as_soon_as_possible(Badge<HTML::HTMLScriptElement>, HTML::HTMLScriptElement& script)
 {
     m_scripts_to_execute_as_soon_as_possible.append(script);
 }
 
-NonnullRefPtrVector<HTMLScriptElement> Document::take_scripts_to_execute_as_soon_as_possible(Badge<HTMLDocumentParser>)
+NonnullRefPtrVector<HTML::HTMLScriptElement> Document::take_scripts_to_execute_as_soon_as_possible(Badge<HTML::HTMLDocumentParser>)
 {
     return move(m_scripts_to_execute_as_soon_as_possible);
 }
@@ -475,6 +617,68 @@ void Document::adopt_node(Node& subtree_root)
         node.set_document({}, *this);
         return IterationDecision::Continue;
     });
+}
+
+const DocumentType* Document::doctype() const
+{
+    return first_child_of_type<DocumentType>();
+}
+
+const String& Document::compat_mode() const
+{
+    static String back_compat = "BackCompat";
+    static String css1_compat = "CSS1Compat";
+
+    if (m_quirks_mode == QuirksMode::Yes)
+        return back_compat;
+
+    return css1_compat;
+}
+
+bool Document::is_editable() const
+{
+    return m_editable;
+}
+
+void Document::set_focused_element(Element* element)
+{
+    if (m_focused_element == element)
+        return;
+
+    m_focused_element = element;
+
+    if (m_layout_root)
+        m_layout_root->set_needs_display();
+}
+
+void Document::set_ready_state(const String& ready_state)
+{
+    m_ready_state = ready_state;
+    dispatch_event(Event::create(HTML::EventNames::readystatechange));
+}
+
+Page* Document::page()
+{
+    return m_frame ? m_frame->page() : nullptr;
+}
+
+const Page* Document::page() const
+{
+    return m_frame ? m_frame->page() : nullptr;
+}
+
+EventTarget* Document::get_parent(const Event& event)
+{
+    if (event.type() == HTML::EventNames::load)
+        return nullptr;
+
+    return &window();
+}
+
+void Document::completely_finish_loading()
+{
+    // FIXME: This needs to handle iframes.
+    dispatch_event(DOM::Event::create(HTML::EventNames::load));
 }
 
 }

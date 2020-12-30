@@ -28,43 +28,34 @@
 
 #include <AK/Assertions.h>
 #include <AK/NonnullRefPtr.h>
+#include <AK/TypeCasts.h>
 #include <AK/Weakable.h>
+#include <LibWeb/Forward.h>
 
 namespace Web {
-
-// FIXME: I wish I didn't have to forward declare these, but I can't seem to avoid
-//        it if I still want to have for_each_in_subtree_of_type<U> inline here.
-class Node;
-class LayoutNode;
-template<typename T>
-bool is(const Node&);
-template<typename T>
-bool is(const LayoutNode&);
 
 template<typename T>
 class TreeNode : public Weakable<T> {
 public:
     void ref()
     {
+        ASSERT(!m_in_removed_last_ref);
         ASSERT(m_ref_count);
         ++m_ref_count;
     }
 
     void unref()
     {
+        ASSERT(!m_in_removed_last_ref);
         ASSERT(m_ref_count);
         if (!--m_ref_count) {
-            if (m_next_sibling)
-                m_next_sibling->m_previous_sibling = m_previous_sibling;
-            if (m_previous_sibling)
-                m_previous_sibling->m_next_sibling = m_next_sibling;
-            T* next_child;
-            for (auto* child = m_first_child; child; child = next_child) {
-                next_child = child->m_next_sibling;
-                child->m_parent = nullptr;
-                child->unref();
+            if constexpr (IsBaseOf<DOM::Node, T>::value) {
+                m_in_removed_last_ref = true;
+                static_cast<T*>(this)->removed_last_ref();
+            } else {
+                delete static_cast<T*>(this);
             }
-            delete static_cast<T*>(this);
+            return;
         }
     }
     int ref_count() const { return m_ref_count; }
@@ -112,7 +103,6 @@ public:
     void append_child(NonnullRefPtr<T> node, bool notify = true);
     void insert_before(NonnullRefPtr<T> node, RefPtr<T> child, bool notify = true);
     NonnullRefPtr<T> remove_child(NonnullRefPtr<T> node);
-    void donate_all_children_to(T& node);
 
     bool is_child_allowed(const T&) const { return true; }
 
@@ -199,8 +189,119 @@ public:
         return IterationDecision::Continue;
     }
 
+    template<typename Callback>
+    void for_each_child(Callback callback) const
+    {
+        return const_cast<TreeNode*>(this)->template for_each_child(move(callback));
+    }
+
+    template<typename Callback>
+    void for_each_child(Callback callback)
+    {
+        for (auto* node = first_child(); node; node = node->next_sibling())
+            callback(*node);
+    }
+
+    template<typename U, typename Callback>
+    void for_each_child_of_type(Callback callback)
+    {
+        for (auto* node = first_child(); node; node = node->next_sibling()) {
+            if (is<U>(node))
+                callback(downcast<U>(*node));
+        }
+    }
+
+    template<typename U, typename Callback>
+    void for_each_child_of_type(Callback callback) const
+    {
+        return const_cast<TreeNode*>(this)->template for_each_child_of_type<U>(move(callback));
+    }
+
+    template<typename U>
+    const U* next_sibling_of_type() const
+    {
+        return const_cast<TreeNode*>(this)->template next_sibling_of_type<U>();
+    }
+
+    template<typename U>
+    inline U* next_sibling_of_type()
+    {
+        for (auto* sibling = next_sibling(); sibling; sibling = sibling->next_sibling()) {
+            if (is<U>(*sibling))
+                return &downcast<U>(*sibling);
+        }
+        return nullptr;
+    }
+
+    template<typename U>
+    const U* previous_sibling_of_type() const
+    {
+        return const_cast<TreeNode*>(this)->template previous_sibling_of_type<U>();
+    }
+
+    template<typename U>
+    U* previous_sibling_of_type()
+    {
+        for (auto* sibling = previous_sibling(); sibling; sibling = sibling->previous_sibling()) {
+            if (is<U>(*sibling))
+                return &downcast<U>(*sibling);
+        }
+        return nullptr;
+    }
+
+    template<typename U>
+    const U* first_child_of_type() const
+    {
+        return const_cast<TreeNode*>(this)->template first_child_of_type<U>();
+    }
+
+    template<typename U>
+    const U* last_child_of_type() const
+    {
+        return const_cast<TreeNode*>(this)->template last_child_of_type<U>();
+    }
+
+    template<typename U>
+    U* first_child_of_type()
+    {
+        for (auto* child = first_child(); child; child = child->next_sibling()) {
+            if (is<U>(*child))
+                return &downcast<U>(*child);
+        }
+        return nullptr;
+    }
+
+    template<typename U>
+    U* last_child_of_type()
+    {
+        for (auto* child = last_child(); child; child = child->previous_sibling()) {
+            if (is<U>(*child))
+                return &downcast<U>(*child);
+        }
+        return nullptr;
+    }
+
+    template<typename U>
+    const U* first_ancestor_of_type() const
+    {
+        return const_cast<TreeNode*>(this)->template first_ancestor_of_type<U>();
+    }
+
+    template<typename U>
+    U* first_ancestor_of_type()
+    {
+        for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
+            if (is<U>(*ancestor))
+                return &downcast<U>(*ancestor);
+        }
+        return nullptr;
+    }
+
 protected:
     TreeNode() { }
+
+    bool m_deletion_has_begun { false };
+    bool m_in_removed_last_ref { false };
 
 private:
     int m_ref_count { 1 };
@@ -258,7 +359,7 @@ inline void TreeNode<T>::append_child(NonnullRefPtr<T> node, bool notify)
         m_first_child = m_last_child;
     if (notify)
         node->inserted_into(static_cast<T&>(*this));
-    (void)node.leak_ref();
+    [[maybe_unused]] auto& rc = node.leak_ref();
 
     if (notify)
         static_cast<T*>(this)->children_changed();
@@ -279,13 +380,21 @@ inline void TreeNode<T>::insert_before(NonnullRefPtr<T> node, RefPtr<T> child, b
     node->m_previous_sibling = child->m_previous_sibling;
     node->m_next_sibling = child;
 
+    if (child->m_previous_sibling)
+        child->m_previous_sibling->m_next_sibling = node;
+
+    if (m_first_child == child)
+        m_first_child = node;
+
+    child->m_previous_sibling = node;
+
     if (m_first_child == child)
         m_first_child = node;
 
     node->m_parent = static_cast<T*>(this);
     if (notify)
         node->inserted_into(static_cast<T&>(*this));
-    (void)node.leak_ref();
+    [[maybe_unused]] auto& rc = node.leak_ref();
 
     if (notify)
         static_cast<T*>(this)->children_changed();
@@ -307,27 +416,9 @@ inline void TreeNode<T>::prepend_child(NonnullRefPtr<T> node)
     if (!m_last_child)
         m_last_child = m_first_child;
     node->inserted_into(static_cast<T&>(*this));
-    (void)node.leak_ref();
+    [[maybe_unused]] auto& rc = node.leak_ref();
 
     static_cast<T*>(this)->children_changed();
-}
-
-template<typename T>
-inline void TreeNode<T>::donate_all_children_to(T& node)
-{
-    for (T* child = m_first_child; child != nullptr;) {
-        T* next_child = child->m_next_sibling;
-
-        child->m_parent = nullptr;
-        child->m_next_sibling = nullptr;
-        child->m_previous_sibling = nullptr;
-
-        node.append_child(adopt(*child));
-        child = next_child;
-    }
-
-    m_first_child = nullptr;
-    m_last_child = nullptr;
 }
 
 template<typename T>

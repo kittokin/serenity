@@ -27,16 +27,16 @@
 #pragma once
 
 #include <AK/Function.h>
-#include <AK/String.h>
+#include <LibGUI/AbstractButton.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/StylePainter.h>
 #include <LibGfx/TextAlignment.h>
-#include <LibGUI/AbstractButton.h>
 
 namespace GUI {
 
 class Button : public AbstractButton {
-    C_OBJECT(Button)
+    C_OBJECT(Button);
+
 public:
     virtual ~Button() override;
 
@@ -58,13 +58,10 @@ public:
 
     void set_action(Action&);
 
-    virtual bool accepts_focus() const override { return m_focusable; }
     virtual bool is_uncheckable() const override;
 
-    void set_focusable(bool b) { m_focusable = b; }
-
 protected:
-    explicit Button(const StringView& text = {});
+    explicit Button(String text = {});
     virtual void paint_event(PaintEvent&) override;
 
 private:
@@ -72,7 +69,6 @@ private:
     Gfx::ButtonStyle m_button_style { Gfx::ButtonStyle::Normal };
     Gfx::TextAlignment m_text_alignment { Gfx::TextAlignment::Center };
     WeakPtr<Action> m_action;
-    bool m_focusable { true };
 };
 
 }

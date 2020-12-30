@@ -34,7 +34,7 @@
 
 namespace Web {
 
-DOMTreeModel::DOMTreeModel(Document& document)
+DOMTreeModel::DOMTreeModel(DOM::Document& document)
     : m_document(document)
 {
     m_document_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-html.png"));
@@ -51,7 +51,7 @@ GUI::ModelIndex DOMTreeModel::index(int row, int column, const GUI::ModelIndex& 
     if (!parent.is_valid()) {
         return create_index(row, column, m_document.ptr());
     }
-    auto& parent_node = *static_cast<Node*>(parent.internal_data());
+    auto& parent_node = *static_cast<DOM::Node*>(parent.internal_data());
     return create_index(row, column, parent_node.child_at_index(row));
 }
 
@@ -59,9 +59,11 @@ GUI::ModelIndex DOMTreeModel::parent_index(const GUI::ModelIndex& index) const
 {
     if (!index.is_valid())
         return {};
-    auto& node = *static_cast<Node*>(index.internal_data());
+    auto& node = *static_cast<DOM::Node*>(index.internal_data());
     if (!node.parent())
         return {};
+
+    // FIXME: Handle the template element (child elements are not stored in it, all of its children are in its document fragment "content")
 
     // No grandparent? Parent is the document!
     if (!node.parent()->parent()) {
@@ -85,7 +87,7 @@ int DOMTreeModel::row_count(const GUI::ModelIndex& index) const
 {
     if (!index.is_valid())
         return 1;
-    auto& node = *static_cast<Node*>(index.internal_data());
+    auto& node = *static_cast<DOM::Node*>(index.internal_data());
     return node.child_count();
 }
 
@@ -115,10 +117,10 @@ static String with_whitespace_collapsed(const StringView& string)
     return builder.to_string();
 }
 
-GUI::Variant DOMTreeModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant DOMTreeModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
-    auto& node = *static_cast<Node*>(index.internal_data());
-    if (role == Role::Icon) {
+    auto& node = *static_cast<DOM::Node*>(index.internal_data());
+    if (role == GUI::ModelRole::Icon) {
         if (node.is_document())
             return m_document_icon;
         if (node.is_element())
@@ -126,15 +128,15 @@ GUI::Variant DOMTreeModel::data(const GUI::ModelIndex& index, Role role) const
         // FIXME: More node type icons?
         return m_text_icon;
     }
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Display) {
         if (node.is_text())
-            return String::format("%s", with_whitespace_collapsed(to<Text>(node).data()).characters());
+            return String::format("%s", with_whitespace_collapsed(downcast<DOM::Text>(node).data()).characters());
         if (!node.is_element())
             return node.node_name();
-        auto& element = to<Element>(node);
+        auto& element = downcast<DOM::Element>(node);
         StringBuilder builder;
         builder.append('<');
-        builder.append(element.tag_name());
+        builder.append(element.local_name());
         element.for_each_attribute([&](auto& name, auto& value) {
             builder.append(' ');
             builder.append(name);

@@ -28,9 +28,9 @@
 
 #define _STDIO_H // Make GMP believe we exist.
 
+#include <bits/FILE.h>
 #include <limits.h>
 #include <stdarg.h>
-#include <bits/FILE.h>
 #include <sys/cdefs.h>
 #include <sys/types.h>
 
@@ -55,12 +55,14 @@ extern FILE* stdin;
 extern FILE* stdout;
 extern FILE* stderr;
 
-typedef long fpos_t;
+typedef off_t fpos_t;
 
 int fseek(FILE*, long offset, int whence);
+int fseeko(FILE*, off_t offset, int whence);
 int fgetpos(FILE*, fpos_t*);
 int fsetpos(FILE*, const fpos_t*);
 long ftell(FILE*);
+off_t ftello(FILE*);
 char* fgets(char* buffer, int size, FILE*);
 int fputc(int ch, FILE*);
 int fileno(FILE*);
@@ -85,27 +87,27 @@ int feof(FILE*);
 int fflush(FILE*);
 size_t fread(void* ptr, size_t size, size_t nmemb, FILE*);
 size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE*);
-int vprintf(const char* fmt, va_list);
-int vfprintf(FILE*, const char* fmt, va_list);
-int vsprintf(char* buffer, const char* fmt, va_list);
-int vsnprintf(char* buffer, size_t, const char* fmt, va_list);
-int fprintf(FILE*, const char* fmt, ...);
-int printf(const char* fmt, ...);
-int dbgprintf(const char* fmt, ...);
+int vprintf(const char* fmt, va_list) __attribute__((format(printf, 1, 0)));
+int vfprintf(FILE*, const char* fmt, va_list) __attribute__((format(printf, 2, 0)));
+int vsprintf(char* buffer, const char* fmt, va_list) __attribute__((format(printf, 2, 0)));
+int vsnprintf(char* buffer, size_t, const char* fmt, va_list) __attribute__((format(printf, 3, 0)));
+int fprintf(FILE*, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+int printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+int dbgprintf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void dbgputch(char);
-ssize_t dbgputstr(const char*, ssize_t);
-int sprintf(char* buffer, const char* fmt, ...);
-int snprintf(char* buffer, size_t, const char* fmt, ...);
+int dbgputstr(const char*, ssize_t);
+int sprintf(char* buffer, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+int snprintf(char* buffer, size_t, const char* fmt, ...) __attribute__((format(printf, 3, 4)));
 int putchar(int ch);
 int putc(int ch, FILE*);
 int puts(const char*);
 int fputs(const char*, FILE*);
 void perror(const char*);
-int scanf(const char* fmt, ...);
-int sscanf(const char* str, const char* fmt, ...);
-int fscanf(FILE*, const char* fmt, ...);
-int vfscanf(FILE*, const char*, va_list);
-int vsscanf(const char*, const char*, va_list);
+int scanf(const char* fmt, ...) __attribute__((format(scanf, 1, 2)));
+int sscanf(const char* str, const char* fmt, ...) __attribute__((format(scanf, 2, 3)));
+int fscanf(FILE*, const char* fmt, ...) __attribute__((format(scanf, 2, 3)));
+int vfscanf(FILE*, const char*, va_list) __attribute__((format(scanf, 2, 0)));
+int vsscanf(const char*, const char*, va_list) __attribute__((format(scanf, 2, 0)));
 int setvbuf(FILE*, char* buf, int mode, size_t);
 void setbuf(FILE*, char* buf);
 void setlinebuf(FILE*);

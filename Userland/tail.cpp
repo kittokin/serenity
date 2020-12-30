@@ -36,7 +36,7 @@
 
 #define DEFAULT_LINE_COUNT 10
 
-int tail_from_pos(Core::File& file, off_t startline, bool want_follow)
+static int tail_from_pos(Core::File& file, off_t startline, bool want_follow)
 {
     if (!file.seek(startline + 1))
         return 1;
@@ -62,7 +62,7 @@ int tail_from_pos(Core::File& file, off_t startline, bool want_follow)
     return 0;
 }
 
-off_t find_seek_pos(Core::File& file, int wanted_lines)
+static off_t find_seek_pos(Core::File& file, int wanted_lines)
 {
     // Rather than reading the whole file, start at the end and work backwards,
     // stopping when we've found the number of lines we want.
@@ -107,6 +107,7 @@ int main(int argc, char* argv[])
     const char* file = nullptr;
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Print the end ('tail') of a file.");
     args_parser.add_option(follow, "Output data as it is written to the file", "follow", 'f');
     args_parser.add_option(line_count, "Fetch the specified number of lines", "lines", 'n', "number");
     args_parser.add_positional_argument(file, "File path", "file");

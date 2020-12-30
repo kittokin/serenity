@@ -1,8 +1,10 @@
 test("basic functionality", () => {
     const genericStringPrototypeFunctions = [
         "charAt",
+        "charCodeAt",
         "repeat",
         "startsWith",
+        "endsWith",
         "indexOf",
         "toLowerCase",
         "toUpperCase",

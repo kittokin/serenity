@@ -38,33 +38,57 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    const char* old_path = nullptr;
-    const char* new_path = nullptr;
+    // NOTE: The "force" option is a dummy for now, it's just here to silence scripts that use "mv -f"
+    //       In the future, it might be used to cancel out an "-i" interactive option.
+    bool force = false;
+    bool verbose = false;
+
+    Vector<const char*> paths;
 
     Core::ArgsParser args_parser;
-    args_parser.add_positional_argument(old_path, "The file or directory being moved", "source");
-    args_parser.add_positional_argument(new_path, "destination of the move operation", "destination");
+    args_parser.add_option(force, "Force", "force", 'f');
+    args_parser.add_option(verbose, "Verbose", "verbose", 'v');
+    args_parser.add_positional_argument(paths, "Paths to files being moved followed by target location", "paths");
     args_parser.parse(argc, argv);
+
+    if (paths.size() < 2) {
+        args_parser.print_usage(stderr, argv[0]);
+        return 1;
+    }
+
+    auto original_new_path = paths.take_last();
 
     struct stat st;
 
-    int rc = lstat(new_path, &st);
+    int rc = lstat(original_new_path, &st);
     if (rc != 0 && errno != ENOENT) {
         perror("lstat");
         return 1;
     }
 
-    String combined_new_path;
-    if (rc == 0 && S_ISDIR(st.st_mode)) {
-        auto old_basename = LexicalPath(old_path).basename();
-        combined_new_path = String::format("%s/%s", new_path, old_basename.characters());
-        new_path = combined_new_path.characters();
-    }
-
-    rc = rename(old_path, new_path);
-    if (rc < 0) {
-        perror("rename");
+    if (paths.size() > 1 && !S_ISDIR(st.st_mode)) {
+        warnln("Target is not a directory: {}", original_new_path);
         return 1;
     }
+
+    for (auto& old_path : paths) {
+        String combined_new_path;
+        const char* new_path = original_new_path;
+        if (rc == 0 && S_ISDIR(st.st_mode)) {
+            auto old_basename = LexicalPath(old_path).basename();
+            combined_new_path = String::format("%s/%s", original_new_path, old_basename.characters());
+            new_path = combined_new_path.characters();
+        }
+
+        rc = rename(old_path, new_path);
+        if (rc < 0) {
+            perror("rename");
+            return 1;
+        }
+
+        if (verbose)
+            printf("renamed '%s' -> '%s'\n", old_path, new_path);
+    }
+
     return 0;
 }

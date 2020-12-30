@@ -29,8 +29,8 @@
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <LibCore/ConfigFile.h>
-#include <LibCore/LocalSocket.h>
-#include <fcntl.h>
+#include <LibCore/File.h>
+#include <LibCore/Socket.h>
 #include <grp.h>
 #include <libgen.h>
 #include <pwd.h>
@@ -40,42 +40,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-struct UidAndGids {
-    uid_t uid;
-    gid_t gid;
-    Vector<gid_t> extra_gids;
-};
-
-static HashMap<String, UidAndGids>* s_user_map;
 static HashMap<pid_t, Service*> s_service_map;
-
-void Service::resolve_user()
-{
-    if (s_user_map == nullptr) {
-        s_user_map = new HashMap<String, UidAndGids>;
-        for (struct passwd* passwd = getpwent(); passwd; passwd = getpwent()) {
-            Vector<gid_t> extra_gids;
-            for (struct group* group = getgrent(); group; group = getgrent()) {
-                for (size_t m = 0; group->gr_mem[m]; ++m) {
-                    if (!strcmp(group->gr_mem[m], passwd->pw_name))
-                        extra_gids.append(group->gr_gid);
-                }
-            }
-            endgrent();
-            s_user_map->set(passwd->pw_name, { passwd->pw_uid, passwd->pw_gid, move(extra_gids) });
-        }
-        endpwent();
-    }
-
-    auto user = s_user_map->get(m_user);
-    if (!user.has_value()) {
-        dbg() << "Failed to resolve user name " << m_user;
-        ASSERT_NOT_REACHED();
-    }
-    m_uid = user.value().uid;
-    m_gid = user.value().gid;
-    m_extra_gids = user.value().extra_gids;
-}
 
 Service* Service::find_by_pid(pid_t pid)
 {
@@ -85,36 +50,13 @@ Service* Service::find_by_pid(pid_t pid)
     return (*it).value;
 }
 
-static int ensure_parent_directories(const char* path)
-{
-    ASSERT(path[0] == '/');
-
-    char* parent_buffer = strdup(path);
-    const char* parent = dirname(parent_buffer);
-
-    int rc = 0;
-    while (true) {
-        int rc = mkdir(parent, 0755);
-
-        if (rc == 0)
-            break;
-
-        if (errno != ENOENT)
-            break;
-
-        ensure_parent_directories(parent);
-    };
-
-    free(parent_buffer);
-    return rc;
-}
-
 void Service::setup_socket()
 {
     ASSERT(!m_socket_path.is_null());
     ASSERT(m_socket_fd == -1);
 
-    ensure_parent_directories(m_socket_path.characters());
+    auto ok = Core::File::ensure_parent_directories(m_socket_path);
+    ASSERT(ok);
 
     // Note: we use SOCK_CLOEXEC here to make sure we don't leak every socket to
     // all the clients. We'll make the one we do need to pass down !CLOEXEC later
@@ -125,9 +67,12 @@ void Service::setup_socket()
         ASSERT_NOT_REACHED();
     }
 
-    if (fchown(m_socket_fd, m_uid, m_gid) < 0) {
-        perror("fchown");
-        ASSERT_NOT_REACHED();
+    if (m_account.has_value()) {
+        auto& account = m_account.value();
+        if (fchown(m_socket_fd, account.uid(), account.gid()) < 0) {
+            perror("fchown");
+            ASSERT_NOT_REACHED();
+        }
     }
 
     if (fchmod(m_socket_fd, m_socket_permissions) < 0) {
@@ -136,7 +81,12 @@ void Service::setup_socket()
     }
 
     auto socket_address = Core::SocketAddress::local(m_socket_path);
-    auto un = socket_address.to_sockaddr_un();
+    auto un_optional = socket_address.to_sockaddr_un();
+    if (!un_optional.has_value()) {
+        dbg() << "Socket name " << m_socket_path << " is too long. BUG! This should have failed earlier!";
+        ASSERT_NOT_REACHED();
+    }
+    auto un = un_optional.value();
     int rc = bind(m_socket_fd, (const sockaddr*)&un, sizeof(un));
     if (rc < 0) {
         perror("bind");
@@ -168,13 +118,13 @@ void Service::handle_socket_connection()
     dbg() << "Ready to read on behalf of " << name();
 #endif
     if (m_accept_socket_connections) {
-       int accepted_fd = accept(m_socket_fd, nullptr, nullptr);
-       if (accepted_fd < 0) {
-           perror("accept");
-           return;
-       }
-       spawn(accepted_fd);
-       close(accepted_fd);
+        int accepted_fd = accept(m_socket_fd, nullptr, nullptr);
+        if (accepted_fd < 0) {
+            perror("accept");
+            return;
+        }
+        spawn(accepted_fd);
+        close(accepted_fd);
     } else {
         remove_child(*m_socket_notifier);
         m_socket_notifier = nullptr;
@@ -252,18 +202,19 @@ void Service::spawn(int socket_fd)
 
         if (socket_fd >= 0) {
             ASSERT(!m_socket_path.is_null());
-            ASSERT(socket_fd > 2);
+            ASSERT(socket_fd > 3);
             dup2(socket_fd, 3);
             // The new descriptor is !CLOEXEC here.
-            // This is true even if socket_fd == 3.
             setenv("SOCKET_TAKEOVER", "1", true);
         }
 
-        if (!m_user.is_null()) {
-            if (setgid(m_gid) < 0 || setgroups(m_extra_gids.size(), m_extra_gids.data()) < 0 || setuid(m_uid) < 0) {
-                dbgprintf("Failed to drop privileges (GID=%u, UID=%u)\n", m_gid, m_uid);
+        if (m_account.has_value()) {
+            auto& account = m_account.value();
+            if (setgid(account.gid()) < 0 || setgroups(account.extra_gids().size(), account.extra_gids().data()) < 0 || setuid(account.uid()) < 0) {
+                dbgprintf("Failed to drop privileges (GID=%u, UID=%u)\n", account.gid(), account.uid());
                 exit(1);
             }
+            setenv("HOME", account.home_directory().characters(), true);
         }
 
         for (String& env : m_environment)
@@ -343,8 +294,13 @@ Service::Service(const Core::ConfigFile& config, const StringView& name)
     m_lazy = config.read_bool_entry(name, "Lazy");
 
     m_user = config.read_entry(name, "User");
-    if (!m_user.is_null())
-        resolve_user();
+    if (!m_user.is_null()) {
+        auto result = Core::Account::from_name(m_user.characters());
+        if (result.is_error())
+            warnln("Failed to resolve user {}: {}", m_user, result.error());
+        else
+            m_account = result.value();
+    }
 
     m_working_directory = config.read_entry(name, "WorkingDirectory");
     m_environment = config.read_entry(name, "Environment").split(' ');
@@ -360,6 +316,8 @@ Service::Service(const Core::ConfigFile& config, const StringView& name)
     ASSERT(!m_accept_socket_connections || (!m_socket_path.is_null() && m_lazy && m_multi_instance));
     // MultiInstance doesn't work with KeepAlive.
     ASSERT(!m_multi_instance || !m_keep_alive);
+    // Socket path (plus NUL) must fit into the structs sent to the Kernel.
+    ASSERT(m_socket_path.length() < UNIX_PATH_MAX);
 
     if (!m_socket_path.is_null() && is_enabled()) {
         auto socket_permissions_string = config.read_entry(name, "SocketPermissions", "0600");
@@ -399,8 +357,6 @@ void Service::save_to(JsonObject& json)
     json.set("socket_permissions", m_socket_permissions);
     json.set("lazy", m_lazy);
     json.set("user", m_user);
-    json.set("uid", m_uid);
-    json.set("gid", m_gid);
     json.set("multi_instance", m_multi_instance);
     json.set("accept_socket_connections", m_accept_socket_connections);
 

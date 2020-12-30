@@ -26,11 +26,13 @@
 
 #include "Tab.h"
 #include "BookmarksBarWidget.h"
+#include "Browser.h"
 #include "ConsoleWidget.h"
 #include "DownloadWidget.h"
 #include "InspectorWidget.h"
 #include "WindowActions.h"
 #include <AK/StringBuilder.h>
+#include <Applications/Browser/TabGML.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
@@ -45,22 +47,20 @@
 #include <LibGUI/ToolBarContainer.h>
 #include <LibGUI/Window.h>
 #include <LibJS/Interpreter.h>
+#include <LibWeb/CSS/Parser/CSSParser.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOMTreeModel.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/Frame/Frame.h>
-#include <LibWeb/Layout/LayoutBlock.h>
-#include <LibWeb/Layout/LayoutDocument.h>
-#include <LibWeb/Layout/LayoutInline.h>
-#include <LibWeb/Layout/LayoutNode.h>
+#include <LibWeb/InProcessWebView.h>
+#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/Layout/InitialContainingBlockBox.h>
+#include <LibWeb/Layout/InlineNode.h>
+#include <LibWeb/Layout/Node.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <LibWeb/PageView.h>
-#include <LibWeb/Parser/CSSParser.h>
-#include <LibWeb/WebContentView.h>
+#include <LibWeb/OutOfProcessWebView.h>
+#include <LibWeb/Page/Frame.h>
 
 namespace Browser {
-
-extern String g_home_url;
 
 URL url_from_user_input(const String& input)
 {
@@ -74,34 +74,45 @@ URL url_from_user_input(const String& input)
     return URL(builder.build());
 }
 
+static void start_download(const URL& url)
+{
+    auto window = GUI::Window::construct();
+    window->resize(300, 150);
+    window->set_title(String::formatted("0% of {}", url.basename()));
+    window->set_resizable(false);
+    window->set_main_widget<DownloadWidget>(url);
+    window->show();
+    [[maybe_unused]] auto& unused = window.leak_ref();
+}
+
 Tab::Tab(Type type)
     : m_type(type)
 {
-    auto& widget = *this;
-    set_layout<GUI::VerticalBoxLayout>();
+    load_from_gml(tab_gml);
 
-    m_toolbar_container = widget.add<GUI::ToolBarContainer>();
-    auto& toolbar = m_toolbar_container->add<GUI::ToolBar>();
+    m_toolbar_container = static_cast<GUI::ToolBarContainer&>(*find_descendant_by_name("toolbar_container"));
+    auto& toolbar = static_cast<GUI::ToolBar&>(*find_descendant_by_name("toolbar"));
+
+    auto& webview_container = *find_descendant_by_name("webview_container");
 
     if (m_type == Type::InProcessWebView)
-        m_page_view = widget.add<Web::PageView>();
+        m_page_view = webview_container.add<Web::InProcessWebView>();
     else
-        m_web_content_view = widget.add<WebContentView>();
+        m_web_content_view = webview_container.add<Web::OutOfProcessWebView>();
 
-    m_go_back_action = GUI::CommonActions::make_go_back_action( [this](auto&) { go_back(); }, this);
+    m_go_back_action = GUI::CommonActions::make_go_back_action([this](auto&) { go_back(); }, this);
     m_go_forward_action = GUI::CommonActions::make_go_forward_action([this](auto&) { go_forward(); }, this);
 
     toolbar.add_action(*m_go_back_action);
     toolbar.add_action(*m_go_forward_action);
 
     toolbar.add_action(GUI::CommonActions::make_go_home_action([this](auto&) { load(g_home_url); }, this));
-    m_reload_action = GUI::CommonActions::make_reload_action( [this](auto&) { reload(); }, this);
+    m_reload_action = GUI::CommonActions::make_reload_action([this](auto&) { reload(); }, this);
 
     toolbar.add_action(*m_reload_action);
 
     m_location_box = toolbar.add<GUI::TextBox>();
-    m_location_box->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_location_box->set_preferred_size(0, 22);
+    m_location_box->set_placeholder("Address");
 
     m_location_box->on_return_pressed = [this] {
         auto url = url_from_user_input(m_location_box->text());
@@ -117,8 +128,7 @@ Tab::Tab(Type type)
     m_bookmark_button = toolbar.add<GUI::Button>();
     m_bookmark_button->set_button_style(Gfx::ButtonStyle::CoolBar);
     m_bookmark_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/bookmark-contour.png"));
-    m_bookmark_button->set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-    m_bookmark_button->set_preferred_size(22, 22);
+    m_bookmark_button->set_fixed_size(22, 22);
 
     m_bookmark_button->on_click = [this](auto) {
         auto url = this->url().to_string();
@@ -133,6 +143,12 @@ Tab::Tab(Type type)
     hooks().on_load_start = [this](auto& url) {
         m_location_box->set_icon(nullptr);
         m_location_box->set_text(url.to_string());
+
+        // don't add to history if back or forward is pressed
+        if (!m_is_history_navigation)
+            m_history.push(url);
+        m_is_history_navigation = false;
+
         update_actions();
         update_bookmark_button(url.to_string());
     };
@@ -146,30 +162,52 @@ Tab::Tab(Type type)
     };
 
     m_link_context_menu = GUI::Menu::construct();
-    m_link_context_menu->add_action(GUI::Action::create("Open", [this](auto&) {
+    auto link_default_action = GUI::Action::create("Open", [this](auto&) {
         hooks().on_link_click(m_link_context_menu_url, "", 0);
-    }));
+    });
+    m_link_context_menu->add_action(link_default_action);
+    m_link_context_menu_default_action = link_default_action;
     m_link_context_menu->add_action(GUI::Action::create("Open in new tab", [this](auto&) {
         hooks().on_link_click(m_link_context_menu_url, "_blank", 0);
     }));
+    m_link_context_menu->add_separator();
     m_link_context_menu->add_action(GUI::Action::create("Copy link", [this](auto&) {
-        GUI::Clipboard::the().set_data(m_link_context_menu_url.to_string());
+        GUI::Clipboard::the().set_plain_text(m_link_context_menu_url.to_string());
     }));
     m_link_context_menu->add_separator();
     m_link_context_menu->add_action(GUI::Action::create("Download", [this](auto&) {
-        auto window = GUI::Window::construct();
-        window->set_rect(300, 300, 300, 150);
-        auto url = m_link_context_menu_url;
-        window->set_title(String::format("0%% of %s", url.basename().characters()));
-        window->set_resizable(false);
-        window->set_main_widget<DownloadWidget>(url);
-        window->show();
-        (void)window.leak_ref();
+        start_download(m_link_context_menu_url);
     }));
 
     hooks().on_link_context_menu_request = [this](auto& url, auto& screen_position) {
         m_link_context_menu_url = url;
-        m_link_context_menu->popup(screen_position);
+        m_link_context_menu->popup(screen_position, m_link_context_menu_default_action);
+    };
+
+    m_image_context_menu = GUI::Menu::construct();
+    m_image_context_menu->add_action(GUI::Action::create("Open image", [this](auto&) {
+        hooks().on_link_click(m_image_context_menu_url, "", 0);
+    }));
+    m_image_context_menu->add_action(GUI::Action::create("Open image in new tab", [this](auto&) {
+        hooks().on_link_click(m_image_context_menu_url, "_blank", 0);
+    }));
+    m_image_context_menu->add_separator();
+    m_image_context_menu->add_action(GUI::Action::create("Copy image", [this](auto&) {
+        if (m_image_context_menu_bitmap.is_valid())
+            GUI::Clipboard::the().set_bitmap(*m_image_context_menu_bitmap.bitmap());
+    }));
+    m_image_context_menu->add_action(GUI::Action::create("Copy image URL", [this](auto&) {
+        GUI::Clipboard::the().set_plain_text(m_image_context_menu_url.to_string());
+    }));
+    m_image_context_menu->add_separator();
+    m_image_context_menu->add_action(GUI::Action::create("Download", [this](auto&) {
+        start_download(m_image_context_menu_url);
+    }));
+
+    hooks().on_image_context_menu_request = [this](auto& image_url, auto& screen_position, const Gfx::ShareableBitmap& shareable_bitmap) {
+        m_image_context_menu_url = image_url;
+        m_image_context_menu_bitmap = shareable_bitmap;
+        m_image_context_menu->popup(screen_position);
     };
 
     hooks().on_link_middle_click = [this](auto& href, auto&, auto) {
@@ -210,7 +248,7 @@ Tab::Tab(Type type)
         },
         this);
 
-    m_statusbar = widget.add<GUI::StatusBar>();
+    m_statusbar = static_cast<GUI::StatusBar&>(*find_descendant_by_name("statusbar"));
 
     hooks().on_link_hover = [this](auto& url) {
         if (url.is_valid())
@@ -263,10 +301,11 @@ Tab::Tab(Type type)
                 editor.set_text(source);
                 editor.set_mode(GUI::TextEditor::ReadOnly);
                 editor.set_ruler_visible(true);
-                window->set_rect(150, 150, 640, 480);
+                window->resize(640, 480);
                 window->set_title(url);
+                window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-text.png"));
                 window->show();
-                (void)window.leak_ref();
+                [[maybe_unused]] auto& unused = window.leak_ref();
             } else {
                 TODO();
             }
@@ -278,8 +317,9 @@ Tab::Tab(Type type)
             if (m_type == Type::InProcessWebView) {
                 if (!m_dom_inspector_window) {
                     m_dom_inspector_window = GUI::Window::construct();
-                    m_dom_inspector_window->set_rect(100, 100, 300, 500);
+                    m_dom_inspector_window->resize(300, 500);
                     m_dom_inspector_window->set_title("DOM inspector");
+                    m_dom_inspector_window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/inspector-object.png"));
                     m_dom_inspector_window->set_main_widget<InspectorWidget>();
                 }
                 auto* inspector_widget = static_cast<InspectorWidget*>(m_dom_inspector_window->main_widget());
@@ -301,8 +341,9 @@ Tab::Tab(Type type)
             if (m_type == Type::InProcessWebView) {
                 if (!m_console_window) {
                     m_console_window = GUI::Window::construct();
-                    m_console_window->set_rect(100, 100, 500, 300);
+                    m_console_window->resize(500, 300);
                     m_console_window->set_title("JS Console");
+                    m_console_window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-javascript.png"));
                     m_console_window->set_main_widget<ConsoleWidget>();
                 }
                 auto* console_widget = static_cast<ConsoleWidget*>(m_console_window->main_widget());
@@ -338,7 +379,7 @@ Tab::Tab(Type type)
         "Dump Style sheets", [this](auto&) {
             if (m_type == Type::InProcessWebView) {
                 for (auto& sheet : m_page_view->document()->style_sheets().sheets()) {
-                    dump_sheet(sheet);
+                    Web::dump_sheet(sheet);
                 }
             } else {
                 TODO();
@@ -361,6 +402,17 @@ Tab::Tab(Type type)
         this);
     line_box_borders_action->set_checked(false);
     debug_menu.add_action(line_box_borders_action);
+
+    debug_menu.add_separator();
+    debug_menu.add_action(GUI::Action::create("Collect garbage", { Mod_Ctrl | Mod_Shift, Key_G }, [this](auto&) {
+        if (m_type == Type::InProcessWebView) {
+            if (auto* document = m_page_view->document()) {
+                document->interpreter().heap().collect_garbage(JS::Heap::CollectionType::CollectGarbage, true);
+            }
+        } else {
+            TODO();
+        }
+    }));
 
     auto& bookmarks_menu = m_menubar->add_menu("Bookmarks");
     bookmarks_menu.add_action(WindowActions::the().show_bookmarks_bar_action());
@@ -394,8 +446,7 @@ Tab::~Tab()
 
 void Tab::load(const URL& url, LoadType load_type)
 {
-    if (load_type == LoadType::Normal)
-        m_history.push(url);
+    m_is_history_navigation = (load_type == LoadType::HistoryNavigation);
 
     if (m_type == Type::InProcessWebView)
         m_page_view->load(url);
@@ -453,7 +504,7 @@ void Tab::did_become_active()
             m_statusbar->set_text("");
             return;
         }
-        m_statusbar->set_text(String::format("Loading (%d pending resources...)", Web::ResourceLoader::the().pending_loads()));
+        m_statusbar->set_text(String::formatted("Loading ({} pending resources...)", Web::ResourceLoader::the().pending_loads()));
     };
 
     BookmarksBarWidget::the().on_bookmark_click = [this](auto& url, unsigned modifiers) {
@@ -495,4 +546,5 @@ Web::WebViewHooks& Tab::hooks()
         return *m_page_view;
     return *m_web_content_view;
 }
+
 }

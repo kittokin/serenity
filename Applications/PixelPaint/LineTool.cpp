@@ -30,7 +30,7 @@
 #include <LibGUI/Action.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Painter.h>
-#include <LibM/math.h>
+#include <math.h>
 
 namespace PixelPaint {
 
@@ -78,6 +78,7 @@ void LineTool::on_mouseup(Layer& layer, GUI::MouseEvent& event, GUI::MouseEvent&
         painter.draw_line(m_line_start_position, m_line_end_position, m_editor->color_for(m_drawing_button), m_thickness);
         m_drawing_button = GUI::MouseButton::None;
         layer.did_modify_bitmap(*m_editor->image());
+        m_editor->did_complete_action();
     }
 }
 
@@ -102,8 +103,8 @@ void LineTool::on_second_paint(const Layer& layer, GUI::PaintEvent& event)
 
     GUI::Painter painter(*m_editor);
     painter.add_clip_rect(event.rect());
-    auto preview_start = m_editor->layer_position_to_editor_position(layer, m_line_start_position).to_int_point();
-    auto preview_end = m_editor->layer_position_to_editor_position(layer, m_line_end_position).to_int_point();
+    auto preview_start = m_editor->layer_position_to_editor_position(layer, m_line_start_position).to_type<int>();
+    auto preview_end = m_editor->layer_position_to_editor_position(layer, m_line_end_position).to_type<int>();
     painter.draw_line(preview_start, preview_end, m_editor->color_for(m_drawing_button), m_thickness);
 }
 

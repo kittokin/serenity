@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@gmx.de>
+ * Copyright (c) 2020, Linus Groh <mail@linusgroh.de>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,8 +27,8 @@
 
 #include "Token.h"
 #include <AK/Assertions.h>
+#include <AK/GenericLexer.h>
 #include <AK/StringBuilder.h>
-#include <AK/Utf32View.h>
 #include <ctype.h>
 
 namespace JS {
@@ -35,9 +36,9 @@ namespace JS {
 const char* Token::name(TokenType type)
 {
     switch (type) {
-#define __ENUMERATE_JS_TOKEN(x) \
-    case TokenType::x:          \
-        return #x;
+#define __ENUMERATE_JS_TOKEN(type, category) \
+    case TokenType::type:                    \
+        return #type;
         ENUMERATE_JS_TOKENS
 #undef __ENUMERATE_JS_TOKEN
     default:
@@ -49,6 +50,24 @@ const char* Token::name(TokenType type)
 const char* Token::name() const
 {
     return name(m_type);
+}
+
+TokenCategory Token::category(TokenType type)
+{
+    switch (type) {
+#define __ENUMERATE_JS_TOKEN(type, category) \
+    case TokenType::type:                    \
+        return TokenCategory::category;
+        ENUMERATE_JS_TOKENS
+#undef __ENUMERATE_JS_TOKEN
+    default:
+        ASSERT_NOT_REACHED();
+    }
+}
+
+TokenCategory Token::category() const
+{
+    return category(m_type);
 }
 
 double Token::double_value() const
@@ -67,7 +86,8 @@ double Token::double_value() const
             return static_cast<double>(strtoul(value_string.characters() + 2, nullptr, 2));
         } else if (isdigit(value_string[1])) {
             // also octal, but syntax error in strict mode
-            return static_cast<double>(strtoul(value_string.characters() + 1, nullptr, 8));
+            if (!m_value.contains('8') && !m_value.contains('9'))
+                return static_cast<double>(strtoul(value_string.characters() + 1, nullptr, 8));
         }
     }
     return strtod(value_string.characters(), nullptr);
@@ -84,9 +104,9 @@ static u32 hex2int(char x)
 String Token::string_value(StringValueStatus& status) const
 {
     ASSERT(type() == TokenType::StringLiteral || type() == TokenType::TemplateLiteralString);
-    auto is_template = type() == TokenType::TemplateLiteralString;
 
-    auto offset = type() == TokenType::TemplateLiteralString ? 0 : 1;
+    auto is_template = type() == TokenType::TemplateLiteralString;
+    GenericLexer lexer(is_template ? m_value : m_value.substring_view(1, m_value.length() - 2));
 
     auto encoding_failure = [&status](StringValueStatus parse_status) -> String {
         status = parse_status;
@@ -94,101 +114,101 @@ String Token::string_value(StringValueStatus& status) const
     };
 
     StringBuilder builder;
-    for (size_t i = offset; i < m_value.length() - offset; ++i) {
-        if (m_value[i] == '\\' && i + 1 < m_value.length() - offset) {
-            i++;
-            switch (m_value[i]) {
-            case 'b':
-                builder.append('\b');
-                break;
-            case 'f':
-                builder.append('\f');
-                break;
-            case 'n':
-                builder.append('\n');
-                break;
-            case 'r':
-                builder.append('\r');
-                break;
-            case 't':
-                builder.append('\t');
-                break;
-            case 'v':
-                builder.append('\v');
-                break;
-            case '0':
-                builder.append((char)0);
-                break;
-            case '\'':
-                builder.append('\'');
-                break;
-            case '"':
-                builder.append('"');
-                break;
-            case '\\':
-                builder.append('\\');
-                break;
-            case 'x': {
-                if (i + 2 >= m_value.length() - offset)
-                    return encoding_failure(StringValueStatus::MalformedHexEscape);
-
-                auto digit1 = m_value[++i];
-                auto digit2 = m_value[++i];
-                if (!isxdigit(digit1) || !isxdigit(digit2))
-                    return encoding_failure(StringValueStatus::MalformedHexEscape);
-                builder.append(static_cast<char>(hex2int(digit1) * 16 + hex2int(digit2)));
-                break;
-            }
-            case 'u': {
-                if (i + 1 >= m_value.length() - offset)
-                    return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
-                u32 code_point = m_value[++i];
-
-                if (code_point == '{') {
-                    code_point = 0;
-                    while (true) {
-                        if (i + 1 >= m_value.length() - offset)
-                            return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
-
-                        auto ch = m_value[++i];
-                        if (ch == '}')
-                            break;
-                        if (!isxdigit(ch))
-                            return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
-
-                        auto new_code_point = (code_point << 4u) | hex2int(ch);
-                        if (new_code_point < code_point)
-                            return encoding_failure(StringValueStatus::UnicodeEscapeOverflow);
-                        code_point = new_code_point;
-                    }
-                } else {
-                    if (i + 3 >= m_value.length() - offset || !isxdigit(code_point))
-                        return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
-
-                    code_point = hex2int(code_point);
-                    for (int j = 0; j < 3; ++j) {
-                        auto ch = m_value[++i];
-                        if (!isxdigit(ch))
-                            return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
-                        code_point = (code_point << 4u) | hex2int(ch);
-                    }
-                }
-
-                builder.append({ &code_point, 1 });
-                break;
-            }
-            default:
-                if (is_template && (m_value[i] == '$' || m_value[i] == '`')) {
-                    builder.append(m_value[i]);
-                    break;
-                }
-
-                // FIXME: Also parse octal. Should anything else generate a syntax error?
-                builder.append(m_value[i]);
-            }
-        } else {
-            builder.append(m_value[i]);
+    while (!lexer.is_eof()) {
+        // No escape, consume one char and continue
+        if (!lexer.next_is('\\')) {
+            builder.append(lexer.consume());
+            continue;
         }
+
+        lexer.ignore();
+        ASSERT(!lexer.is_eof());
+
+        // Line continuation
+        if (lexer.next_is('\n') || lexer.next_is('\r')) {
+            lexer.ignore();
+            continue;
+        }
+        // Line continuation
+        if (lexer.next_is(LINE_SEPARATOR) || lexer.next_is(PARAGRAPH_SEPARATOR)) {
+            lexer.ignore(3);
+            continue;
+        }
+        // Null-byte escape
+        if (lexer.next_is('0') && !isdigit(lexer.peek(1))) {
+            lexer.ignore();
+            builder.append('\0');
+            continue;
+        }
+        // Hex escape
+        if (lexer.next_is('x')) {
+            lexer.ignore();
+            if (!isxdigit(lexer.peek()) || !isxdigit(lexer.peek(1)))
+                return encoding_failure(StringValueStatus::MalformedHexEscape);
+            auto code_point = hex2int(lexer.consume()) * 16 + hex2int(lexer.consume());
+            ASSERT(code_point <= 255);
+            builder.append_code_point(code_point);
+            continue;
+        }
+        // Unicode escape
+        if (lexer.next_is('u')) {
+            lexer.ignore();
+            u32 code_point = 0;
+            if (lexer.next_is('{')) {
+                lexer.ignore();
+                while (true) {
+                    if (!lexer.next_is(isxdigit))
+                        return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
+                    auto new_code_point = (code_point << 4u) | hex2int(lexer.consume());
+                    if (new_code_point < code_point)
+                        return encoding_failure(StringValueStatus::UnicodeEscapeOverflow);
+                    code_point = new_code_point;
+                    if (lexer.next_is('}'))
+                        break;
+                }
+                lexer.ignore();
+            } else {
+                for (int j = 0; j < 4; ++j) {
+                    if (!lexer.next_is(isxdigit))
+                        return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
+                    code_point = (code_point << 4u) | hex2int(lexer.consume());
+                }
+            }
+            builder.append_code_point(code_point);
+            continue;
+        }
+
+        // In non-strict mode LegacyOctalEscapeSequence is allowed in strings:
+        // https://tc39.es/ecma262/#sec-additional-syntax-string-literals
+        String octal_str;
+
+        auto is_octal_digit = [](char ch) { return ch >= '0' && ch <= '7'; };
+        auto is_zero_to_three = [](char ch) { return ch >= '0' && ch <= '3'; };
+        auto is_four_to_seven = [](char ch) { return ch >= '4' && ch <= '7'; };
+
+        // OctalDigit [lookahead ∉ OctalDigit]
+        if (is_octal_digit(lexer.peek()) && !is_octal_digit(lexer.peek(1)))
+            octal_str = lexer.consume(1);
+        // ZeroToThree OctalDigit [lookahead ∉ OctalDigit]
+        else if (is_zero_to_three(lexer.peek()) && is_octal_digit(lexer.peek(1)) && !is_octal_digit(lexer.peek(2)))
+            octal_str = lexer.consume(2);
+        // FourToSeven OctalDigit
+        else if (is_four_to_seven(lexer.peek()) && is_octal_digit(lexer.peek(1)))
+            octal_str = lexer.consume(2);
+        // ZeroToThree OctalDigit OctalDigit
+        else if (is_zero_to_three(lexer.peek()) && is_octal_digit(lexer.peek(1)) && is_octal_digit(lexer.peek(2)))
+            octal_str = lexer.consume(3);
+
+        if (!octal_str.is_null()) {
+            status = StringValueStatus::LegacyOctalEscapeSequence;
+            auto code_point = strtoul(octal_str.characters(), nullptr, 8);
+            ASSERT(code_point <= 255);
+            builder.append_code_point(code_point);
+            continue;
+        }
+
+        lexer.retreat();
+        builder.append(lexer.consume_escaped_character('\\', "b\bf\fn\nr\rt\tv\v"));
     }
     return builder.to_string();
 }
@@ -217,10 +237,14 @@ bool Token::is_identifier_name() const
         || m_type == TokenType::Delete
         || m_type == TokenType::Do
         || m_type == TokenType::Else
+        || m_type == TokenType::Enum
+        || m_type == TokenType::Export
+        || m_type == TokenType::Extends
         || m_type == TokenType::Finally
         || m_type == TokenType::For
         || m_type == TokenType::Function
         || m_type == TokenType::If
+        || m_type == TokenType::Import
         || m_type == TokenType::In
         || m_type == TokenType::Instanceof
         || m_type == TokenType::Interface
@@ -228,6 +252,7 @@ bool Token::is_identifier_name() const
         || m_type == TokenType::New
         || m_type == TokenType::NullLiteral
         || m_type == TokenType::Return
+        || m_type == TokenType::Super
         || m_type == TokenType::Switch
         || m_type == TokenType::This
         || m_type == TokenType::Throw
@@ -237,6 +262,11 @@ bool Token::is_identifier_name() const
         || m_type == TokenType::Void
         || m_type == TokenType::While
         || m_type == TokenType::Yield;
+}
+
+bool Token::trivia_contains_line_terminator() const
+{
+    return m_trivia.contains('\n') || m_trivia.contains('\r') || m_trivia.contains(LINE_SEPARATOR) || m_trivia.contains(PARAGRAPH_SEPARATOR);
 }
 
 }

@@ -24,7 +24,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <Kernel/Process.h>
+#include <AK/LogStream.h>
+#include <Kernel/Modules/module_syms.h>
 
 extern "C" const char module_name[] = "TestModule";
 

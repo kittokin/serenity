@@ -29,13 +29,16 @@
 #include <bits/stdint.h>
 
 #ifndef PAGE_SIZE
-#define PAGE_SIZE 4096
+#    define PAGE_SIZE 4096
 #endif
 
 #define PATH_MAX 4096
 #if !defined MAXPATHLEN && defined PATH_MAX
 #    define MAXPATHLEN PATH_MAX
 #endif
+
+#define NAME_MAX 255
+
 #define PIPE_BUF 4096
 
 #define INT_MAX INT32_MAX
@@ -67,3 +70,9 @@
 #define ARG_MAX 65536
 
 #define PTHREAD_STACK_MIN 65536
+
+#define SSIZE_MAX 2147483647
+
+#ifdef __USE_POSIX
+#    include <bits/posix1_lim.h>
+#endif

@@ -30,6 +30,7 @@
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <LibCore/ElapsedTimer.h>
+#include <LibGUI/Forward.h>
 #include <LibGUI/ScrollableWidget.h>
 #include <LibGUI/TextDocument.h>
 #include <LibGUI/TextRange.h>
@@ -58,12 +59,16 @@ public:
     const TextDocument& document() const { return *m_document; }
     TextDocument& document() { return *m_document; }
 
-    void set_document(TextDocument&);
+    virtual void set_document(TextDocument&);
+
+    const String& placeholder() const { return m_placeholder; }
+    void set_placeholder(const StringView& placeholder) { m_placeholder = placeholder; }
+
+    void set_visualize_trailing_whitespace(bool);
+    bool visualize_trailing_whitespace() const { return m_visualize_trailing_whitespace; }
 
     bool has_visible_list() const { return m_has_visible_list; }
     void set_has_visible_list(bool);
-    bool has_open_button() const { return m_has_open_button; }
-    void set_has_open_button(bool);
 
     virtual bool is_automatic_indentation_enabled() const final { return m_automatic_indentation_enabled; }
     void set_automatic_indentation_enabled(bool enabled) { m_automatic_indentation_enabled = enabled; }
@@ -94,6 +99,8 @@ public:
 
     Function<void()> on_cursor_change;
     Function<void()> on_selection_change;
+    Function<void()> on_focusin;
+    Function<void()> on_focusout;
 
     void set_text(const StringView&);
     void scroll_cursor_into_view();
@@ -123,8 +130,8 @@ public:
     void do_delete();
     void delete_current_line();
     void select_all();
-    void undo() { document().undo(); }
-    void redo() { document().redo(); }
+    virtual void undo() { document().undo(); }
+    virtual void redo() { document().redo(); }
 
     Function<void()> on_change;
     Function<void()> on_mousedown;
@@ -146,11 +153,15 @@ public:
 
     void add_custom_context_menu_action(Action&);
 
+    void set_cursor_and_focus_line(size_t line, size_t column);
     void set_cursor(size_t line, size_t column);
     void set_cursor(const TextPosition&);
 
     const SyntaxHighlighter* syntax_highlighter() const;
     void set_syntax_highlighter(OwnPtr<SyntaxHighlighter>);
+
+    const AutocompleteProvider* autocomplete_provider() const;
+    void set_autocomplete_provider(OwnPtr<AutocompleteProvider>&&);
 
     bool is_in_drag_select() const { return m_in_drag_select; }
 
@@ -164,10 +175,9 @@ protected:
     virtual void mousemove_event(MouseEvent&) override;
     virtual void doubleclick_event(MouseEvent&) override;
     virtual void keydown_event(KeyEvent&) override;
-    virtual void focusin_event(Core::Event&) override;
-    virtual void focusout_event(Core::Event&) override;
+    virtual void focusin_event(FocusEvent&) override;
+    virtual void focusout_event(FocusEvent&) override;
     virtual void timer_event(Core::TimerEvent&) override;
-    virtual bool accepts_focus() const override { return true; }
     virtual void enter_event(Core::Event&) override;
     virtual void leave_event(Core::Event&) override;
     virtual void context_menu_event(ContextMenuEvent&) override;
@@ -178,6 +188,8 @@ protected:
 
     TextPosition text_position_at(const Gfx::IntPoint&) const;
     bool ruler_visible() const { return m_ruler_visible; }
+    Gfx::IntRect content_rect_for_position(const TextPosition&) const;
+    int ruler_width() const;
 
 private:
     friend class TextDocumentLine;
@@ -202,7 +214,6 @@ private:
 
     int icon_size() const { return 16; }
     int icon_padding() const { return 2; }
-    int button_padding() const { return m_has_open_button ? 17 : 2; }
 
     class ReflowDeferrer {
     public:
@@ -223,7 +234,6 @@ private:
     Gfx::IntRect line_content_rect(size_t item_index) const;
     Gfx::IntRect line_widget_rect(size_t line_index) const;
     Gfx::IntRect cursor_content_rect() const;
-    Gfx::IntRect content_rect_for_position(const TextPosition&) const;
     void update_cursor();
     const NonnullOwnPtrVector<TextDocumentLine>& lines() const { return document().lines(); }
     NonnullOwnPtrVector<TextDocumentLine>& lines() { return document().lines(); }
@@ -231,7 +241,6 @@ private:
     const TextDocumentLine& line(size_t index) const { return document().line(index); }
     TextDocumentLine& current_line() { return line(m_cursor.line()); }
     const TextDocumentLine& current_line() const { return line(m_cursor.line()); }
-    int ruler_width() const;
     void toggle_selection_if_needed_for_event(const KeyEvent&);
     void delete_selection();
     void did_update_selection();
@@ -255,9 +264,13 @@ private:
     inline void execute(Args&&... args)
     {
         auto command = make<T>(*m_document, forward<Args>(args)...);
+        command->perform_formatting(*this);
+        on_edit_action(*command);
         command->execute_from(*this);
         m_document->add_to_undo_stack(move(command));
     }
+
+    virtual void on_edit_action(const Command&) { }
 
     Type m_type { MultiLine };
     Mode m_mode { Editable };
@@ -271,7 +284,7 @@ private:
     bool m_automatic_indentation_enabled { false };
     bool m_line_wrapping_enabled { false };
     bool m_has_visible_list { false };
-    bool m_has_open_button { false };
+    bool m_visualize_trailing_whitespace { true };
     int m_line_spacing { 4 };
     size_t m_soft_tab_width { 4 };
     int m_horizontal_content_padding { 3 };
@@ -295,6 +308,8 @@ private:
 
     RefPtr<TextDocument> m_document;
 
+    String m_placeholder { "" };
+
     template<typename Callback>
     void for_each_visual_line(size_t line_index, Callback) const;
 
@@ -306,6 +321,8 @@ private:
     NonnullOwnPtrVector<LineVisualData> m_line_visual_data;
 
     OwnPtr<SyntaxHighlighter> m_highlighter;
+    OwnPtr<AutocompleteProvider> m_autocomplete_provider;
+    OwnPtr<AutocompleteBox> m_autocomplete_box;
 
     RefPtr<Core::Timer> m_automatic_selection_scroll_timer;
     Gfx::IntPoint m_last_mousemove_position;

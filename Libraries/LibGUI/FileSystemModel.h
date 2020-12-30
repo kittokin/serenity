@@ -35,21 +35,6 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#define ENUMERATE_FILETYPES                    \
-    __ENUMERATE_FILETYPE(cplusplus, ".cpp")    \
-    __ENUMERATE_FILETYPE(header, ".h")         \
-    __ENUMERATE_FILETYPE(html, ".html")        \
-    __ENUMERATE_FILETYPE(image, ".png")        \
-    __ENUMERATE_FILETYPE(java, ".java")        \
-    __ENUMERATE_FILETYPE(javascript, ".js")    \
-    __ENUMERATE_FILETYPE(library, ".so", ".a") \
-    __ENUMERATE_FILETYPE(markdown, ".md")      \
-    __ENUMERATE_FILETYPE(object, ".o", ".obj") \
-    __ENUMERATE_FILETYPE(pdf, ".pdf")          \
-    __ENUMERATE_FILETYPE(python, ".py")        \
-    __ENUMERATE_FILETYPE(sound, ".wav")        \
-    __ENUMERATE_FILETYPE(ini, ".ini")          \
-    __ENUMERATE_FILETYPE(text, ".txt")
 namespace GUI {
 
 class FileSystemModel
@@ -88,6 +73,7 @@ public:
         gid_t gid { 0 };
         ino_t inode { 0 };
         time_t mtime { 0 };
+        bool is_accessible_directory { false };
 
         size_t total_size { 0 };
 
@@ -102,10 +88,17 @@ public:
         int error() const { return m_error; }
         const char* error_string() const { return strerror(m_error); }
 
-        String full_path(const FileSystemModel&) const;
+        String full_path() const;
 
     private:
         friend class FileSystemModel;
+
+        explicit Node(FileSystemModel& model)
+            : m_model(model)
+        {
+        }
+
+        FileSystemModel& m_model;
 
         Node* parent { nullptr };
         NonnullOwnPtrVector<Node> children;
@@ -117,10 +110,11 @@ public:
         RefPtr<Core::Notifier> m_notifier;
 
         int m_error { 0 };
+        bool m_parent_of_root { false };
 
-        ModelIndex index(const FileSystemModel&, int column) const;
-        void traverse_if_needed(const FileSystemModel&);
-        void reify_if_needed(const FileSystemModel&);
+        ModelIndex index(int column) const;
+        void traverse_if_needed();
+        void reify_if_needed();
         bool fetch_data(const String& full_path, bool is_root);
     };
 
@@ -139,7 +133,6 @@ public:
     ModelIndex m_previously_selected_index {};
 
     const Node& node(const ModelIndex& index) const;
-    GUI::Icon icon_for_file(const mode_t mode, const String& name) const;
 
     Function<void(int done, int total)> on_thumbnail_progress;
     Function<void()> on_complete;
@@ -149,18 +142,25 @@ public:
     virtual int row_count(const ModelIndex& = ModelIndex()) const override;
     virtual int column_count(const ModelIndex& = ModelIndex()) const override;
     virtual String column_name(int column) const override;
-    virtual Variant data(const ModelIndex&, Role = Role::Display) const override;
+    virtual Variant data(const ModelIndex&, ModelRole = ModelRole::Display) const override;
     virtual void update() override;
     virtual ModelIndex parent_index(const ModelIndex&) const override;
     virtual ModelIndex index(int row, int column = 0, const ModelIndex& parent = ModelIndex()) const override;
     virtual StringView drag_data_type() const override { return "text/uri-list"; }
     virtual bool accepts_drag(const ModelIndex&, const StringView& data_type) override;
     virtual bool is_column_sortable(int column_index) const override { return column_index != Column::Icon; }
+    virtual bool is_editable(const ModelIndex&) const override;
+    virtual bool is_searchable() const override { return true; }
+    virtual void set_data(const ModelIndex&, const Variant&) override;
+    virtual Vector<ModelIndex, 1> matches(const StringView&, unsigned = MatchesFlag::AllMatching, const ModelIndex& = ModelIndex()) override;
 
     static String timestamp_string(time_t timestamp)
     {
         return Core::DateTime::from_timestamp(timestamp).to_string();
     }
+
+    bool should_show_dotfiles() const { return m_should_show_dotfiles; }
+    void set_should_show_dotfiles(bool);
 
 private:
     FileSystemModel(const StringView& root_path, Mode);
@@ -178,20 +178,10 @@ private:
     Mode m_mode { Invalid };
     OwnPtr<Node> m_root { nullptr };
 
-    GUI::Icon m_directory_icon;
-    GUI::Icon m_directory_open_icon;
-    GUI::Icon m_file_icon;
-    GUI::Icon m_symlink_icon;
-    GUI::Icon m_socket_icon;
-    GUI::Icon m_executable_icon;
-
-#define __ENUMERATE_FILETYPE(filetype_name, ...) \
-    GUI::Icon m_filetype_##filetype_name##_icon;
-    ENUMERATE_FILETYPES
-#undef __ENUMERATE_FILETYPE
-
     unsigned m_thumbnail_progress { 0 };
     unsigned m_thumbnail_progress_total { 0 };
+
+    bool m_should_show_dotfiles { false };
 };
 
 }

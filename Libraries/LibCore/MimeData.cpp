@@ -70,4 +70,33 @@ void MimeData::set_text(const String& text)
     set_data("text/plain", text.to_byte_buffer());
 }
 
+String guess_mime_type_based_on_filename(const StringView& path)
+{
+    if (path.ends_with(".pbm", CaseSensitivity::CaseInsensitive))
+        return "image/x‑portable‑bitmap";
+    if (path.ends_with(".pgm", CaseSensitivity::CaseInsensitive))
+        return "image/x‑portable‑graymap";
+    if (path.ends_with(".png", CaseSensitivity::CaseInsensitive))
+        return "image/png";
+    if (path.ends_with(".ppm", CaseSensitivity::CaseInsensitive))
+        return "image/x‑portable‑pixmap";
+    if (path.ends_with(".gif", CaseSensitivity::CaseInsensitive))
+        return "image/gif";
+    if (path.ends_with(".bmp", CaseSensitivity::CaseInsensitive))
+        return "image/bmp";
+    if (path.ends_with(".jpg", CaseSensitivity::CaseInsensitive) || path.ends_with(".jpeg", CaseSensitivity::CaseInsensitive))
+        return "image/jpeg";
+    if (path.ends_with(".svg", CaseSensitivity::CaseInsensitive))
+        return "image/svg+xml";
+    if (path.ends_with(".md", CaseSensitivity::CaseInsensitive))
+        return "text/markdown";
+    if (path.ends_with(".html", CaseSensitivity::CaseInsensitive) || path.ends_with(".htm", CaseSensitivity::CaseInsensitive))
+        return "text/html";
+    if (path.ends_with("/", CaseSensitivity::CaseInsensitive))
+        return "text/html";
+    if (path.ends_with(".csv", CaseSensitivity::CaseInsensitive))
+        return "text/csv";
+    return "text/plain";
+}
+
 }

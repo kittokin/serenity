@@ -27,6 +27,7 @@
 #pragma once
 
 #include "Execution.h"
+#include "Forward.h"
 #include <AK/Function.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
@@ -40,60 +41,57 @@
 #    undef JOB_TIME_INFO
 #endif
 
+namespace Shell {
+
+struct LocalFrame;
+
 class Job : public RefCounted<Job> {
 public:
-    explicit Job()
-    {
-    }
+    static NonnullRefPtr<Job> create(pid_t pid, pid_t pgid, String cmd, u64 job_id, AST::Command&& command) { return adopt(*new Job(pid, pgid, move(cmd), job_id, move(command))); }
 
     ~Job()
     {
 #ifdef JOB_TIME_INFO
         if (m_active) {
             auto elapsed = m_command_timer.elapsed();
-            dbg() << "Command \"" << m_cmd << "\" finished in " << elapsed << " ms";
+            // Don't mistake this for the command!
+            dbg() << "Job entry \"" << m_cmd << "\" deleted in " << elapsed << " ms";
         }
 #endif
     }
 
-    Job(pid_t pid, unsigned pgid, String cmd, u64 job_id)
-        : m_pgid(pgid)
-        , m_pid(pid)
-        , m_job_id(job_id)
-        , m_cmd(move(cmd))
-    {
-        set_running_in_background(false);
-        m_command_timer.start();
-    }
+    Function<void(RefPtr<Job>)> on_exit;
 
-    unsigned pgid() const { return m_pgid; }
+    pid_t pgid() const { return m_pgid; }
     pid_t pid() const { return m_pid; }
     const String& cmd() const { return m_cmd; }
+    const AST::Command& command() const { return *m_command; }
+    AST::Command* command_ptr() { return m_command; }
     u64 job_id() const { return m_job_id; }
     bool exited() const { return m_exited; }
-    int exit_code() const { return m_exit_code; }
+    bool signaled() const { return m_term_sig != -1; }
+    int exit_code() const
+    {
+        ASSERT(exited());
+        return m_exit_code;
+    }
+    int termination_signal() const
+    {
+        ASSERT(signaled());
+        return m_term_sig;
+    }
     bool should_be_disowned() const { return m_should_be_disowned; }
     void disown() { m_should_be_disowned = true; }
     bool is_running_in_background() const { return m_running_in_background; }
+    bool should_announce_exit() const { return m_should_announce_exit; }
+    bool should_announce_signal() const { return m_should_announce_signal; }
     bool is_suspended() const { return m_is_suspended; }
-    void unblock() const
-    {
-        if (!m_exited && on_exit)
-            on_exit(*this);
-    }
-    Function<void(RefPtr<Job>)> on_exit;
+    void unblock() const;
 
     Core::ElapsedTimer& timer() { return m_command_timer; }
 
-    void set_has_exit(int exit_code)
-    {
-        if (m_exited)
-            return;
-        m_exit_code = exit_code;
-        m_exited = true;
-        if (on_exit)
-            on_exit(*this);
-    }
+    void set_has_exit(int exit_code);
+    void set_signalled(int sig);
 
     void set_is_suspended(bool value) const { m_is_suspended = value; }
 
@@ -102,18 +100,37 @@ public:
         m_running_in_background = running_in_background;
     }
 
+    void set_should_announce_exit(bool value) { m_should_announce_exit = value; }
+    void set_should_announce_signal(bool value) { m_should_announce_signal = value; }
+
     void deactivate() const { m_active = false; }
 
+    enum class PrintStatusMode {
+        Basic,
+        OnlyPID,
+        ListAll,
+    };
+
+    bool print_status(PrintStatusMode);
+
 private:
-    unsigned m_pgid { 0 };
+    Job(pid_t pid, unsigned pgid, String cmd, u64 job_id, AST::Command&& command);
+
+    pid_t m_pgid { 0 };
     pid_t m_pid { 0 };
     u64 m_job_id { 0 };
     String m_cmd;
     bool m_exited { false };
     bool m_running_in_background { false };
+    bool m_should_announce_exit { false };
+    bool m_should_announce_signal { true };
     int m_exit_code { -1 };
+    int m_term_sig { -1 };
     Core::ElapsedTimer m_command_timer;
     mutable bool m_active { true };
     mutable bool m_is_suspended { false };
     bool m_should_be_disowned { false };
+    OwnPtr<AST::Command> m_command;
 };
+
+}

@@ -25,7 +25,7 @@
  */
 
 #include <LibCrypto/BigInt/SignedBigInteger.h>
-#include <LibJS/Interpreter.h>
+#include <LibJS/Heap/Heap.h>
 #include <LibJS/Runtime/BigInt.h>
 
 namespace JS {
@@ -42,12 +42,7 @@ BigInt::~BigInt()
 
 BigInt* js_bigint(Heap& heap, Crypto::SignedBigInteger big_integer)
 {
-    return heap.allocate<BigInt>(heap.interpreter().global_object(), move(big_integer));
-}
-
-BigInt* js_bigint(Interpreter& interpreter, Crypto::SignedBigInteger big_integer)
-{
-    return js_bigint(interpreter.heap(), move(big_integer));
+    return heap.allocate_without_global_object<BigInt>(move(big_integer));
 }
 
 }

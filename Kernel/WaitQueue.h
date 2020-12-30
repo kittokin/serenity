@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020, The SerenityOS developers.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,27 +27,27 @@
 #pragma once
 
 #include <AK/Atomic.h>
-#include <AK/SinglyLinkedList.h>
 #include <Kernel/SpinLock.h>
 #include <Kernel/Thread.h>
 
 namespace Kernel {
 
-class WaitQueue {
+class WaitQueue : public Thread::BlockCondition {
 public:
-    WaitQueue();
-    ~WaitQueue();
-
-    bool enqueue(Thread&);
-    void wake_one(Atomic<bool>* lock = nullptr);
+    void wake_one();
     void wake_n(u32 wake_count);
     void wake_all();
-    void clear();
+
+    template<class... Args>
+    Thread::BlockResult wait_on(const Thread::BlockTimeout& timeout, Args&&... args)
+    {
+        return Thread::current()->block<Thread::QueueBlocker>(timeout, *this, forward<Args>(args)...);
+    }
+
+protected:
+    virtual bool should_add_blocker(Thread::Blocker& b, void* data) override;
 
 private:
-    typedef IntrusiveList<Thread, &Thread::m_wait_queue_node> ThreadList;
-    ThreadList m_threads;
-    SpinLock<u32> m_lock;
     bool m_wake_requested { false };
 };
 

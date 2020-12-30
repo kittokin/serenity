@@ -37,6 +37,7 @@
 #include <Kernel/Net/ARP.h>
 #include <Kernel/Net/ICMP.h>
 #include <Kernel/Net/IPv4.h>
+#include <Kernel/UserOrKernelBuffer.h>
 
 namespace Kernel {
 
@@ -63,10 +64,10 @@ public:
     void set_ipv4_gateway(const IPv4Address&);
 
     void send(const MACAddress&, const ARPPacket&);
-    void send_ipv4(const MACAddress&, const IPv4Address&, IPv4Protocol, const u8* payload, size_t payload_size, u8 ttl);
-    void send_ipv4_fragmented(const MACAddress&, const IPv4Address&, IPv4Protocol, const u8* payload, size_t payload_size, u8 ttl);
+    int send_ipv4(const MACAddress&, const IPv4Address&, IPv4Protocol, const UserOrKernelBuffer& payload, size_t payload_size, u8 ttl);
+    int send_ipv4_fragmented(const MACAddress&, const IPv4Address&, IPv4Protocol, const UserOrKernelBuffer& payload, size_t payload_size, u8 ttl);
 
-    size_t dequeue_packet(u8* buffer, size_t buffer_size);
+    size_t dequeue_packet(u8* buffer, size_t buffer_size, timeval& packet_timestamp);
 
     bool has_queued_packets() const { return !m_packet_queue.is_empty(); }
 
@@ -84,15 +85,21 @@ protected:
     NetworkAdapter();
     void set_interface_name(const StringView& basename);
     void set_mac_address(const MACAddress& mac_address) { m_mac_address = mac_address; }
-    virtual void send_raw(const u8*, size_t) = 0;
-    void did_receive(const u8*, size_t);
+    virtual void send_raw(ReadonlyBytes) = 0;
+    void did_receive(ReadonlyBytes);
 
 private:
     MACAddress m_mac_address;
     IPv4Address m_ipv4_address;
     IPv4Address m_ipv4_netmask;
     IPv4Address m_ipv4_gateway;
-    SinglyLinkedList<KBuffer> m_packet_queue;
+
+    struct PacketWithTimestamp {
+        KBuffer packet;
+        timeval timestamp;
+    };
+
+    SinglyLinkedList<PacketWithTimestamp> m_packet_queue;
     SinglyLinkedList<KBuffer> m_unused_packet_buffers;
     size_t m_unused_packet_buffers_count { 0 };
     String m_name;

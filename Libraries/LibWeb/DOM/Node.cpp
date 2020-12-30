@@ -26,9 +26,7 @@
 
 #include <AK/StringBuilder.h>
 #include <LibJS/AST.h>
-#include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Function.h>
-#include <LibJS/Runtime/MarkedValueList.h>
 #include <LibJS/Runtime/ScriptFunction.h>
 #include <LibWeb/Bindings/EventWrapper.h>
 #include <LibWeb/Bindings/EventWrapperFactory.h>
@@ -37,80 +35,77 @@
 #include <LibWeb/CSS/StyleResolver.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Event.h>
+#include <LibWeb/DOM/EventDispatcher.h>
 #include <LibWeb/DOM/EventListener.h>
-#include <LibWeb/DOM/HTMLAnchorElement.h>
 #include <LibWeb/DOM/Node.h>
-#include <LibWeb/Layout/LayoutBlock.h>
-#include <LibWeb/Layout/LayoutDocument.h>
-#include <LibWeb/Layout/LayoutInline.h>
-#include <LibWeb/Layout/LayoutNode.h>
-#include <LibWeb/Layout/LayoutText.h>
+#include <LibWeb/DOM/ShadowRoot.h>
+#include <LibWeb/HTML/HTMLAnchorElement.h>
+#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/Layout/InitialContainingBlockBox.h>
+#include <LibWeb/Layout/InlineNode.h>
+#include <LibWeb/Layout/Node.h>
+#include <LibWeb/Layout/TextNode.h>
 
 //#define EVENT_DEBUG
 
-namespace Web {
+namespace Web::DOM {
 
 Node::Node(Document& document, NodeType type)
-    : m_document(&document)
+    : EventTarget(static_cast<Bindings::ScriptExecutionContext&>(document))
+    , m_document(&document)
     , m_type(type)
 {
+    if (!is_document())
+        m_document->ref_from_node({});
 }
 
 Node::~Node()
 {
+    ASSERT(m_deletion_has_begun);
     if (layout_node() && layout_node()->parent())
         layout_node()->parent()->remove_child(*layout_node());
+
+    if (!is_document())
+        m_document->unref_from_node({});
 }
 
-const HTMLAnchorElement* Node::enclosing_link_element() const
+const HTML::HTMLAnchorElement* Node::enclosing_link_element() const
 {
     for (auto* node = this; node; node = node->parent()) {
-        if (is<HTMLAnchorElement>(*node) && to<HTMLAnchorElement>(*node).has_attribute(HTML::AttributeNames::href))
-            return to<HTMLAnchorElement>(node);
+        if (is<HTML::HTMLAnchorElement>(*node) && downcast<HTML::HTMLAnchorElement>(*node).has_attribute(HTML::AttributeNames::href))
+            return downcast<HTML::HTMLAnchorElement>(node);
     }
     return nullptr;
 }
 
-const HTMLElement* Node::enclosing_html_element() const
+const HTML::HTMLElement* Node::enclosing_html_element() const
 {
-    return first_ancestor_of_type<HTMLElement>();
+    return first_ancestor_of_type<HTML::HTMLElement>();
 }
 
 String Node::text_content() const
 {
-    Vector<String> strings;
     StringBuilder builder;
     for (auto* child = first_child(); child; child = child->next_sibling()) {
-        auto text = child->text_content();
-        if (!text.is_empty()) {
-            builder.append(child->text_content());
-            builder.append(' ');
-        }
+        builder.append(child->text_content());
     }
-    if (builder.length() > 1)
-        builder.trim(1);
     return builder.to_string();
 }
 
-const Element* Node::next_element_sibling() const
+void Node::set_text_content(const String& content)
 {
-    for (auto* node = next_sibling(); node; node = node->next_sibling()) {
-        if (node->is_element())
-            return static_cast<const Element*>(node);
+    if (is_text()) {
+        downcast<Text>(this)->set_data(content);
+    } else {
+        remove_all_children();
+        append_child(document().create_text_node(content));
     }
-    return nullptr;
+
+    set_needs_style_update(true);
+    document().invalidate_layout();
 }
 
-const Element* Node::previous_element_sibling() const
-{
-    for (auto* node = previous_sibling(); node; node = node->previous_sibling()) {
-        if (node->is_element())
-            return static_cast<const Element*>(node);
-    }
-    return nullptr;
-}
-
-RefPtr<LayoutNode> Node::create_layout_node(const StyleProperties*)
+RefPtr<Layout::Node> Node::create_layout_node(const CSS::StyleProperties*)
 {
     return nullptr;
 }
@@ -129,29 +124,9 @@ bool Node::is_link() const
     return enclosing_link_element();
 }
 
-void Node::dispatch_event(NonnullRefPtr<Event> event)
+bool Node::dispatch_event(NonnullRefPtr<Event> event)
 {
-    for (auto& listener : listeners()) {
-        if (listener.event_name == event->type()) {
-            auto& function = const_cast<EventListener&>(*listener.listener).function();
-#ifdef EVENT_DEBUG
-            static_cast<const JS::ScriptFunction&>(function).body().dump(0);
-#endif
-            auto& global_object = function.global_object();
-            auto* this_value = wrap(global_object, *this);
-#ifdef EVENT_DEBUG
-            dbg() << "calling event listener with this=" << this_value;
-#endif
-            auto* event_wrapper = wrap(global_object, *event);
-            JS::MarkedValueList arguments(global_object.heap());
-            arguments.append(event_wrapper);
-            document().interpreter().call(function, this_value, move(arguments));
-        }
-    }
-
-    // FIXME: This is a hack. We should follow the real rules of event bubbling.
-    if (parent())
-        parent()->dispatch_event(move(event));
+    return EventDispatcher::dispatch(*this, event);
 }
 
 String Node::child_text_content() const
@@ -160,42 +135,52 @@ String Node::child_text_content() const
         return String::empty();
 
     StringBuilder builder;
-    to<ParentNode>(*this).for_each_child([&](auto& child) {
+    downcast<ParentNode>(*this).for_each_child([&](auto& child) {
         if (is<Text>(child))
-            builder.append(to<Text>(child).text_content());
+            builder.append(downcast<Text>(child).text_content());
     });
     return builder.build();
 }
 
-const Node* Node::root() const
+Node* Node::root()
 {
-    const Node* root = this;
+    Node* root = this;
     while (root->parent())
         root = root->parent();
     return root;
 }
 
+Node* Node::shadow_including_root()
+{
+    auto node_root = root();
+    if (is<ShadowRoot>(node_root))
+        return downcast<ShadowRoot>(node_root)->host()->shadow_including_root();
+    return node_root;
+}
+
 bool Node::is_connected() const
 {
-    return root() && root()->is_document();
+    return shadow_including_root() && shadow_including_root()->is_document();
 }
 
 Element* Node::parent_element()
 {
     if (!parent() || !is<Element>(parent()))
         return nullptr;
-    return to<Element>(parent());
+    return downcast<Element>(parent());
 }
 
 const Element* Node::parent_element() const
 {
     if (!parent() || !is<Element>(parent()))
         return nullptr;
-    return to<Element>(parent());
+    return downcast<Element>(parent());
 }
 
 RefPtr<Node> Node::append_child(NonnullRefPtr<Node> node, bool notify)
 {
+    if (&node->document() != &document())
+        document().adopt_node(node);
     TreeNode<Node>::append_child(node, notify);
     return node;
 }
@@ -208,13 +193,78 @@ RefPtr<Node> Node::insert_before(NonnullRefPtr<Node> node, RefPtr<Node> child, b
         dbg() << "FIXME: Trying to insert_before() a bogus child";
         return nullptr;
     }
+    if (&node->document() != &document())
+        document().adopt_node(node);
     TreeNode<Node>::insert_before(node, child, notify);
     return node;
 }
 
+void Node::remove_all_children()
+{
+    while (RefPtr<Node> child = first_child()) {
+        remove_child(*child);
+    }
+}
+
 void Node::set_document(Badge<Document>, Document& document)
 {
+    if (m_document == &document)
+        return;
+    document.ref_from_node({});
+    m_document->unref_from_node({});
     m_document = &document;
+}
+
+bool Node::is_editable() const
+{
+    return parent() && parent()->is_editable();
+}
+
+Bindings::EventTargetWrapper* Node::create_wrapper(JS::GlobalObject& global_object)
+{
+    return wrap(global_object, *this);
+}
+
+void Node::removed_last_ref()
+{
+    if (is<Document>(*this)) {
+        downcast<Document>(*this).removed_last_ref();
+        return;
+    }
+    m_deletion_has_begun = true;
+    delete this;
+}
+
+void Node::set_layout_node(Badge<Layout::Node>, Layout::Node* layout_node) const
+{
+    if (layout_node)
+        m_layout_node = layout_node->make_weak_ptr();
+    else
+        m_layout_node = nullptr;
+}
+
+EventTarget* Node::get_parent(const Event&)
+{
+    // FIXME: returns the node’s assigned slot, if node is assigned, and node’s parent otherwise.
+    return parent();
+}
+
+void Node::set_needs_style_update(bool value)
+{
+    if (m_needs_style_update == value)
+        return;
+    m_needs_style_update = value;
+
+    if (m_needs_style_update) {
+        for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent())
+            ancestor->m_child_needs_style_update = true;
+        document().schedule_style_update();
+    }
+}
+
+void Node::inserted_into(Node&)
+{
+    set_needs_style_update(true);
 }
 
 }

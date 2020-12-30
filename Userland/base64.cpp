@@ -54,7 +54,7 @@ int main(int argc, char** argv)
         bool success = file->open(
             STDIN_FILENO,
             Core::IODevice::OpenMode::ReadOnly,
-            Core::File::ShouldCloseFileDescription::Yes);
+            Core::File::ShouldCloseFileDescriptor::Yes);
         ASSERT(success);
         buffer = file->read_all();
     } else {
@@ -71,10 +71,10 @@ int main(int argc, char** argv)
 
     if (decode) {
         auto decoded = decode_base64(StringView(buffer));
-        printf("%s\n", String::copy(decoded).characters());
+        fwrite(decoded.data(), sizeof(u8), decoded.size(), stdout);
         return 0;
     }
 
-    auto encoded = encode_base64(StringView(buffer));
-    printf("%s\n", String::copy(encoded).characters());
+    auto encoded = encode_base64(buffer);
+    printf("%s\n", encoded.characters());
 }

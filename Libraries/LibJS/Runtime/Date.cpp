@@ -24,9 +24,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/StringBuilder.h>
 #include <LibCore/DateTime.h>
 #include <LibJS/Heap/Heap.h>
-#include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Date.h>
 #include <LibJS/Runtime/GlobalObject.h>
 
@@ -46,6 +46,79 @@ Date::Date(Core::DateTime datetime, u16 milliseconds, Object& prototype)
 
 Date::~Date()
 {
+}
+
+tm Date::to_utc_tm() const
+{
+    time_t timestamp = m_datetime.timestamp();
+    struct tm tm;
+    gmtime_r(&timestamp, &tm);
+    return tm;
+}
+
+int Date::utc_date() const
+{
+    return to_utc_tm().tm_mday;
+}
+
+int Date::utc_day() const
+{
+    return to_utc_tm().tm_wday;
+}
+
+int Date::utc_full_year() const
+{
+    return to_utc_tm().tm_year + 1900;
+}
+
+int Date::utc_hours() const
+{
+    return to_utc_tm().tm_hour;
+}
+
+int Date::utc_minutes() const
+{
+    return to_utc_tm().tm_min;
+}
+
+int Date::utc_month() const
+{
+    return to_utc_tm().tm_mon;
+}
+
+int Date::utc_seconds() const
+{
+    return to_utc_tm().tm_sec;
+}
+
+String Date::iso_date_string() const
+{
+    auto tm = to_utc_tm();
+    int year = tm.tm_year + 1900;
+    int month = tm.tm_mon + 1;
+
+    StringBuilder builder;
+    if (year < 0)
+        builder.appendf("-%06d", -year);
+    else if (year > 9999)
+        builder.appendf("+%06d", year);
+    else
+        builder.appendf("%04d", year);
+    builder.append('-');
+    builder.appendf("%02d", month);
+    builder.append('-');
+    builder.appendf("%02d", tm.tm_mday);
+    builder.append('T');
+    builder.appendf("%02d", tm.tm_hour);
+    builder.append(':');
+    builder.appendf("%02d", tm.tm_min);
+    builder.append(':');
+    builder.appendf("%02d", tm.tm_sec);
+    builder.append('.');
+    builder.appendf("%03d", m_milliseconds);
+    builder.append('Z');
+
+    return builder.build();
 }
 
 }

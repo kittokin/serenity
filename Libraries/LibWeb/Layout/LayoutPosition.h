@@ -27,37 +27,23 @@
 #pragma once
 
 #include <AK/RefPtr.h>
+#include <LibWeb/Forward.h>
+#include <LibWeb/Layout/Node.h>
 
-namespace Web {
+namespace Web::Layout {
 
-class LayoutNode;
+class Node;
 
 struct LayoutPosition {
-    bool operator>=(const LayoutPosition& other) const
-    {
-        if (layout_node == other.layout_node)
-            return index_in_node >= other.index_in_node;
-
-        // FIXME: Implement.
-        return true;
-    }
-
-    bool operator<=(const LayoutPosition& other) const
-    {
-        if (layout_node == other.layout_node)
-            return index_in_node <= other.index_in_node;
-
-        // FIXME: Implement.
-        return false;
-    }
-
-    RefPtr<LayoutNode> layout_node;
+    RefPtr<Node> layout_node;
     int index_in_node { 0 };
+
+    DOM::Position to_dom_position() const;
 };
 
 class LayoutRange {
 public:
-    LayoutRange() {}
+    LayoutRange() { }
     LayoutRange(const LayoutPosition& start, const LayoutPosition& end)
         : m_start(start)
         , m_end(end)
@@ -76,9 +62,13 @@ public:
     void set_end(const LayoutPosition& end) { m_end = end; }
 
     const LayoutPosition& start() const { return m_start; }
+    LayoutPosition& start() { return m_start; }
     const LayoutPosition& end() const { return m_end; }
+    LayoutPosition& end() { return m_end; }
 
     LayoutRange normalized() const;
+
+    NonnullRefPtr<DOM::Range> to_dom_range() const;
 
 private:
     LayoutPosition m_start;

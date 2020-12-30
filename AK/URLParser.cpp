@@ -57,7 +57,7 @@ String urldecode(const StringView& input)
             builder.append(consume());
             continue;
         }
-        if (!is_ascii_hex_digit(peek(1)) && !is_ascii_hex_digit(peek(2))) {
+        if (!is_ascii_hex_digit(peek(1)) || !is_ascii_hex_digit(peek(2))) {
             builder.append(consume());
             continue;
         }
@@ -93,10 +93,10 @@ static inline bool in_userinfo_set(u32 c)
 String urlencode(const StringView& input)
 {
     StringBuilder builder;
-    for (char ch : input) {
+    for (unsigned char ch : input) {
         if (in_userinfo_set((u8)ch)) {
             builder.append('%');
-            builder.appendf("%02X", (u8)ch);
+            builder.appendff("{:02X}", ch);
         } else {
             builder.append(ch);
         }

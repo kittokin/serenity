@@ -48,14 +48,19 @@ public:
     static bool exists(const String& filename);
     static String real_path_for(const String& filename);
     static String read_link(const StringView& link_path);
+    static bool ensure_parent_directories(const String& path);
 
     virtual bool open(IODevice::OpenMode) override;
 
-    enum class ShouldCloseFileDescription {
+    enum class ShouldCloseFileDescriptor {
         No = 0,
         Yes
     };
-    bool open(int fd, IODevice::OpenMode, ShouldCloseFileDescription);
+    bool open(int fd, IODevice::OpenMode, ShouldCloseFileDescriptor);
+
+    static NonnullRefPtr<File> standard_input();
+    static NonnullRefPtr<File> standard_output();
+    static NonnullRefPtr<File> standard_error();
 
 private:
     File(Object* parent = nullptr)
@@ -67,7 +72,7 @@ private:
     bool open_impl(IODevice::OpenMode, mode_t);
 
     String m_filename;
-    ShouldCloseFileDescription m_should_close_file_descriptor { ShouldCloseFileDescription::Yes };
+    ShouldCloseFileDescriptor m_should_close_file_descriptor { ShouldCloseFileDescriptor::Yes };
 };
 
 }

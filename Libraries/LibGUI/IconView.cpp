@@ -25,6 +25,7 @@
  */
 
 #include <AK/StringBuilder.h>
+#include <AK/Utf8View.h>
 #include <LibCore/Timer.h>
 #include <LibGUI/DragOperation.h>
 #include <LibGUI/IconView.h>
@@ -62,9 +63,11 @@ void IconView::select_all()
     }
 }
 
-void IconView::scroll_into_view(const ModelIndex& index, Orientation orientation)
+void IconView::scroll_into_view(const ModelIndex& index, bool scroll_horizontally, bool scroll_vertically)
 {
-    ScrollableWidget::scroll_into_view(item_rect(index.row()), orientation);
+    if (!index.is_valid())
+        return;
+    ScrollableWidget::scroll_into_view(item_rect(index.row()), scroll_horizontally, scroll_vertically);
 }
 
 void IconView::resize_event(ResizeEvent& event)
@@ -95,7 +98,7 @@ void IconView::reinit_item_cache() const
         auto& item_data = m_item_data_cache[i];
         // TODO: It's unfortunate that we have no way to know whether any
         // data actually changed, so we have to invalidate *everyone*
-        if (item_data.is_valid()/* && !model()->is_valid(item_data.index)*/)
+        if (item_data.is_valid() /* && !model()->is_valid(item_data.index)*/)
             item_data.invalidate();
         if (item_data.selected && i < (size_t)m_first_selected_hint)
             m_first_selected_hint = (int)i;
@@ -114,7 +117,7 @@ auto IconView::get_item_data(int item_index) const -> ItemData&
         return item_data;
 
     item_data.index = model()->index(item_index, model_column());
-    item_data.data = model()->data(item_data.index);
+    item_data.text = item_data.index.data().to_string();
     get_item_rects(item_index, item_data, font_for_index(item_data.index));
     item_data.valid = true;
     return item_data;
@@ -126,15 +129,17 @@ auto IconView::item_data_from_content_position(const Gfx::IntPoint& content_posi
         return nullptr;
     int row, column;
     column_row_from_content_position(content_position, row, column);
-    int item_index = row * m_visual_column_count + column;
+    int item_index = (m_flow_direction == FlowDirection::LeftToRight)
+        ? row * m_visual_column_count + column
+        : column * m_visual_row_count + row;
     if (item_index < 0 || item_index >= item_count())
         return nullptr;
     return &get_item_data(item_index);
 }
 
-void IconView::did_update_model(unsigned flags)
+void IconView::model_did_update(unsigned flags)
 {
-    AbstractView::did_update_model(flags);
+    AbstractView::model_did_update(flags);
     if (!model() || (flags & GUI::Model::InvalidateAllIndexes)) {
         m_item_data_cache.clear();
         AbstractView::clear_selection();
@@ -151,14 +156,26 @@ void IconView::update_content_size()
     if (!model())
         return set_content_size({});
 
-    m_visual_column_count = max(1, available_size().width() / effective_item_size().width());
-    if (m_visual_column_count)
-        m_visual_row_count = ceil_div(model()->row_count(), m_visual_column_count);
-    else
-        m_visual_row_count = 0;
+    int content_width;
+    int content_height;
 
-    int content_width = available_size().width();
-    int content_height = m_visual_row_count * effective_item_size().height();
+    if (m_flow_direction == FlowDirection::LeftToRight) {
+        m_visual_column_count = max(1, available_size().width() / effective_item_size().width());
+        if (m_visual_column_count)
+            m_visual_row_count = ceil_div(model()->row_count(), m_visual_column_count);
+        else
+            m_visual_row_count = 0;
+        content_width = available_size().width();
+        content_height = m_visual_row_count * effective_item_size().height();
+    } else {
+        m_visual_row_count = max(1, available_size().height() / effective_item_size().height());
+        if (m_visual_row_count)
+            m_visual_column_count = ceil_div(model()->row_count(), m_visual_row_count);
+        else
+            m_visual_column_count = 0;
+        content_width = m_visual_column_count * effective_item_size().width();
+        content_height = available_size().height();
+    }
 
     set_content_size({ content_width, content_height });
 
@@ -176,8 +193,17 @@ Gfx::IntRect IconView::item_rect(int item_index) const
 {
     if (!m_visual_row_count || !m_visual_column_count)
         return {};
-    int visual_row_index = item_index / m_visual_column_count;
-    int visual_column_index = item_index % m_visual_column_count;
+    int visual_row_index;
+    int visual_column_index;
+
+    if (m_flow_direction == FlowDirection::LeftToRight) {
+        visual_row_index = item_index / m_visual_column_count;
+        visual_column_index = item_index % m_visual_column_count;
+    } else {
+        visual_row_index = item_index % m_visual_row_count;
+        visual_column_index = item_index / m_visual_row_count;
+    }
+
     return {
         visual_column_index * effective_item_size().width(),
         visual_row_index * effective_item_size().height(),
@@ -221,7 +247,7 @@ void IconView::mousedown_event(MouseEvent& event)
     auto adjusted_position = to_content_position(event.position());
 
     m_might_drag = false;
-    if (is_multi_select()) {
+    if (selection_mode() == SelectionMode::MultiSelection) {
         m_rubber_banding = true;
         m_rubber_band_origin = adjusted_position;
         m_rubber_band_current = adjusted_position;
@@ -338,7 +364,7 @@ void IconView::mousemove_event(MouseEvent& event)
                     scroll_out_of_view_timer_fired();
                 };
             }
-            
+
             m_out_of_view_position = event.position();
             if (!m_out_of_view_timer->is_active())
                 m_out_of_view_timer->start();
@@ -373,7 +399,7 @@ void IconView::scroll_out_of_view_timer_fired()
     else if (m_out_of_view_position.x() < in_view_rect.left())
         adjust_x = -(SCROLL_OUT_OF_VIEW_HOT_MARGIN / 2) + max(-SCROLL_OUT_OF_VIEW_HOT_MARGIN, m_out_of_view_position.x() - in_view_rect.left());
 
-    ScrollableWidget::scroll_into_view({scroll_to.translated(adjust_x, adjust_y), {1, 1}}, true, true);
+    ScrollableWidget::scroll_into_view({ scroll_to.translated(adjust_x, adjust_y), { 1, 1 } }, true, true);
     update_rubber_banding(m_out_of_view_position);
 }
 
@@ -386,6 +412,32 @@ void IconView::update_item_rects(int item_index, ItemData& item_data) const
     item_data.text_rect.set_top(item_rect.y() + item_data.text_offset_y);
 }
 
+Gfx::IntRect IconView::content_rect(const ModelIndex& index) const
+{
+    if (!index.is_valid())
+        return {};
+    auto& item_data = get_item_data(index.row());
+    return item_data.text_rect.inflated(4, 4);
+}
+
+void IconView::did_change_hovered_index(const ModelIndex& old_index, const ModelIndex& new_index)
+{
+    AbstractView::did_change_hovered_index(old_index, new_index);
+    if (old_index.is_valid())
+        get_item_rects(old_index.row(), get_item_data(old_index.row()), font_for_index(old_index));
+    if (new_index.is_valid())
+        get_item_rects(new_index.row(), get_item_data(new_index.row()), font_for_index(new_index));
+}
+
+void IconView::did_change_cursor_index(const ModelIndex& old_index, const ModelIndex& new_index)
+{
+    AbstractView::did_change_cursor_index(old_index, new_index);
+    if (old_index.is_valid())
+        get_item_rects(old_index.row(), get_item_data(old_index.row()), font_for_index(old_index));
+    if (new_index.is_valid())
+        get_item_rects(new_index.row(), get_item_data(new_index.row()), font_for_index(new_index));
+}
+
 void IconView::get_item_rects(int item_index, ItemData& item_data, const Gfx::Font& font) const
 {
     auto item_rect = this->item_rect(item_index);
@@ -393,9 +445,44 @@ void IconView::get_item_rects(int item_index, ItemData& item_data, const Gfx::Fo
     item_data.icon_rect.center_within(item_rect);
     item_data.icon_offset_y = -font.glyph_height() - 6;
     item_data.icon_rect.move_by(0, item_data.icon_offset_y);
-    item_data.text_rect = { 0, item_data.icon_rect.bottom() + 6 + 1, font.width(item_data.data.to_string()), font.glyph_height() };
-    item_data.text_rect.center_horizontally_within(item_rect);
-    item_data.text_rect.inflate(6, 4);
+
+    int unwrapped_text_width = font.width(item_data.text);
+    int available_width = item_rect.width() - 6;
+
+    item_data.text_rect = { 0, item_data.icon_rect.bottom() + 6 + 1, 0, font.glyph_height() };
+    item_data.wrapped_text_lines.clear();
+
+    if ((unwrapped_text_width > available_width) && (item_data.selected || m_hovered_index == item_data.index || cursor_index() == item_data.index)) {
+        int current_line_width = 0;
+        int current_line_start = 0;
+        int widest_line_width = 0;
+        Utf8View utf8_view(item_data.text);
+        auto it = utf8_view.begin();
+        for (; it != utf8_view.end(); ++it) {
+            auto codepoint = *it;
+            auto glyph_width = font.glyph_width(codepoint);
+            if ((current_line_width + glyph_width + font.glyph_spacing()) > available_width) {
+                item_data.wrapped_text_lines.append(item_data.text.substring_view(current_line_start, utf8_view.byte_offset_of(it) - current_line_start));
+                current_line_start = utf8_view.byte_offset_of(it);
+                current_line_width = glyph_width;
+            } else {
+                current_line_width += glyph_width + font.glyph_spacing();
+            }
+            widest_line_width = max(widest_line_width, current_line_width);
+        }
+        if (current_line_width > 0) {
+            item_data.wrapped_text_lines.append(item_data.text.substring_view(current_line_start, utf8_view.byte_offset_of(it) - current_line_start));
+        }
+        item_data.text_rect.set_width(widest_line_width);
+        item_data.text_rect.center_horizontally_within(item_rect);
+        item_data.text_rect.intersect(item_rect);
+        item_data.text_rect.set_height(font.glyph_height() * item_data.wrapped_text_lines.size());
+        item_data.text_rect.inflate(6, 4);
+    } else {
+        item_data.text_rect.set_width(unwrapped_text_width);
+        item_data.text_rect.inflate(6, 4);
+        item_data.text_rect.center_horizontally_within(item_rect);
+    }
     item_data.text_rect.intersect(item_rect);
     item_data.text_offset_y = item_data.text_rect.y() - item_rect.y();
 }
@@ -407,6 +494,7 @@ void IconView::second_paint_event(PaintEvent& event)
 
     Painter painter(*this);
     painter.add_clip_rect(event.rect());
+    painter.add_clip_rect(widget_inner_rect());
     painter.translate(frame_thickness(), frame_thickness());
     painter.translate(-horizontal_scrollbar().value(), -vertical_scrollbar().value());
 
@@ -423,30 +511,34 @@ void IconView::paint_event(PaintEvent& event)
     Painter painter(*this);
     painter.add_clip_rect(widget_inner_rect());
     painter.add_clip_rect(event.rect());
-    
+
     if (fill_with_background_color())
         painter.fill_rect(event.rect(), widget_background_color);
     painter.translate(frame_thickness(), frame_thickness());
     painter.translate(-horizontal_scrollbar().value(), -vertical_scrollbar().value());
 
-    auto translation = painter.translation().translated(-relative_position().x(), -relative_position().y());
-    for_each_item_intersecting_rect(painter.clip_rect().translated(-translation.x(), -translation.y()), [&](auto& item_data) -> IterationDecision {
+    auto selection_color = is_focused() ? palette().selection() : palette().inactive_selection();
+
+    for_each_item_intersecting_rect(to_content_rect(event.rect()), [&](auto& item_data) -> IterationDecision {
         Color background_color;
         if (item_data.selected) {
-            background_color = is_focused() ? palette().selection() : palette().inactive_selection();
+            background_color = selection_color;
         } else {
-            background_color = widget_background_color;
+            if (fill_with_background_color())
+                background_color = widget_background_color;
         }
 
-        auto icon = model()->data(item_data.index, Model::Role::Icon);
-        auto item_text = model()->data(item_data.index, Model::Role::Display);
+        auto icon = item_data.index.data(ModelRole::Icon);
 
         if (icon.is_icon()) {
             if (auto bitmap = icon.as_icon().bitmap_for_size(item_data.icon_rect.width())) {
                 Gfx::IntRect destination = bitmap->rect();
                 destination.center_within(item_data.icon_rect);
 
-                if (m_hovered_index.is_valid() && m_hovered_index == item_data.index) {
+                if (item_data.selected) {
+                    auto tint = selection_color.with_alpha(100);
+                    painter.blit_filtered(destination.location(), *bitmap, bitmap->rect(), [&](auto src) { return src.blend(tint); });
+                } else if (m_hovered_index.is_valid() && m_hovered_index == item_data.index) {
                     painter.blit_brightened(destination.location(), *bitmap, bitmap->rect());
                 } else {
                     painter.blit(destination.location(), *bitmap, bitmap->rect());
@@ -454,13 +546,39 @@ void IconView::paint_event(PaintEvent& event)
             }
         }
 
-        Color text_color;
-        if (item_data.selected)
-            text_color = is_focused() ? palette().selection_text() : palette().inactive_selection_text();
-        else
-            text_color = model()->data(item_data.index, Model::Role::ForegroundColor).to_color(palette().color(foreground_role()));
-        painter.fill_rect(item_data.text_rect, background_color);
-        painter.draw_text(item_data.text_rect, item_text.to_string(), font_for_index(item_data.index), Gfx::TextAlignment::Center, text_color, Gfx::TextElision::Right);
+        auto font = font_for_index(item_data.index);
+
+        const auto& text_rect = item_data.text_rect;
+
+        painter.fill_rect(text_rect, background_color);
+
+        if (is_focused() && item_data.index == cursor_index()) {
+            painter.draw_rect(text_rect, widget_background_color);
+            painter.draw_focus_rect(text_rect, palette().focus_outline());
+        }
+
+        if (!item_data.wrapped_text_lines.is_empty()) {
+            // Item text would not fit in the item text rect, let's break it up into lines..
+
+            const auto& lines = item_data.wrapped_text_lines;
+            size_t number_of_text_lines = min((size_t)text_rect.height() / font->glyph_height(), lines.size());
+            for (size_t line_index = 0; line_index < number_of_text_lines; ++line_index) {
+                Gfx::IntRect line_rect;
+                line_rect.set_width(text_rect.width());
+                line_rect.set_height(font->glyph_height());
+                line_rect.center_horizontally_within(item_data.text_rect);
+                line_rect.set_y(2 + item_data.text_rect.y() + line_index * font->glyph_height());
+                line_rect.inflate(6, 0);
+
+                // Shrink the line_rect on the last line to apply elision if there are more lines.
+                if (number_of_text_lines - 1 == line_index && lines.size() > number_of_text_lines)
+                    line_rect.inflate(-(6 + 2 * font->max_glyph_width()), 0);
+
+                draw_item_text(painter, item_data.index, item_data.selected, line_rect, lines[line_index], font, Gfx::TextAlignment::Center, Gfx::TextElision::Right);
+            }
+        } else {
+            draw_item_text(painter, item_data.index, item_data.selected, item_data.text_rect, item_data.text, font, Gfx::TextAlignment::Center, Gfx::TextElision::Right);
+        }
 
         if (item_data.index == m_drop_candidate_index) {
             // FIXME: This visualization is not great, as it's also possible to drop things on the text label..
@@ -482,7 +600,7 @@ void IconView::did_update_selection()
     AbstractView::did_update_selection();
     if (m_changing_selection)
         return;
-    
+
     // Selection was modified externally, we need to synchronize our cache
     do_clear_selection();
     selection().for_each_index([&](const ModelIndex& index) {
@@ -593,119 +711,130 @@ void IconView::set_selection(const ModelIndex& new_index)
     AbstractView::set_selection(new_index);
 }
 
-void IconView::keydown_event(KeyEvent& event)
+int IconView::items_per_page() const
+{
+    if (m_flow_direction == FlowDirection::LeftToRight)
+        return (visible_content_rect().height() / effective_item_size().height()) * m_visual_column_count;
+    return (visible_content_rect().width() / effective_item_size().width()) * m_visual_row_count;
+}
+
+void IconView::move_cursor(CursorMovement movement, SelectionUpdate selection_update)
 {
     if (!model())
         return;
-    if (!m_visual_row_count || !m_visual_column_count)
-        return;
-
     auto& model = *this->model();
-    if (event.key() == KeyCode::Key_Return) {
-        activate_selected();
+
+    if (!cursor_index().is_valid()) {
+        set_cursor(model.index(0, model_column()), SelectionUpdate::Set);
         return;
     }
-    if (event.key() == KeyCode::Key_Home) {
-        auto new_index = model.index(0, 0);
-        if (model.is_valid(new_index)) {
-            set_selection(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
+
+    auto new_row = cursor_index().row();
+
+    switch (movement) {
+    case CursorMovement::Right:
+        if (m_flow_direction == FlowDirection::LeftToRight)
+            new_row += 1;
+        else
+            new_row += m_visual_row_count;
+        break;
+    case CursorMovement::Left:
+        if (m_flow_direction == FlowDirection::LeftToRight)
+            new_row -= 1;
+        else
+            new_row -= m_visual_row_count;
+        break;
+    case CursorMovement::Up:
+        if (m_flow_direction == FlowDirection::LeftToRight)
+            new_row -= m_visual_column_count;
+        else
+            new_row -= 1;
+        break;
+    case CursorMovement::Down:
+        if (m_flow_direction == FlowDirection::LeftToRight)
+            new_row += m_visual_column_count;
+        else
+            new_row += 1;
+        break;
+    case CursorMovement::PageUp:
+        new_row = max(0, cursor_index().row() - items_per_page());
+        break;
+
+    case CursorMovement::PageDown:
+        new_row = min(model.row_count() - 1, cursor_index().row() + items_per_page());
+        break;
+
+    case CursorMovement::Home:
+        new_row = 0;
+        break;
+    case CursorMovement::End:
+        new_row = model.row_count() - 1;
+        break;
+    default:
         return;
     }
-    if (event.key() == KeyCode::Key_End) {
-        auto new_index = model.index(model.row_count() - 1, 0);
-        if (model.is_valid(new_index)) {
-            set_selection(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
-    }
-    if (event.key() == KeyCode::Key_Up) {
-        ModelIndex new_index;
-        if (!selection().is_empty()) {
-            auto old_index = selection().first();
-            new_index = model.index(old_index.row() - m_visual_column_count, old_index.column());
-        } else {
-            new_index = model.index(0, 0);
-        }
-        if (model.is_valid(new_index)) {
-            set_selection(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
-    }
-    if (event.key() == KeyCode::Key_Down) {
-        ModelIndex new_index;
-        if (!selection().is_empty()) {
-            auto old_index = selection().first();
-            new_index = model.index(old_index.row() + m_visual_column_count, old_index.column());
-        } else {
-            new_index = model.index(0, 0);
-        }
-        if (model.is_valid(new_index)) {
-            set_selection(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
-    }
-    if (event.key() == KeyCode::Key_Left) {
-        ModelIndex new_index;
-        if (!selection().is_empty()) {
-            auto old_index = selection().first();
-            new_index = model.index(old_index.row() - 1, old_index.column());
-        } else {
-            new_index = model.index(0, 0);
-        }
-        if (model.is_valid(new_index)) {
-            set_selection(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
-    }
-    if (event.key() == KeyCode::Key_Right) {
-        ModelIndex new_index;
-        if (!selection().is_empty()) {
-            auto old_index = selection().first();
-            new_index = model.index(old_index.row() + 1, old_index.column());
-        } else {
-            new_index = model.index(0, 0);
-        }
-        if (model.is_valid(new_index)) {
-            set_selection(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
-    }
-    if (event.key() == KeyCode::Key_PageUp) {
-        int items_per_page = (visible_content_rect().height() / effective_item_size().height()) * m_visual_column_count;
-        auto old_index = selection().first();
-        auto new_index = model.index(max(0, old_index.row() - items_per_page), old_index.column());
-        if (model.is_valid(new_index)) {
-            set_selection(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
-    }
-    if (event.key() == KeyCode::Key_PageDown) {
-        int items_per_page = (visible_content_rect().height() / effective_item_size().height()) * m_visual_column_count;
-        auto old_index = selection().first();
-        auto new_index = model.index(min(model.row_count() - 1, old_index.row() + items_per_page), old_index.column());
-        if (model.is_valid(new_index)) {
-            set_selection(new_index);
-            scroll_into_view(new_index, Orientation::Vertical);
-            update();
-        }
-        return;
-    }
-    return Widget::keydown_event(event);
+    auto new_index = model.index(new_row, cursor_index().column());
+    if (new_index.is_valid())
+        set_cursor(new_index, selection_update);
 }
 
+void IconView::set_flow_direction(FlowDirection flow_direction)
+{
+    if (m_flow_direction == flow_direction)
+        return;
+    m_flow_direction = flow_direction;
+    m_item_data_cache.clear();
+    m_item_data_cache_valid = false;
+    update();
+}
+
+template<typename Function>
+inline IterationDecision IconView::for_each_item_intersecting_rect(const Gfx::IntRect& rect, Function f) const
+{
+    ASSERT(model());
+    if (rect.is_empty())
+        return IterationDecision::Continue;
+    int begin_row, begin_column;
+    column_row_from_content_position(rect.top_left(), begin_row, begin_column);
+    int end_row, end_column;
+    column_row_from_content_position(rect.bottom_right(), end_row, end_column);
+
+    int items_per_flow_axis_step;
+    int item_index;
+    int last_index;
+    if (m_flow_direction == FlowDirection::LeftToRight) {
+        items_per_flow_axis_step = end_column - begin_column + 1;
+        item_index = max(0, begin_row * m_visual_column_count + begin_column);
+        last_index = min(item_count(), end_row * m_visual_column_count + end_column + 1);
+    } else {
+        items_per_flow_axis_step = end_row - begin_row + 1;
+        item_index = max(0, begin_column * m_visual_row_count + begin_row);
+        last_index = min(item_count(), end_column * m_visual_row_count + end_row + 1);
+    }
+
+    while (item_index < last_index) {
+        for (int i = item_index; i < min(item_index + items_per_flow_axis_step, last_index); i++) {
+            auto& item_data = get_item_data(i);
+            if (item_data.is_intersecting(rect)) {
+                auto decision = f(item_data);
+                if (decision != IterationDecision::Continue)
+                    return decision;
+            }
+        }
+        item_index += m_visual_column_count;
+    };
+
+    return IterationDecision::Continue;
+}
+
+template<typename Function>
+inline IterationDecision IconView::for_each_item_intersecting_rects(const Vector<Gfx::IntRect>& rects, Function f) const
+{
+    for (auto& rect : rects) {
+        auto decision = for_each_item_intersecting_rect(rect, f);
+        if (decision != IterationDecision::Continue)
+            return decision;
+    }
+    return IterationDecision::Continue;
+}
 }

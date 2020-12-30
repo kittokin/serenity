@@ -24,32 +24,36 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/Singleton.h>
 #include <Kernel/Console.h>
 #include <Kernel/IO.h>
-#include <Kernel/kstdio.h>
 #include <Kernel/SpinLock.h>
+#include <Kernel/kstdio.h>
 
 // Bytes output to 0xE9 end up on the Bochs console. It's very handy.
 #define CONSOLE_OUT_TO_E9
 
-static Console* s_the;
+static AK::Singleton<Console> s_the;
 static Kernel::SpinLock g_console_lock;
+
+void Console::initialize()
+{
+    s_the.ensure_instance();
+}
 
 Console& Console::the()
 {
-    ASSERT(s_the);
     return *s_the;
 }
 
 bool Console::is_initialized()
 {
-    return s_the != nullptr;
+    return s_the.is_initialized();
 }
 
 Console::Console()
     : CharacterDevice(5, 1)
 {
-    s_the = this;
 }
 
 Console::~Console()
@@ -61,20 +65,26 @@ bool Console::can_read(const Kernel::FileDescription&, size_t) const
     return false;
 }
 
-ssize_t Console::read(Kernel::FileDescription&, size_t, u8*, ssize_t)
+Kernel::KResultOr<size_t> Console::read(Kernel::FileDescription&, size_t, Kernel::UserOrKernelBuffer&, size_t)
 {
     // FIXME: Implement reading from the console.
     //        Maybe we could use a ring buffer for this device?
     return 0;
 }
 
-ssize_t Console::write(Kernel::FileDescription&, size_t, const u8* data, ssize_t size)
+Kernel::KResultOr<size_t> Console::write(Kernel::FileDescription&, size_t, const Kernel::UserOrKernelBuffer& data, size_t size)
 {
     if (!size)
         return 0;
-    for (ssize_t i = 0; i < size; ++i)
-        put_char(data[i]);
-    return size;
+
+    ssize_t nread = data.read_buffered<256>(size, [&](const u8* bytes, size_t bytes_count) {
+        for (size_t i = 0; i < bytes_count; i++)
+            put_char((char)bytes[i]);
+        return (ssize_t)bytes_count;
+    });
+    if (nread < 0)
+        return Kernel::KResult(nread);
+    return (size_t)nread;
 }
 
 void Console::put_char(char ch)

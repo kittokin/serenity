@@ -2,7 +2,8 @@
 
 Graphical Unix-like operating system for x86 computers.
 
-![Travis CI status](https://api.travis-ci.com/SerenityOS/serenity.svg?branch=master)
+[![Build status](https://github.com/SerenityOS/serenity/workflows/Build,%20lint,%20and%20test/badge.svg)](https://github.com/SerenityOS/serenity/actions?query=workflow%3A"Build%2C%20lint%2C%20and%20test")
+[![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/serenity.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:serenity)
 
 ## About
 
@@ -63,7 +64,7 @@ I'm also on [Patreon](https://www.patreon.com/serenityos) and [GitHub Sponsors](
 * Terminal emulation (LibVT)
 * Out-of-process network protocol I/O (LibProtocol)
 * Mathematical functions (LibM)
-* ELF file handing (LibELF)
+* ELF file handling (LibELF)
 * POSIX threading (LibPthread)
 * Higher-level threading (LibThread)
 * Transport Layer Security (LibTLS)
@@ -95,9 +96,11 @@ See the [SerenityOS build instructions](https://github.com/SerenityOS/serenity/b
 
 Please see the [issue policy](https://github.com/SerenityOS/serenity/blob/master/CONTRIBUTING.md#issue-policy).
 
-## Wanna chat?
+## Communication hubs
 
-Come hang out with us in `#serenityos` on the Freenode IRC network.
+The main hub is `#serenityos` on the Freenode IRC network.
+
+We also have a project mailing list: [serenityos-dev](https://lists.sr.ht/~awesomekling/serenityos-dev).
 
 ## Author
 
@@ -113,6 +116,15 @@ Come hang out with us in `#serenityos` on the Freenode IRC network.
 * **Ali Mohammad Pur** - [alimpfard](https://github.com/alimpfard)
 * **Shannon Booth** - [shannonbooth](https://github.com/shannonbooth)
 * **Hüseyin ASLITÜRK** - [asliturk](https://github.com/asliturk)
+* **Matthew Olsson** - [mattco98](https://github.com/mattco98)
+* **Nico Weber** - [nico](https://github.com/nico)
+* **Brian Gianforcaro** - [bgianfo](https://github.com/bgianfo)
+* **Ben Wiederhake** - [BenWiederhake](https://github.com/BenWiederhake)
+* **Tom** - [tomuta](https://github.com/tomuta)
+* **Paul Scharnofske** - [asynts](https://github.com/asynts)
+* **Itamar Shenhar** - [itamar8910](https://github.com/itamar8910)
+* **Luke Wilde** - [Lubrsi](https://github.com/Lubrsi)
+* **Brendan Coles** - [bcoles](https://github.com/bcoles)
 
 (And many more!) The people listed above have landed more than 100 commits in the project. :^)
 

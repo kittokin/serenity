@@ -68,8 +68,9 @@ KResultOr<Region*> MBVGADevice::mmap(Process& process, FileDescription&, Virtual
         0,
         "MBVGA Framebuffer",
         prot);
+    if (!region)
+        return KResult(-ENOMEM);
     dbg() << "MBVGADevice: mmap with size " << region->size() << " at " << region->vaddr();
-    ASSERT(region);
     return region;
 }
 
@@ -79,34 +80,36 @@ int MBVGADevice::ioctl(FileDescription&, unsigned request, FlatPtr arg)
     switch (request) {
     case FB_IOCTL_GET_SIZE_IN_BYTES: {
         auto* out = (size_t*)arg;
-        if (!Process::current()->validate_write_typed(out))
+        size_t value = framebuffer_size_in_bytes();
+        if (!copy_to_user(out, &value))
             return -EFAULT;
-        *out = framebuffer_size_in_bytes();
         return 0;
     }
     case FB_IOCTL_GET_BUFFER: {
         auto* index = (int*)arg;
-        if (!Process::current()->validate_write_typed(index))
+        int value = 0;
+        if (!copy_to_user(index, &value))
             return -EFAULT;
-        *index = 0;
         return 0;
     }
     case FB_IOCTL_GET_RESOLUTION: {
-        auto* resolution = (FBResolution*)arg;
-        if (!Process::current()->validate_write_typed(resolution))
+        auto* user_resolution = (FBResolution*)arg;
+        FBResolution resolution;
+        resolution.pitch = m_framebuffer_pitch;
+        resolution.width = m_framebuffer_width;
+        resolution.height = m_framebuffer_height;
+        if (!copy_to_user(user_resolution, &resolution))
             return -EFAULT;
-        resolution->pitch = m_framebuffer_pitch;
-        resolution->width = m_framebuffer_width;
-        resolution->height = m_framebuffer_height;
         return 0;
     }
     case FB_IOCTL_SET_RESOLUTION: {
-        auto* resolution = (FBResolution*)arg;
-        if (!Process::current()->validate_read_typed(resolution) || !Process::current()->validate_write_typed(resolution))
+        auto* user_resolution = (FBResolution*)arg;
+        FBResolution resolution;
+        resolution.pitch = m_framebuffer_pitch;
+        resolution.width = m_framebuffer_width;
+        resolution.height = m_framebuffer_height;
+        if (!copy_to_user(user_resolution, &resolution))
             return -EFAULT;
-        resolution->pitch = m_framebuffer_pitch;
-        resolution->width = m_framebuffer_width;
-        resolution->height = m_framebuffer_height;
         return 0;
     }
     default:

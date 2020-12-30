@@ -37,148 +37,130 @@ namespace GUI {
 BoxLayout::BoxLayout(Orientation orientation)
     : m_orientation(orientation)
 {
+    register_property(
+        "orientation", [this] { return m_orientation == Gfx::Orientation::Vertical ? "Vertical" : "Horizontal"; }, nullptr);
 }
 
 void BoxLayout::run(Widget& widget)
 {
-    bool should_log = false;
-#ifdef GBOXLAYOUT_DEBUG
-    should_log = true;
-#endif
-    if (should_log)
-        dbgprintf("BoxLayout: running layout on %s{%p}, entry count: %d\n", widget.class_name(), &widget, m_entries.size());
-
     if (m_entries.is_empty())
         return;
 
-    Gfx::IntSize available_size = widget.size();
-    int number_of_entries_with_fixed_size = 0;
+    struct Item {
+        Widget* widget { nullptr };
+        int min_size { -1 };
+        int max_size { -1 };
+        int size { 0 };
+        bool final { false };
+    };
 
-    int number_of_visible_entries = 0;
-
-    if (should_log)
-        dbgprintf("BoxLayout:  Starting with available size: %s\n", available_size.to_string().characters());
-
-    Optional<size_t> last_entry_with_automatic_size;
+    Vector<Item, 32> items;
 
     for (size_t i = 0; i < m_entries.size(); ++i) {
         auto& entry = m_entries[i];
         if (entry.type == Entry::Type::Spacer) {
-            ++number_of_visible_entries;
+            items.append(Item { nullptr, -1, -1 });
+            continue;
         }
         if (!entry.widget)
             continue;
-
         if (!entry.widget->is_visible())
             continue;
-        ++number_of_visible_entries;
-        if (entry.widget && entry.widget->size_policy(orientation()) == SizePolicy::Fixed) {
-            if (should_log) {
-                dbgprintf("BoxLayout:   Subtracting for fixed %s{%p}, size: %s\n", entry.widget->class_name(), entry.widget.ptr(), entry.widget->preferred_size().to_string().characters());
-                dbgprintf("BoxLayout:     Available size before: %s\n", available_size.to_string().characters());
+        auto min_size = entry.widget->min_size();
+        auto max_size = entry.widget->max_size();
+        items.append(Item { entry.widget.ptr(), min_size.primary_size_for_orientation(orientation()), max_size.primary_size_for_orientation(orientation()) });
+    }
+
+    if (items.is_empty())
+        return;
+
+    int available_size = widget.size().primary_size_for_orientation(orientation()) - spacing() * (items.size() - 1);
+    int unfinished_items = items.size();
+
+    if (orientation() == Gfx::Orientation::Horizontal)
+        available_size -= margins().left() + margins().right();
+    else
+        available_size -= margins().top() + margins().bottom();
+
+    // Pass 1: Set all items to their minimum size.
+    for (auto& item : items) {
+        item.size = 0;
+        if (item.min_size >= 0)
+            item.size = item.min_size;
+        available_size -= item.size;
+
+        if (item.min_size >= 0 && item.max_size >= 0 && item.min_size == item.max_size) {
+            // Fixed-size items finish immediately in the first pass.
+            item.final = true;
+            --unfinished_items;
+        }
+    }
+
+    // Pass 2: Distribute remaining available size evenly, respecting each item's maximum size.
+    while (unfinished_items && available_size > 0) {
+        int slice = available_size / unfinished_items;
+        available_size = 0;
+
+        for (auto& item : items) {
+            if (item.final)
+                continue;
+
+            int item_size_with_full_slice = item.size + slice;
+            item.size = item_size_with_full_slice;
+
+            if (item.max_size >= 0)
+                item.size = min(item.max_size, item_size_with_full_slice);
+
+            // If the slice was more than we needed, return remained to available_size.
+            int remainder_to_give_back = item_size_with_full_slice - item.size;
+            available_size += remainder_to_give_back;
+
+            if (item.max_size >= 0 && item.size == item.max_size) {
+                // We've hit the item's max size. Don't give it any more space.
+                item.final = true;
+                --unfinished_items;
             }
-            available_size -= entry.widget->preferred_size();
-            if (should_log)
-                dbgprintf("BoxLayout:     Available size  after: %s\n", available_size.to_string().characters());
-            ++number_of_entries_with_fixed_size;
-        } else {
-            last_entry_with_automatic_size = i;
-        }
-        available_size -= { spacing(), spacing() };
-    }
-
-    available_size += { spacing(), spacing() };
-
-    available_size -= { margins().left() + margins().right(), margins().top() + margins().bottom() };
-
-    if (should_log)
-        dbgprintf("BoxLayout:  Number of visible: %d/%d\n", number_of_visible_entries, m_entries.size());
-
-    int number_of_entries_with_automatic_size = number_of_visible_entries - number_of_entries_with_fixed_size;
-
-    if (should_log)
-        dbgprintf("BoxLayout:   available_size=%s, fixed=%d, fill=%d\n", available_size.to_string().characters(), number_of_entries_with_fixed_size, number_of_entries_with_automatic_size);
-
-    Gfx::IntSize automatic_size;
-    Gfx::IntSize automatic_size_for_last_entry;
-
-    if (number_of_entries_with_automatic_size) {
-        if (m_orientation == Orientation::Horizontal) {
-            automatic_size.set_width(available_size.width() / number_of_entries_with_automatic_size);
-            automatic_size.set_height(widget.height());
-
-            automatic_size_for_last_entry.set_width(available_size.width() - (number_of_entries_with_automatic_size - 1) * automatic_size.width());
-            automatic_size_for_last_entry.set_height(widget.height());
-        } else {
-            automatic_size.set_width(widget.width());
-            automatic_size.set_height(available_size.height() / number_of_entries_with_automatic_size);
-
-            automatic_size_for_last_entry.set_width(widget.width());
-            automatic_size_for_last_entry.set_height(available_size.height() - (number_of_entries_with_automatic_size - 1) * automatic_size.height());
         }
     }
 
-    if (should_log)
-        dbgprintf("BoxLayout:   automatic_size=%s\n", automatic_size.to_string().characters());
-
+    // Pass 3: Place the widgets.
     int current_x = margins().left();
     int current_y = margins().top();
 
-    for (size_t i = 0; i < m_entries.size(); ++i) {
-        auto& entry = m_entries[i];
-        if (entry.type == Entry::Type::Spacer) {
-            current_x += automatic_size.width();
-            current_y += automatic_size.height();
+    for (auto& item : items) {
+        Gfx::IntRect rect { current_x, current_y, 0, 0 };
+
+        rect.set_primary_size_for_orientation(orientation(), item.size);
+
+        if (item.widget) {
+            int secondary = widget.size().secondary_size_for_orientation(orientation());
+            if (orientation() == Gfx::Orientation::Horizontal)
+                secondary -= margins().top() + margins().bottom();
+            else
+                secondary -= margins().left() + margins().right();
+
+            int min_secondary = item.widget->min_size().secondary_size_for_orientation(orientation());
+            int max_secondary = item.widget->max_size().secondary_size_for_orientation(orientation());
+            if (min_secondary >= 0)
+                secondary = max(secondary, min_secondary);
+            if (max_secondary >= 0)
+                secondary = min(secondary, max_secondary);
+
+            rect.set_secondary_size_for_orientation(orientation(), secondary);
+
+            if (orientation() == Gfx::Orientation::Horizontal)
+                rect.center_vertically_within(widget.rect());
+            else
+                rect.center_horizontally_within(widget.rect());
+
+            item.widget->set_relative_rect(rect);
         }
 
-        if (!entry.widget)
-            continue;
-        if (!entry.widget->is_visible())
-            continue;
-        Gfx::IntRect rect(current_x, current_y, 0, 0);
-        if (entry.layout) {
-            // FIXME: Implement recursive layout.
-            ASSERT_NOT_REACHED();
-        }
-        ASSERT(entry.widget);
-
-        if (last_entry_with_automatic_size.has_value() && i == last_entry_with_automatic_size.value()) {
-            rect.set_size(automatic_size_for_last_entry);
-        } else {
-            rect.set_size(automatic_size);
-        }
-
-        if (entry.widget->size_policy(Orientation::Vertical) == SizePolicy::Fixed)
-            rect.set_height(entry.widget->preferred_size().height());
-
-        if (entry.widget->size_policy(Orientation::Horizontal) == SizePolicy::Fixed)
-            rect.set_width(entry.widget->preferred_size().width());
-
-        if (orientation() == Orientation::Horizontal) {
-            if (entry.widget->size_policy(Orientation::Vertical) == SizePolicy::Fill)
-                rect.set_height(widget.height() - margins().top() - margins().bottom());
-            rect.center_vertically_within(widget.rect());
-        } else {
-            if (entry.widget->size_policy(Orientation::Horizontal) == SizePolicy::Fill)
-                rect.set_width(widget.width() - margins().left() - margins().right());
-            rect.center_horizontally_within(widget.rect());
-        }
-
-        if (should_log)
-            dbgprintf("BoxLayout: apply, %s{%p} <- %s\n", entry.widget->class_name(), entry.widget.ptr(), rect.to_string().characters());
-        entry.widget->set_relative_rect(rect);
-
-        if (orientation() == Orientation::Horizontal)
+        if (orientation() == Gfx::Orientation::Horizontal)
             current_x += rect.width() + spacing();
         else
             current_y += rect.height() + spacing();
     }
-}
-
-void BoxLayout::save_to(JsonObject& json)
-{
-    Layout::save_to(json);
-    json.set("orientation", m_orientation == Gfx::Orientation::Vertical ? "Vertical" : "Horizontal");
 }
 
 }

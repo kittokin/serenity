@@ -25,6 +25,7 @@
  */
 
 #include <AK/StringBuilder.h>
+#include <LibJS/MarkupGenerator.h>
 #include <LibMarkdown/CodeBlock.h>
 
 namespace Markdown {
@@ -55,12 +56,15 @@ String CodeBlock::render_to_html() const
     if (style.emph)
         builder.append("<i>");
 
-    if (style_language.is_null())
-        builder.append("<code style=\"white-space: pre;\">");
+    if (style_language.is_empty())
+        builder.append("<code>");
     else
-        builder.appendf("<code style=\"white-space: pre;\" class=\"%s\">", style_language.characters());
+        builder.appendff("<code class=\"{}\">", style_language);
 
-    builder.append(escape_html_entities(m_code));
+    if (style_language == "js")
+        builder.append(JS::MarkupGenerator::html_from_source(m_code));
+    else
+        builder.append(escape_html_entities(m_code));
 
     builder.append("</code>");
 
@@ -74,7 +78,7 @@ String CodeBlock::render_to_html() const
     return builder.build();
 }
 
-String CodeBlock::render_for_terminal() const
+String CodeBlock::render_for_terminal(size_t) const
 {
     StringBuilder builder;
 

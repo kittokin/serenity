@@ -35,7 +35,7 @@ class MathObject final : public Object {
 
 public:
     explicit MathObject(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~MathObject() override;
 
 private:
@@ -56,11 +56,23 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(expm1);
     JS_DECLARE_NATIVE_FUNCTION(sign);
     JS_DECLARE_NATIVE_FUNCTION(clz32);
+    JS_DECLARE_NATIVE_FUNCTION(acos);
     JS_DECLARE_NATIVE_FUNCTION(acosh);
+    JS_DECLARE_NATIVE_FUNCTION(asin);
     JS_DECLARE_NATIVE_FUNCTION(asinh);
+    JS_DECLARE_NATIVE_FUNCTION(atan);
     JS_DECLARE_NATIVE_FUNCTION(atanh);
     JS_DECLARE_NATIVE_FUNCTION(log1p);
     JS_DECLARE_NATIVE_FUNCTION(cbrt);
+    JS_DECLARE_NATIVE_FUNCTION(atan2);
+    JS_DECLARE_NATIVE_FUNCTION(fround);
+    JS_DECLARE_NATIVE_FUNCTION(hypot);
+    JS_DECLARE_NATIVE_FUNCTION(log);
+    JS_DECLARE_NATIVE_FUNCTION(log2);
+    JS_DECLARE_NATIVE_FUNCTION(log10);
+    JS_DECLARE_NATIVE_FUNCTION(sinh);
+    JS_DECLARE_NATIVE_FUNCTION(cosh);
+    JS_DECLARE_NATIVE_FUNCTION(tanh);
 };
 
 }

@@ -25,9 +25,9 @@
  */
 
 #include <LibWeb/DOM/Comment.h>
-#include <LibWeb/Layout/LayoutText.h>
+#include <LibWeb/Layout/TextNode.h>
 
-namespace Web {
+namespace Web::DOM {
 
 Comment::Comment(Document& document, const String& data)
     : CharacterData(document, NodeType::COMMENT_NODE, data)

@@ -26,21 +26,9 @@
 
 #pragma once
 
-__BEGIN_DECLS
+#include <sys/cdefs.h>
 
-// If opterr is set (the default), print error messages to stderr.
-extern int opterr;
-// On errors, optopt is set to the erroneous *character*.
-extern int optopt;
-// Index of the next argument to process upon a getopt*() call.
-extern int optind;
-// If set, reset the internal state kept by getopt*(). You may also want to set
-// optind to 1 in that case. Alternatively, setting optind to 0 is treated like
-// doing both of the above.
-extern int optreset;
-// After parsing an option that accept an argument, set to point to the argument
-// value.
-extern char* optarg;
+__BEGIN_DECLS
 
 #define no_argument 0
 #define required_argument 1
@@ -53,7 +41,6 @@ struct option {
     int val;
 };
 
-int getopt(int argc, char** argv, const char* short_options);
 int getopt_long(int argc, char** argv, const char* short_options, const struct option* long_options, int* out_long_option_index);
 
 __END_DECLS

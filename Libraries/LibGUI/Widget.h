@@ -26,8 +26,10 @@
 
 #pragma once
 
+#include <AK/JsonObject.h>
 #include <AK/String.h>
 #include <LibCore/Object.h>
+#include <LibGUI/Application.h>
 #include <LibGUI/Event.h>
 #include <LibGUI/Forward.h>
 #include <LibGUI/Margins.h>
@@ -35,33 +37,13 @@
 #include <LibGfx/Forward.h>
 #include <LibGfx/Orientation.h>
 #include <LibGfx/Rect.h>
+#include <LibGfx/StandardCursor.h>
 
-#define REGISTER_WIDGET(class_name)                           \
-    extern WidgetClassRegistration registration_##class_name; \
-    WidgetClassRegistration registration_##class_name(#class_name, []() { return class_name::construct(); });
-
-template<>
-inline bool Core::is<GUI::Widget>(const Core::Object& object)
-{
-    return object.is_widget();
-}
+#define REGISTER_WIDGET(namespace_, class_name)                    \
+    extern GUI::WidgetClassRegistration registration_##class_name; \
+    GUI::WidgetClassRegistration registration_##class_name(#namespace_ "::" #class_name, []() { return namespace_::class_name::construct(); });
 
 namespace GUI {
-
-enum class SizePolicy {
-    Fixed,
-    Fill
-};
-inline const char* to_string(SizePolicy policy)
-{
-    switch (policy) {
-    case SizePolicy::Fixed:
-        return "SizePolicy::Fixed";
-    case SizePolicy::Fill:
-        return "SizePolicy::Fill";
-    }
-    return "SizePolicy::(Invalid)";
-}
 
 enum class HorizontalDirection {
     Left,
@@ -73,8 +55,9 @@ enum class VerticalDirection {
 };
 
 class WidgetClassRegistration {
-    AK_MAKE_NONCOPYABLE(WidgetClassRegistration)
-    AK_MAKE_NONMOVABLE(WidgetClassRegistration)
+    AK_MAKE_NONCOPYABLE(WidgetClassRegistration);
+    AK_MAKE_NONMOVABLE(WidgetClassRegistration);
+
 public:
     WidgetClassRegistration(const String& class_name, Function<NonnullRefPtr<Widget>()> factory);
     ~WidgetClassRegistration();
@@ -88,6 +71,13 @@ public:
 private:
     String m_class_name;
     Function<NonnullRefPtr<Widget>()> m_factory;
+};
+
+enum class FocusPolicy {
+    NoFocus = 0,
+    TabFocus = 0x1,
+    ClickFocus = 0x2,
+    StrongFocus = TabFocus | ClickFocus,
 };
 
 class Widget : public Core::Object {
@@ -107,19 +97,47 @@ public:
         return layout;
     }
 
-    SizePolicy horizontal_size_policy() const { return m_horizontal_size_policy; }
-    SizePolicy vertical_size_policy() const { return m_vertical_size_policy; }
-    SizePolicy size_policy(Orientation orientation) { return orientation == Orientation::Horizontal ? m_horizontal_size_policy : m_vertical_size_policy; }
-    void set_size_policy(SizePolicy horizontal_policy, SizePolicy vertical_policy);
-    void set_size_policy(Orientation, SizePolicy);
+    Gfx::IntSize min_size() const { return m_min_size; }
+    void set_min_size(const Gfx::IntSize&);
+    void set_min_size(int width, int height) { set_min_size({ width, height }); }
 
-    Gfx::IntSize preferred_size() const { return m_preferred_size; }
-    void set_preferred_size(const Gfx::IntSize&);
-    void set_preferred_size(int width, int height) { set_preferred_size({ width, height }); }
+    int min_width() const { return m_min_size.width(); }
+    int min_height() const { return m_min_size.height(); }
+    void set_min_width(int width) { set_min_size(width, min_height()); }
+    void set_min_height(int height) { set_min_size(min_width(), height); }
+
+    Gfx::IntSize max_size() const { return m_max_size; }
+    void set_max_size(const Gfx::IntSize&);
+    void set_max_size(int width, int height) { set_max_size({ width, height }); }
+
+    int max_width() const { return m_max_size.width(); }
+    int max_height() const { return m_max_size.height(); }
+    void set_max_width(int width) { set_max_size(width, max_height()); }
+    void set_max_height(int height) { set_max_size(max_width(), height); }
+
+    void set_fixed_size(const Gfx::IntSize& size)
+    {
+        set_min_size(size);
+        set_max_size(size);
+    }
+
+    void set_fixed_size(int width, int height) { set_fixed_size({ width, height }); }
+
+    void set_fixed_width(int width)
+    {
+        set_min_width(width);
+        set_max_width(width);
+    }
+
+    void set_fixed_height(int height)
+    {
+        set_min_height(height);
+        set_max_height(height);
+    }
 
     bool has_tooltip() const { return !m_tooltip.is_empty(); }
     String tooltip() const { return m_tooltip; }
-    void set_tooltip(const StringView& tooltip) { m_tooltip = tooltip; }
+    void set_tooltip(const StringView&);
 
     bool is_enabled() const { return m_enabled; }
     void set_enabled(bool);
@@ -150,10 +168,20 @@ public:
     void update();
     void update(const Gfx::IntRect&);
 
-    virtual bool accepts_focus() const { return false; }
-
     bool is_focused() const;
-    void set_focus(bool);
+    void set_focus(bool, FocusSource = FocusSource::Programmatic);
+
+    Function<void(const bool, const FocusSource)> on_focus_change;
+
+    // Returns true if this widget or one of its descendants is focused.
+    bool has_focus_within() const;
+
+    Widget* focus_proxy() { return m_focus_proxy; }
+    const Widget* focus_proxy() const { return m_focus_proxy; }
+    void set_focus_proxy(Widget*);
+
+    void set_focus_policy(FocusPolicy policy);
+    FocusPolicy focus_policy() const;
 
     enum class ShouldRespectGreediness { No = 0,
         Yes };
@@ -191,9 +219,6 @@ public:
 
     void set_background_color(Color color) { m_background_color = color; }
     void set_foreground_color(Color color) { m_foreground_color = color; }
-
-    void set_backcolor(const StringView&);
-    void set_forecolor(const StringView&);
 
     void set_autofill(bool b) { set_fill_with_background_color(b); }
 
@@ -249,8 +274,8 @@ public:
     void for_each_child_widget(Callback callback)
     {
         for_each_child([&](auto& child) {
-            if (Core::is<Widget>(child))
-                return callback(Core::to<Widget>(child));
+            if (is<Widget>(child))
+                return callback(downcast<Widget>(child));
             return IterationDecision::Continue;
         });
     }
@@ -259,8 +284,6 @@ public:
 
     virtual bool is_radio_button() const { return false; }
     virtual bool is_abstract_button() const { return false; }
-
-    virtual void save_to(AK::JsonObject&) override;
 
     void do_layout();
 
@@ -275,12 +298,22 @@ public:
     void set_accepts_emoji_input(bool b) { m_accepts_emoji_input = b; }
     bool accepts_emoji_input() const { return m_accepts_emoji_input; }
 
+    virtual Gfx::IntRect children_clip_rect() const;
+
+    Gfx::StandardCursor override_cursor() const { return m_override_cursor; }
+    void set_override_cursor(Gfx::StandardCursor);
+
+    bool load_from_gml(const StringView&);
+
+    Widget* find_child_by_name(const String&);
+    Widget* find_descendant_by_name(const String&);
+
 protected:
     Widget();
 
-    virtual void custom_layout() {}
-    virtual void did_change_font() {}
-    virtual void did_layout() {}
+    virtual void custom_layout() { }
+    virtual void did_change_font() { }
+    virtual void did_layout() { }
     virtual void paint_event(PaintEvent&);
     virtual void resize_event(ResizeEvent&);
     virtual void show_event(ShowEvent&);
@@ -293,8 +326,8 @@ protected:
     virtual void mousewheel_event(MouseEvent&);
     virtual void doubleclick_event(MouseEvent&);
     virtual void context_menu_event(ContextMenuEvent&);
-    virtual void focusin_event(Core::Event&);
-    virtual void focusout_event(Core::Event&);
+    virtual void focusin_event(FocusEvent&);
+    virtual void focusout_event(FocusEvent&);
     virtual void enter_event(Core::Event&);
     virtual void leave_event(Core::Event&);
     virtual void child_event(Core::ChildEvent&) override;
@@ -306,8 +339,6 @@ protected:
     virtual void did_begin_inspection() override;
     virtual void did_end_inspection() override;
 
-    virtual bool set_property(const StringView& name, const JsonValue& value) override;
-
 private:
     void handle_paint_event(PaintEvent&);
     void handle_resize_event(ResizeEvent&);
@@ -316,8 +347,17 @@ private:
     void handle_mouseup_event(MouseEvent&);
     void handle_enter_event(Core::Event&);
     void handle_leave_event(Core::Event&);
-    void focus_previous_widget();
-    void focus_next_widget();
+    void focus_previous_widget(FocusSource);
+    void focus_next_widget(FocusSource);
+
+    void show_tooltip();
+
+    bool load_from_json(const JsonObject&);
+
+    // HACK: These are used as property getters for the fixed_* size property aliases.
+    int dummy_fixed_width() { return 0; }
+    int dummy_fixed_height() { return 0; }
+    Gfx::IntSize dummy_fixed_size() { return {}; }
 
     Window* m_window { nullptr };
     RefPtr<Layout> m_layout;
@@ -330,9 +370,8 @@ private:
     NonnullRefPtr<Gfx::Font> m_font;
     String m_tooltip;
 
-    SizePolicy m_horizontal_size_policy { SizePolicy::Fill };
-    SizePolicy m_vertical_size_policy { SizePolicy::Fill };
-    Gfx::IntSize m_preferred_size;
+    Gfx::IntSize m_min_size { -1, -1 };
+    Gfx::IntSize m_max_size { -1, -1 };
     Margins m_content_margins;
 
     bool m_fill_with_background_color { false };
@@ -343,18 +382,27 @@ private:
     bool m_accepts_emoji_input { false };
 
     NonnullRefPtr<Gfx::PaletteImpl> m_palette;
+
+    WeakPtr<Widget> m_focus_proxy;
+    FocusPolicy m_focus_policy { FocusPolicy::NoFocus };
+
+    Gfx::StandardCursor m_override_cursor { Gfx::StandardCursor::None };
 };
 
 inline Widget* Widget::parent_widget()
 {
-    if (parent() && Core::is<Widget>(*parent()))
-        return &Core::to<Widget>(*parent());
+    if (parent() && is<Widget>(*parent()))
+        return &downcast<Widget>(*parent());
     return nullptr;
 }
 inline const Widget* Widget::parent_widget() const
 {
-    if (parent() && Core::is<Widget>(*parent()))
-        return &Core::to<const Widget>(*parent());
+    if (parent() && is<Widget>(*parent()))
+        return &downcast<const Widget>(*parent());
     return nullptr;
 }
 }
+
+AK_BEGIN_TYPE_TRAITS(GUI::Widget)
+static bool is_type(const Core::Object& object) { return object.is_widget(); }
+AK_END_TYPE_TRAITS()

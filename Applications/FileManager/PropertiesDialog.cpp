@@ -27,10 +27,14 @@
 #include "PropertiesDialog.h"
 #include <AK/LexicalPath.h>
 #include <AK/StringBuilder.h>
+#include <LibDesktop/Launcher.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/CheckBox.h>
+#include <LibGUI/FileIconProvider.h>
 #include <LibGUI/FilePicker.h>
+#include <LibGUI/LinkLabel.h>
 #include <LibGUI/MessageBox.h>
+#include <LibGUI/SeparatorWidget.h>
 #include <LibGUI/TabWidget.h>
 #include <grp.h>
 #include <limits.h>
@@ -39,9 +43,8 @@
 #include <string.h>
 #include <unistd.h>
 
-PropertiesDialog::PropertiesDialog(GUI::FileSystemModel& model, String path, bool disable_rename, Window* parent_window)
+PropertiesDialog::PropertiesDialog(const String& path, bool disable_rename, Window* parent_window)
     : Dialog(parent_window)
-    , m_model(model)
 {
     auto lexical_path = LexicalPath(path);
     ASSERT(lexical_path.is_valid());
@@ -61,33 +64,28 @@ PropertiesDialog::PropertiesDialog(GUI::FileSystemModel& model, String path, boo
     general_tab.layout()->set_margins({ 12, 8, 12, 8 });
     general_tab.layout()->set_spacing(10);
 
-    general_tab.layout()->add_spacer();
-
     auto& file_container = general_tab.add<GUI::Widget>();
     file_container.set_layout<GUI::HorizontalBoxLayout>();
-    file_container.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
     file_container.layout()->set_spacing(20);
-    file_container.set_preferred_size(0, 34);
+    file_container.set_fixed_height(34);
 
-    m_icon = file_container.add<GUI::Image>();
-    m_icon->set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-    m_icon->set_preferred_size(32, 32);
+    m_icon = file_container.add<GUI::ImageWidget>();
+    m_icon->set_fixed_size(32, 32);
 
     m_name = lexical_path.basename();
     m_path = lexical_path.string();
+    m_parent_path = lexical_path.dirname();
 
     m_name_box = file_container.add<GUI::TextBox>();
-    m_name_box->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_name_box->set_preferred_size({ 0, 22 });
     m_name_box->set_text(m_name);
-    m_name_box->set_enabled(!disable_rename);
+    m_name_box->set_mode(disable_rename ? GUI::TextBox::Mode::DisplayOnly : GUI::TextBox::Mode::Editable);
     m_name_box->on_change = [&]() {
         m_name_dirty = m_name != m_name_box->text();
         m_apply_button->set_enabled(m_name_dirty || m_permissions_dirty);
     };
 
     set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/properties.png"));
-    make_divider(general_tab);
+    general_tab.add<GUI::SeparatorWidget>(Gfx::Orientation::Horizontal);
 
     struct stat st;
     if (lstat(path.characters(), &st)) {
@@ -115,26 +113,30 @@ PropertiesDialog::PropertiesDialog(GUI::FileSystemModel& model, String path, boo
 
     auto properties = Vector<PropertyValuePair>();
     properties.append({ "Type:", get_description(m_mode) });
-    properties.append({ "Location:", path });
+    auto parent_link = URL::create_with_file_protocol(m_parent_path);
+    properties.append(PropertyValuePair { "Location:", path, Optional(parent_link) });
 
     if (S_ISLNK(m_mode)) {
         auto link_destination = Core::File::read_link(path);
         if (link_destination.is_null()) {
             perror("readlink");
         } else {
-            properties.append({ "Link target:", link_destination });
+            auto link_directory = LexicalPath(link_destination);
+            ASSERT(link_directory.is_valid());
+            auto link_parent = URL::create_with_file_protocol(link_directory.dirname());
+            properties.append({ "Link target:", link_destination, Optional(link_parent) });
         }
     }
 
-    properties.append({ "Size:", String::format("%zu bytes", st.st_size) });
-    properties.append({ "Owner:", String::format("%s (%lu)", owner_name.characters(), st.st_uid) });
-    properties.append({ "Group:", String::format("%s (%lu)", group_name.characters(), st.st_gid) });
+    properties.append({ "Size:", String::formatted("{} bytes", st.st_size) });
+    properties.append({ "Owner:", String::formatted("{} ({})", owner_name, st.st_uid) });
+    properties.append({ "Group:", String::formatted("{} ({})", group_name, st.st_gid) });
     properties.append({ "Created at:", GUI::FileSystemModel::timestamp_string(st.st_ctime) });
     properties.append({ "Last modified:", GUI::FileSystemModel::timestamp_string(st.st_mtime) });
 
     make_property_value_pairs(properties, general_tab);
 
-    make_divider(general_tab);
+    general_tab.add<GUI::SeparatorWidget>(Gfx::Orientation::Horizontal);
 
     make_permission_checkboxes(general_tab, { S_IRUSR, S_IWUSR, S_IXUSR }, "Owner:", m_mode);
     make_permission_checkboxes(general_tab, { S_IRGRP, S_IWGRP, S_IXGRP }, "Group:", m_mode);
@@ -144,8 +146,7 @@ PropertiesDialog::PropertiesDialog(GUI::FileSystemModel& model, String path, boo
 
     auto& button_widget = main_widget.add<GUI::Widget>();
     button_widget.set_layout<GUI::HorizontalBoxLayout>();
-    button_widget.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    button_widget.set_preferred_size(0, 24);
+    button_widget.set_fixed_height(24);
     button_widget.layout()->set_spacing(5);
 
     button_widget.layout()->add_spacer();
@@ -169,9 +170,8 @@ PropertiesDialog::~PropertiesDialog() { }
 
 void PropertiesDialog::update()
 {
-    auto bitmap = m_model.icon_for_file(m_mode, m_name).bitmap_for_size(32);
-    m_icon->set_bitmap(bitmap);
-    set_title(String::format("%s - Properties", m_name.characters()));
+    m_icon->set_bitmap(GUI::FileIconProvider::icon_for_path(make_full_path(m_name), m_mode).bitmap_for_size(32));
+    set_title(String::formatted("{} - Properties", m_name));
 }
 
 void PropertiesDialog::permission_changed(mode_t mask, bool set)
@@ -186,9 +186,9 @@ void PropertiesDialog::permission_changed(mode_t mask, bool set)
     m_apply_button->set_enabled(m_name_dirty || m_permissions_dirty);
 }
 
-String PropertiesDialog::make_full_path(String name)
+String PropertiesDialog::make_full_path(const String& name)
 {
-    return String::format("%s/%s", m_model.root_path().characters(), name.characters());
+    return String::formatted("{}/{}", m_parent_path, name);
 }
 
 bool PropertiesDialog::apply_changes()
@@ -198,12 +198,12 @@ bool PropertiesDialog::apply_changes()
         String new_file = make_full_path(new_name).characters();
 
         if (GUI::FilePicker::file_exists(new_file)) {
-            GUI::MessageBox::show(this, String::format("A file \"%s\" already exists!", new_name.characters()), "Error", GUI::MessageBox::Type::Error);
+            GUI::MessageBox::show(this, String::formatted("A file \"{}\" already exists!", new_name), "Error", GUI::MessageBox::Type::Error);
             return false;
         }
 
         if (rename(make_full_path(m_name).characters(), new_file.characters())) {
-            GUI::MessageBox::show(this, String::format("Could not rename file: %s!", strerror(errno)), "Error", GUI::MessageBox::Type::Error);
+            GUI::MessageBox::show(this, String::formatted("Could not rename file: {}!", strerror(errno)), "Error", GUI::MessageBox::Type::Error);
             return false;
         }
 
@@ -214,7 +214,7 @@ bool PropertiesDialog::apply_changes()
 
     if (m_permissions_dirty) {
         if (chmod(make_full_path(m_name).characters(), m_mode)) {
-            GUI::MessageBox::show(this, String::format("Could not update permissions: %s!", strerror(errno)), "Error", GUI::MessageBox::Type::Error);
+            GUI::MessageBox::show(this, String::formatted("Could not update permissions: {}!", strerror(errno)), "Error", GUI::MessageBox::Type::Error);
             return false;
         }
 
@@ -231,8 +231,7 @@ void PropertiesDialog::make_permission_checkboxes(GUI::Widget& parent, Permissio
 {
     auto& widget = parent.add<GUI::Widget>();
     widget.set_layout<GUI::HorizontalBoxLayout>();
-    widget.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    widget.set_preferred_size(0, 16);
+    widget.set_fixed_height(16);
     widget.layout()->set_spacing(10);
 
     auto& label = widget.add<GUI::Label>(label_string);
@@ -271,39 +270,33 @@ void PropertiesDialog::make_property_value_pairs(const Vector<PropertyValuePair>
     for (auto pair : pairs) {
         auto& label_container = parent.add<GUI::Widget>();
         label_container.set_layout<GUI::HorizontalBoxLayout>();
-        label_container.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-        label_container.set_preferred_size(0, 14);
+        label_container.set_fixed_height(14);
         label_container.layout()->set_spacing(12);
 
         auto& label_property = label_container.add<GUI::Label>(pair.property);
         label_property.set_text_alignment(Gfx::TextAlignment::CenterLeft);
-        label_property.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
 
-        label_container.add<GUI::Label>(pair.value).set_text_alignment(Gfx::TextAlignment::CenterLeft);
+        if (!pair.link.has_value()) {
+            label_container.add<GUI::Label>(pair.value).set_text_alignment(Gfx::TextAlignment::CenterLeft);
+        } else {
+            auto& link = label_container.add<GUI::LinkLabel>(pair.value);
+            link.set_text_alignment(Gfx::TextAlignment::CenterLeft);
+            link.on_click = [pair]() {
+                Desktop::Launcher::open(pair.link.value());
+            };
+        }
 
         max_width = max(max_width, label_property.font().width(pair.property));
         property_labels.append(label_property);
     }
 
     for (auto label : property_labels)
-        label->set_preferred_size({ max_width, 0 });
+        label->set_fixed_width(max_width);
 }
 
 GUI::Button& PropertiesDialog::make_button(String text, GUI::Widget& parent)
 {
     auto& button = parent.add<GUI::Button>(text);
-    button.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-    button.set_preferred_size(70, 22);
+    button.set_fixed_size(70, 22);
     return button;
-}
-
-void PropertiesDialog::make_divider(GUI::Widget& parent)
-{
-    parent.layout()->add_spacer();
-
-    auto& divider = parent.add<GUI::Frame>();
-    divider.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    divider.set_preferred_size({ 0, 2 });
-
-    parent.layout()->add_spacer();
 }

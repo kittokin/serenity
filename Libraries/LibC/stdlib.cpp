@@ -40,6 +40,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/internals.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -84,7 +85,7 @@ enum DigitConsumeDecision {
 
 template<typename T, T min_value, T max_value>
 class NumParser {
-    AK_MAKE_NONMOVABLE(NumParser)
+    AK_MAKE_NONMOVABLE(NumParser);
 
 public:
     NumParser(Sign sign, int base)
@@ -185,7 +186,7 @@ __attribute__((warn_unused_result)) int __generate_unique_filename(char* pattern
 
     for (int attempt = 0; attempt < 100; ++attempt) {
         for (int i = 0; i < 6; ++i)
-            pattern[start + i] = random_characters[(rand() % sizeof(random_characters))];
+            pattern[start + i] = random_characters[(arc4random() % (sizeof(random_characters) - 1))];
         struct stat st;
         int rc = lstat(pattern, &st);
         if (rc < 0 && errno == ENOENT)
@@ -197,13 +198,13 @@ __attribute__((warn_unused_result)) int __generate_unique_filename(char* pattern
 
 extern "C" {
 
-// Itanium C++ ABI methods defined in crt0.cpp
-extern int __cxa_atexit(void (*function)(void*), void* paramter, void* dso_handle);
-extern void __cxa_finalize(void* dso_handle);
-
 void exit(int status)
 {
     __cxa_finalize(nullptr);
+
+    if (getenv("LIBC_DUMP_MALLOC_STATS"))
+        serenity_dump_malloc_stats();
+
     extern void _fini();
     _fini();
     fflush(stdout);
@@ -288,9 +289,19 @@ int unsetenv(const char* name)
     return 0;
 }
 
+int clearenv()
+{
+    size_t environ_size = 0;
+    for (; environ[environ_size]; ++environ_size) {
+        environ[environ_size] = NULL;
+    }
+    *environ = NULL;
+    return 0;
+}
+
 int setenv(const char* name, const char* value, int overwrite)
 {
-    if (!overwrite && !getenv(name))
+    if (!overwrite && getenv(name))
         return 0;
     auto length = strlen(name) + strlen(value) + 2;
     auto* var = (char*)malloc(length);
@@ -451,7 +462,6 @@ double strtod(const char* str, char** endptr)
                 digits_usable = true;
                 break;
             case DigitConsumeDecision::PosOverflow:
-                // fallthrough
             case DigitConsumeDecision::NegOverflow:
                 is_a_digit = true;
                 digits_overflow = true;
@@ -508,7 +518,6 @@ double strtod(const char* str, char** endptr)
                     exponent_usable = true;
                     break;
                 case DigitConsumeDecision::PosOverflow:
-                    // fallthrough
                 case DigitConsumeDecision::NegOverflow:
                     is_a_digit = true;
                     exponent_overflow = true;
@@ -670,7 +679,7 @@ char* ptsname(int fd)
 
 int ptsname_r(int fd, char* buffer, size_t size)
 {
-    int rc = syscall(SC_ptsname_r, fd, buffer, size);
+    int rc = syscall(SC_ptsname, fd, buffer, size);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -748,21 +757,20 @@ char* mkdtemp(char* pattern)
 
 void* bsearch(const void* key, const void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*))
 {
-    int low = 0;
-    int high = nmemb - 1;
-    while (low <= high) {
-        int middle = (low + high) / 2;
-        void* middle_memb = const_cast<char*>((const char*)base + middle * size);
+    char* start = static_cast<char*>(const_cast<void*>(base));
+    while (nmemb > 0) {
+        char* middle_memb = start + (nmemb / 2) * size;
         int comparison = compar(key, middle_memb);
-        if (comparison < 0)
-            high = middle - 1;
-        else if (comparison > 0)
-            low = middle + 1;
-        else
+        if (comparison == 0)
             return middle_memb;
+        else if (comparison > 0) {
+            start = middle_memb + size;
+            --nmemb;
+        }
+        nmemb /= 2;
     }
 
-    return NULL;
+    return nullptr;
 }
 
 div_t div(int numerator, int denominator)
@@ -796,11 +804,9 @@ size_t mbstowcs(wchar_t*, const char*, size_t)
     ASSERT_NOT_REACHED();
 }
 
-size_t mbtowc(wchar_t* wch, const char* data, size_t data_size)
+int mbtowc(wchar_t* wch, const char* data, [[maybe_unused]] size_t data_size)
 {
     // FIXME: This needs a real implementation.
-    UNUSED_PARAM(data_size);
-
     if (wch && data) {
         *wch = *data;
         return 1;
@@ -873,8 +879,7 @@ long long strtoll(const char* str, char** endptr, int base)
     // Parse base
     if (base == 0) {
         if (*parse_ptr == '0') {
-            parse_ptr += 1;
-            if (*parse_ptr == 'x' || *parse_ptr == 'X') {
+            if (tolower(*(parse_ptr + 1)) == 'x') {
                 base = 16;
                 parse_ptr += 2;
             } else {
@@ -902,7 +907,7 @@ long long strtoll(const char* str, char** endptr, int base)
                 // The very first actual digit must pass here:
                 digits_usable = true;
                 break;
-            case DigitConsumeDecision::PosOverflow: // fall-through
+            case DigitConsumeDecision::PosOverflow:
             case DigitConsumeDecision::NegOverflow:
                 is_a_digit = true;
                 overflow = true;
@@ -950,8 +955,7 @@ unsigned long long strtoull(const char* str, char** endptr, int base)
     // Parse base
     if (base == 0) {
         if (*parse_ptr == '0') {
-            parse_ptr += 1;
-            if (*parse_ptr == 'x' || *parse_ptr == 'X') {
+            if (tolower(*(parse_ptr + 1)) == 'x') {
                 base = 16;
                 parse_ptr += 2;
             } else {
@@ -979,7 +983,7 @@ unsigned long long strtoull(const char* str, char** endptr, int base)
                 // The very first actual digit must pass here:
                 digits_usable = true;
                 break;
-            case DigitConsumeDecision::PosOverflow: // fall-through
+            case DigitConsumeDecision::PosOverflow:
             case DigitConsumeDecision::NegOverflow:
                 is_a_digit = true;
                 overflow = true;
@@ -1016,7 +1020,7 @@ unsigned long long strtoull(const char* str, char** endptr, int base)
 
 // Serenity's PRNG is not cryptographically secure. Do not rely on this for
 // any real crypto! These functions (for now) are for compatibility.
-// TODO: In the future, rand can be made determinstic and this not.
+// TODO: In the future, rand can be made deterministic and this not.
 uint32_t arc4random(void)
 {
     char buf[4];
@@ -1067,15 +1071,13 @@ int posix_openpt(int flags)
     return open("/dev/ptmx", flags);
 }
 
-int grantpt(int fd)
+int grantpt([[maybe_unused]] int fd)
 {
-    (void)fd;
     return 0;
 }
 
-int unlockpt(int fd)
+int unlockpt([[maybe_unused]] int fd)
 {
-    (void)fd;
     return 0;
 }
 }

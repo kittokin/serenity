@@ -130,6 +130,8 @@ bool IODevice::can_read_line() const
     if (!can_read_from_fd())
         return false;
     populate_read_buffer();
+    if (m_eof && !m_buffered_data.is_empty())
+        return true;
     return m_buffered_data.contains_slow('\n');
 }
 
@@ -172,7 +174,7 @@ ByteBuffer IODevice::read_all()
     return ByteBuffer::copy(data.data(), data.size());
 }
 
-ByteBuffer IODevice::read_line(size_t max_size)
+String IODevice::read_line(size_t max_size)
 {
     if (m_fd < 0)
         return {};
@@ -185,9 +187,9 @@ ByteBuffer IODevice::read_line(size_t max_size)
             dbgprintf("IODevice::read_line: At EOF but there's more than max_size(%zu) buffered\n", max_size);
             return {};
         }
-        auto buffer = ByteBuffer::copy(m_buffered_data.data(), m_buffered_data.size());
+        auto line = String((const char*)m_buffered_data.data(), m_buffered_data.size(), Chomp);
         m_buffered_data.clear();
-        return buffer;
+        return line;
     }
     auto line = ByteBuffer::create_uninitialized(max_size + 1);
     size_t line_index = 0;
@@ -198,9 +200,8 @@ ByteBuffer IODevice::read_line(size_t max_size)
             Vector<u8> new_buffered_data;
             new_buffered_data.append(m_buffered_data.data() + line_index, m_buffered_data.size() - line_index);
             m_buffered_data = move(new_buffered_data);
-            line[line_index] = '\0';
-            line.trim(line_index + 1);
-            return line;
+            line.trim(line_index);
+            return String::copy(line, Chomp);
         }
     }
     return {};
@@ -263,6 +264,16 @@ bool IODevice::seek(i64 offset, SeekMode mode, off_t* pos)
     m_eof = false;
     if (pos)
         *pos = rc;
+    return true;
+}
+
+bool IODevice::truncate(off_t size)
+{
+    int rc = ftruncate(m_fd, size);
+    if (rc < 0) {
+        set_error(errno);
+        return false;
+    }
     return true;
 }
 

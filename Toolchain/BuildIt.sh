@@ -11,17 +11,13 @@ echo "$DIR"
 
 ARCH=${ARCH:-"i686"}
 TARGET="$ARCH-pc-serenity"
-PREFIX="$DIR/Local"
+PREFIX="$DIR/Local/$ARCH"
 BUILD=$(realpath "$DIR/../Build")
 SYSROOT="$BUILD/Root"
 
 MAKE="make"
 MD5SUM="md5sum"
 NPROC="nproc"
-
-# Each cache entry is 260 MB. 8 entries are 4 GiB.
-# It seems that Travis starts having trouble at 35 entries, so I think this is a good amount.
-KEEP_CACHE_COUNT=8
 
 if command -v ginstall &>/dev/null; then
     INSTALL=ginstall
@@ -41,6 +37,8 @@ elif [ "$(uname -s)" = "FreeBSD" ]; then
     MAKE=gmake
     MD5SUM="md5 -q"
     NPROC="sysctl -n hw.ncpu"
+    export with_gmp=/usr/local
+    export with_mpfr=/usr/local
 fi
 
 git_patch=
@@ -57,14 +55,14 @@ echo SYSROOT is "$SYSROOT"
 
 mkdir -p "$DIR/Tarballs"
 
-BINUTILS_VERSION="2.33.1"
-BINUTILS_MD5SUM="1a6b16bcc926e312633fcc3fae14ba0a"
+BINUTILS_VERSION="2.35.1"
+BINUTILS_MD5SUM="bca600eea3b8fc33ad3265c9c1eee8d4"
 BINUTILS_NAME="binutils-$BINUTILS_VERSION"
 BINUTILS_PKG="${BINUTILS_NAME}.tar.gz"
 BINUTILS_BASE_URL="http://ftp.gnu.org/gnu/binutils"
 
-GCC_VERSION="10.1.0"
-GCC_MD5SUM="8a9fbd7e24d04c5d36e96bc894d3cd6b"
+GCC_VERSION="10.2.0"
+GCC_MD5SUM="941a8674ea2eeb33f5c30ecf08124874"
 GCC_NAME="gcc-$GCC_VERSION"
 GCC_PKG="${GCC_NAME}.tar.gz"
 GCC_BASE_URL="http://ftp.gnu.org/gnu/gcc"
@@ -74,43 +72,41 @@ GCC_BASE_URL="http://ftp.gnu.org/gnu/gcc"
 
 pushd "$DIR"
     if [ "${TRY_USE_LOCAL_TOOLCHAIN}" = "y" ] ; then
-        echo "Checking cached toolchain:"
+        # The actual logic had to be moved to .github/workflows/cmake.yml.
+        # Github Actions guarantees that Toolchain/Cache/ is empty on a cache
+        # miss, and non-empty on a cache hit.
+        # The following logic is correct *only* because of that.
 
-        DEPS_CONFIG="
-            uname=$(uname),TARGET=${TARGET},
-            BuildItHash=$($MD5SUM $(basename $0)),
-            MAKE=${MAKE},MD5SUM=${MD5SUM},NPROC=${NPROC},
-            CC=${CC},CXX=${CXX},with_gmp=${with_gmp},LDFLAGS=${LDFLAGS},
-            BINUTILS_VERSION=${BINUTILS_VERSION},BINUTILS_MD5SUM=${BINUTILS_MD5SUM},
-            GCC_VERSION=${GCC_VERSION},GCC_MD5SUM=${GCC_MD5SUM}"
-        echo "Config is:${DEPS_CONFIG}"
-        if ! DEPS_HASH=$("$DIR/ComputeDependenciesHash.sh" "$MD5SUM" <<<"${DEPS_CONFIG}"); then
-            echo "Dependency hashing failed"
-            echo "Will rebuild toolchain from scratch, and NOT SAVE THE RESULT."
-            echo "Someone should look into this, but for now it'll work, albeit inefficient."
-            # Should be empty anyway, but just to make sure:
-            DEPS_HASH=""
-        elif [ -r "Cache/ToolchainLocal_${DEPS_HASH}.tar.gz" ] ; then
-            echo "Cache at Cache/ToolchainLocal_${DEPS_HASH}.tar.gz exists!"
+        mkdir -p Cache
+        echo "Cache (before):"
+        ls -l Cache
+        CACHED_TOOLCHAIN_ARCHIVE="Cache/ToolchainBinariesGithubActions.tar.gz"
+        if [ -r "${CACHED_TOOLCHAIN_ARCHIVE}" ] ; then
+            echo "Cache at ${CACHED_TOOLCHAIN_ARCHIVE} exists!"
             echo "Extracting toolchain from cache:"
-            tar xzf "Cache/ToolchainLocal_${DEPS_HASH}.tar.gz"
-            echo "Done 'building' the toolchain."
-            exit 0
+            if tar xzf "${CACHED_TOOLCHAIN_ARCHIVE}" ; then
+                echo "Done 'building' the toolchain."
+                echo "Cache unchanged."
+                exit 0
+            else
+                echo
+                echo
+                echo
+                echo "Could not extract cached toolchain archive."
+                echo "This means the cache is broken and *should be removed*!"
+                echo "As Github Actions cannot update a cache, this will unnecessarily"
+                echo "slow down all future builds for this hash, until someone"
+                echo "resets the cache."
+                echo
+                echo
+                echo
+                rm -f "${CACHED_TOOLCHAIN_ARCHIVE}"
+            fi
         else
-            echo "Cache at Cache/ToolchainLocal_${DEPS_HASH}.tar.gz does not exist."
+            echo "Cache at ${CACHED_TOOLCHAIN_ARCHIVE} does not exist."
             echo "Will rebuild toolchain from scratch, and save the result."
-            echo "But first, getting rid of old, outdated caches. Current caches:"
-            pushd "Cache/"
-                ls -l
-                # Travis preserves timestamps. Don't ask me why, but it does.
-                # We can exploit this to get an easy approximation of recent-ness.
-                # Our purging algorithm is simple: keep only the newest X entries.
-                ls -t | tail "-n+${KEEP_CACHE_COUNT}" | xargs -r rm -v
-                echo "After deletion:"
-                ls -l
-            popd
         fi
-
+        echo "::group::Actually building Toolchain"
     fi
 popd
 
@@ -183,22 +179,24 @@ popd
 # === COMPILE AND INSTALL ===
 
 mkdir -p "$PREFIX"
-mkdir -p "$DIR/Build/binutils"
-mkdir -p "$DIR/Build/gcc"
+mkdir -p "$DIR/Build/$ARCH/binutils"
+mkdir -p "$DIR/Build/$ARCH/gcc"
 
 if [ -z "$MAKEJOBS" ]; then
     MAKEJOBS=$($NPROC)
 fi
 
-pushd "$DIR/Build/"
+pushd "$DIR/Build/$ARCH"
     unset PKG_CONFIG_LIBDIR # Just in case
 
     pushd binutils
-        "$DIR"/Tarballs/binutils-2.33.1/configure --prefix="$PREFIX" \
-                                                --target="$TARGET" \
-                                                --with-sysroot="$SYSROOT" \
-                                                --enable-shared \
-                                                --disable-nls || exit 1
+        echo "XXX configure binutils"
+        "$DIR"/Tarballs/$BINUTILS_NAME/configure --prefix="$PREFIX" \
+                                                 --target="$TARGET" \
+                                                 --with-sysroot="$SYSROOT" \
+                                                 --enable-shared \
+                                                 --disable-nls \
+                                                 ${TRY_USE_LOCAL_TOOLCHAIN:+"--quiet"} || exit 1
         if [ "$(uname)" = "Darwin" ]; then
             # under macOS generated makefiles are not resolving the "intl"
             # dependency properly to allow linking its own copy of
@@ -208,6 +206,7 @@ pushd "$DIR/Build/"
             "$MAKE" all-yes
             popd
         fi
+        echo "XXX build binutils"
         "$MAKE" -j "$MAKEJOBS" || exit 1
         "$MAKE" install || exit 1
     popd
@@ -217,25 +216,26 @@ pushd "$DIR/Build/"
             perl -pi -e 's/-no-pie/-nopie/g' "$DIR/Tarballs/gcc-$GCC_VERSION/gcc/configure"
         fi
 
+        echo "XXX configure gcc and libgcc"
         "$DIR/Tarballs/gcc-$GCC_VERSION/configure" --prefix="$PREFIX" \
                                             --target="$TARGET" \
                                             --with-sysroot="$SYSROOT" \
                                             --disable-nls \
                                             --with-newlib \
                                             --enable-shared \
-                                            --enable-languages=c,c++ || exit 1
+                                            --enable-languages=c,c++ \
+                                            --enable-default-pie \
+                                            ${TRY_USE_LOCAL_TOOLCHAIN:+"--quiet"} || exit 1
 
         echo "XXX build gcc and libgcc"
         "$MAKE" -j "$MAKEJOBS" all-gcc all-target-libgcc || exit 1
         echo "XXX install gcc and libgcc"
         "$MAKE" install-gcc install-target-libgcc || exit 1
 
-        echo "XXX serenity libc and libm"
+        echo "XXX serenity libc and libm headers"
         mkdir -p "$BUILD"
         pushd "$BUILD"
-            CXXFLAGS="-DBUILDING_SERENITY_TOOLCHAIN" cmake ..
-            cmake --build . --target LibC
-            "$INSTALL" -D Libraries/LibC/libc.a Libraries/LibM/libm.a Root/usr/lib/
+            mkdir -p Root/usr/include/
             SRC_ROOT=$(realpath "$DIR"/..)
             FILES=$(find "$SRC_ROOT"/Libraries/LibC "$SRC_ROOT"/Libraries/LibM -name '*.h' -print)
             for header in $FILES; do
@@ -246,12 +246,12 @@ pushd "$DIR/Build/"
         popd
 
         echo "XXX build libstdc++"
-        "$MAKE" all-target-libstdc++-v3 || exit 1
+        "$MAKE" -j "$MAKEJOBS" all-target-libstdc++-v3 || exit 1
         echo "XXX install libstdc++"
         "$MAKE" install-target-libstdc++-v3 || exit 1
 
         if [ "$(uname -s)" = "OpenBSD" ]; then
-            cd "$DIR/Local/libexec/gcc/i686-pc-serenity/$GCC_VERSION" && ln -sf liblto_plugin.so.0.0 liblto_plugin.so
+            cd "$DIR/Local/libexec/gcc/$TARGET/$GCC_VERSION" && ln -sf liblto_plugin.so.0.0 liblto_plugin.so
         fi
 
     popd
@@ -262,20 +262,24 @@ popd
 
 pushd "$DIR"
     if [ "${TRY_USE_LOCAL_TOOLCHAIN}" = "y" ] ; then
-        # TODO: Compress with -z.  It's factor 3, and costs no time.
-        echo "Caching toolchain:"
+        echo "::endgroup::"
+        echo "Building cache tar:"
 
-        if [ -z "${DEPS_HASH}" ] ; then
-            echo "NOT SAVED, because hashing failed."
-            echo "It's computed in the beginning; see there for the error message."
-        elif [ -e "Cache/ToolchainLocal_${DEPS_HASH}.tar.gz" ] ; then
-            # Note: This checks for *existence*.  Initially we checked for
-            # *readability*. If Travis borks permissions, there's not much we can do.
-            echo "Cache exists but was not used?!"
-            echo "Not touching cache then."
-        else
-            mkdir -p Cache/
-            tar czf "Cache/ToolchainLocal_${DEPS_HASH}.tar.gz" Local/
+        rm -f "${CACHED_TOOLCHAIN_ARCHIVE}"  # Just in case
+
+        # Stripping doesn't seem to work on macOS.
+        # However, this doesn't seem to be necessary on macOS, the uncompressed size is already about 210 MiB.
+        if [ "$(uname)" != "Darwin" ]; then
+            # We *most definitely* don't need debug symbols in the linker/compiler.
+            # This cuts the uncompressed size from 1.2 GiB per Toolchain down to about 190 MiB.
+            echo "Stripping executables ..."
+            echo "Before: $(du -sh Local)"
+            find Local/ -type f -executable ! -name '*.la' ! -name '*.sh' ! -name 'mk*' -exec strip {} +
+            echo "After: $(du -sh Local)"
         fi
+        tar czf "${CACHED_TOOLCHAIN_ARCHIVE}" Local/
+
+        echo "Cache (after):"
+        ls -l Cache
     fi
 popd

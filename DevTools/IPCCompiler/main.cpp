@@ -25,7 +25,9 @@
  */
 
 #include <AK/Function.h>
+#include <AK/GenericLexer.h>
 #include <AK/HashMap.h>
+#include <AK/SourceGenerator.h>
 #include <AK/StringBuilder.h>
 #include <LibCore/File.h>
 #include <ctype.h>
@@ -63,97 +65,62 @@ struct Endpoint {
 int main(int argc, char** argv)
 {
     if (argc != 2) {
-        printf("usage: %s <IPC endpoint definition file>\n", argv[0]);
+        outln("usage: {} <IPC endpoint definition file>", argv[0]);
         return 0;
     }
 
     auto file = Core::File::construct(argv[1]);
     if (!file->open(Core::IODevice::ReadOnly)) {
-        fprintf(stderr, "Error: Cannot open %s: %s\n", argv[1], file->error_string());
+        warnln("Error: Cannot open {}: {}", argv[1], file->error_string());
         return 1;
     }
 
     auto file_contents = file->read_all();
+    GenericLexer lexer(file_contents);
 
     Vector<Endpoint> endpoints;
 
-    Vector<char> buffer;
-
-    size_t index = 0;
-
-    auto peek = [&](size_t offset = 0) -> char {
-        if ((index + offset) < file_contents.size())
-            return file_contents[index + offset];
-        return 0;
-    };
-
-    auto consume_one = [&]() -> char {
-        return file_contents[index++];
-    };
-
-    auto extract_while = [&](Function<bool(char)> condition) -> String {
-        StringBuilder builder;
-        while (condition(peek()))
-            builder.append(consume_one());
-        return builder.to_string();
-    };
-
-    auto consume_specific = [&](char ch) {
-        if (peek() != ch) {
-            warn() << "consume_specific: wanted '" << ch << "', but got '" << peek() << "' at index " << index;
-        }
-        ASSERT(peek() == ch);
-        ++index;
-        return ch;
-    };
-
-    auto consume_string = [&](const char* str) {
-        for (size_t i = 0, length = strlen(str); i < length; ++i)
-            consume_specific(str[i]);
+    auto assert_specific = [&](char ch) {
+        if (lexer.peek() != ch)
+            warnln("assert_specific: wanted '{}', but got '{}' at index {}", ch, lexer.peek(), lexer.tell());
+        bool saw_expected = lexer.consume_specific(ch);
+        ASSERT(saw_expected);
     };
 
     auto consume_whitespace = [&] {
-        while (isspace(peek()))
-            ++index;
-        if (peek() == '/' && peek(1) == '/') {
-            while (peek() != '\n')
-                ++index;
-        }
+        lexer.ignore_while([](char ch) { return isspace(ch); });
+        if (lexer.peek() == '/' && lexer.peek(1) == '/')
+            lexer.ignore_until([](char ch) { return ch == '\n'; });
     };
 
     auto parse_parameter = [&](Vector<Parameter>& storage) {
         for (;;) {
             Parameter parameter;
             consume_whitespace();
-            if (peek() == ')')
+            if (lexer.peek() == ')')
                 break;
-            if (peek() == '[') {
-                consume_one();
+            if (lexer.consume_specific('[')) {
                 for (;;) {
-                    if (peek() == ']') {
-                        consume_one();
+                    if (lexer.consume_specific(']')) {
                         consume_whitespace();
                         break;
                     }
-                    if (peek() == ',') {
-                        consume_one();
+                    if (lexer.consume_specific(',')) {
                         consume_whitespace();
                     }
-                    auto attribute = extract_while([](char ch) { return ch != ']' && ch != ','; });
+                    auto attribute = lexer.consume_until([](char ch) { return ch == ']' || ch == ','; });
                     parameter.attributes.append(attribute);
                     consume_whitespace();
                 }
             }
-            parameter.type = extract_while([](char ch) { return !isspace(ch); });
+            parameter.type = lexer.consume_until([](char ch) { return isspace(ch); });
             consume_whitespace();
-            parameter.name = extract_while([](char ch) { return !isspace(ch) && ch != ',' && ch != ')'; });
+            parameter.name = lexer.consume_until([](char ch) { return isspace(ch) || ch == ',' || ch == ')'; });
             consume_whitespace();
             storage.append(move(parameter));
-            if (peek() == ',') {
-                consume_one();
+            if (lexer.consume_specific(','))
                 continue;
-            }
-            if (peek() == ')')
+            if (lexer.peek() == ')')
                 break;
         }
     };
@@ -163,11 +130,9 @@ int main(int argc, char** argv)
             consume_whitespace();
             parse_parameter(storage);
             consume_whitespace();
-            if (peek() == ',') {
-                consume_one();
+            if (lexer.consume_specific(','))
                 continue;
-            }
-            if (peek() == ')')
+            if (lexer.peek() == ')')
                 break;
         }
     };
@@ -175,18 +140,15 @@ int main(int argc, char** argv)
     auto parse_message = [&] {
         Message message;
         consume_whitespace();
-        Vector<char> buffer;
-        while (!isspace(peek()) && peek() != '(')
-            buffer.append(consume_one());
-        message.name = String::copy(buffer);
+        message.name = lexer.consume_until([](char ch) { return isspace(ch) || ch == '('; });
         consume_whitespace();
-        consume_specific('(');
+        assert_specific('(');
         parse_parameters(message.inputs);
-        consume_specific(')');
+        assert_specific(')');
         consume_whitespace();
-        consume_specific('=');
+        assert_specific('=');
 
-        auto type = consume_one();
+        auto type = lexer.consume();
         if (type == '>')
             message.is_synchronous = true;
         else if (type == '|')
@@ -197,9 +159,9 @@ int main(int argc, char** argv)
         consume_whitespace();
 
         if (message.is_synchronous) {
-            consume_specific('(');
+            assert_specific('(');
             parse_parameters(message.outputs);
-            consume_specific(')');
+            assert_specific(')');
         }
 
         consume_whitespace();
@@ -212,7 +174,7 @@ int main(int argc, char** argv)
             consume_whitespace();
             parse_message();
             consume_whitespace();
-            if (peek() == '}')
+            if (lexer.peek() == '}')
                 break;
         }
     };
@@ -220,57 +182,82 @@ int main(int argc, char** argv)
     auto parse_endpoint = [&] {
         endpoints.empend();
         consume_whitespace();
-        consume_string("endpoint");
+        lexer.consume_specific("endpoint");
         consume_whitespace();
-        endpoints.last().name = extract_while([](char ch) { return !isspace(ch); });
+        endpoints.last().name = lexer.consume_while([](char ch) { return !isspace(ch); });
         consume_whitespace();
-        consume_specific('=');
+        assert_specific('=');
         consume_whitespace();
-        auto magic_string = extract_while([](char ch) { return !isspace(ch) && ch != '{'; });
+        auto magic_string = lexer.consume_while([](char ch) { return !isspace(ch) && ch != '{'; });
         endpoints.last().magic = magic_string.to_int().value();
         consume_whitespace();
-        consume_specific('{');
+        assert_specific('{');
         parse_messages();
-        consume_specific('}');
+        assert_specific('}');
         consume_whitespace();
     };
 
-    while (index < file_contents.size())
+    while (lexer.tell() < file_contents.size())
         parse_endpoint();
 
-    out() << "#pragma once";
-    out() << "#include <AK/BufferStream.h>";
-    out() << "#include <AK/OwnPtr.h>";
-    out() << "#include <AK/URL.h>";
-    out() << "#include <AK/Utf8View.h>";
-    out() << "#include <LibGfx/Color.h>";
-    out() << "#include <LibGfx/Rect.h>";
-    out() << "#include <LibGfx/ShareableBitmap.h>";
-    out() << "#include <LibIPC/Decoder.h>";
-    out() << "#include <LibIPC/Dictionary.h>";
-    out() << "#include <LibIPC/Encoder.h>";
-    out() << "#include <LibIPC/Endpoint.h>";
-    out() << "#include <LibIPC/Message.h>";
-    out();
+    StringBuilder builder;
+    SourceGenerator generator { builder };
+
+    generator.append(R"~~~(
+#pragma once
+#include <AK/MemoryStream.h>
+#include <AK/OwnPtr.h>
+#include <AK/URL.h>
+#include <AK/Utf8View.h>
+#include <LibGfx/Color.h>
+#include <LibGfx/Rect.h>
+#include <LibGfx/ShareableBitmap.h>
+#include <LibIPC/Decoder.h>
+#include <LibIPC/Dictionary.h>
+#include <LibIPC/Encoder.h>
+#include <LibIPC/Endpoint.h>
+#include <LibIPC/File.h>
+#include <LibIPC/Message.h>
+)~~~");
 
     for (auto& endpoint : endpoints) {
-        out() << "namespace Messages {";
-        out() << "namespace " << endpoint.name << " {";
-        out();
+        auto endpoint_generator = generator.fork();
+
+        endpoint_generator.set("endpoint.name", endpoint.name);
+        endpoint_generator.set("endpoint.magic", String::number(endpoint.magic));
+
+        endpoint_generator.append(R"~~~(
+namespace Messages::@endpoint.name@ {
+)~~~");
 
         HashMap<String, int> message_ids;
 
-        out() << "enum class MessageID : i32 {";
+        endpoint_generator.append(R"~~~(
+enum class MessageID : i32 {
+)~~~");
         for (auto& message : endpoint.messages) {
+            auto message_generator = endpoint_generator.fork();
+
             message_ids.set(message.name, message_ids.size() + 1);
-            out() << "    " << message.name << " = " << message_ids.size() << ",";
+            message_generator.set("message.name", message.name);
+            message_generator.set("message.id", String::number(message_ids.size()));
+
+            message_generator.append(R"~~~(
+    @message.name@ = @message.id@,
+)~~~");
             if (message.is_synchronous) {
                 message_ids.set(message.response_name(), message_ids.size() + 1);
-                out() << "    " << message.response_name() << " = " << message_ids.size() << ",";
+                message_generator.set("message.name", message.response_name());
+                message_generator.set("message.id", String::number(message_ids.size()));
+
+                message_generator.append(R"~~~(
+    @message.name@ = @message.id@,
+)~~~");
             }
         }
-        out() << "};";
-        out();
+        endpoint_generator.append(R"~~~(
+};
+)~~~");
 
         auto constructor_for_message = [&](const String& name, const Vector<Parameter>& parameters) {
             StringBuilder builder;
@@ -307,31 +294,57 @@ int main(int argc, char** argv)
         };
 
         auto do_message = [&](const String& name, const Vector<Parameter>& parameters, const String& response_type = {}) {
-            out() << "class " << name << " final : public IPC::Message {";
-            out() << "public:";
-            if (!response_type.is_null())
-                out() << "    typedef class " << response_type << " ResponseType;";
-            out() << "    " << constructor_for_message(name, parameters);
-            out() << "    virtual ~" << name << "() override {}";
-            out() << "    virtual i32 endpoint_magic() const override { return " << endpoint.magic << "; }";
-            out() << "    virtual i32 message_id() const override { return (int)MessageID::" << name << "; }";
-            out() << "    static i32 static_message_id() { return (int)MessageID::" << name << "; }";
-            out() << "    virtual const char* message_name() const override { return \"" << endpoint.name << "::" << name << "\"; }";
-            out() << "    static OwnPtr<" << name << "> decode(BufferStream& stream, size_t& size_in_bytes)";
-            out() << "    {";
+            auto message_generator = endpoint_generator.fork();
+            message_generator.set("message.name", name);
+            message_generator.set("message.response_type", response_type);
+            message_generator.set("message.constructor", constructor_for_message(name, parameters));
 
-            out() << "        IPC::Decoder decoder(stream);";
+            message_generator.append(R"~~~(
+class @message.name@ final : public IPC::Message {
+public:
+)~~~");
+
+            if (!response_type.is_null())
+                message_generator.append(R"~~~(
+   typedef class @message.response_type@ ResponseType;
+)~~~");
+
+            message_generator.append(R"~~~(
+    @message.constructor@
+    virtual ~@message.name@() override {}
+
+    virtual i32 endpoint_magic() const override { return @endpoint.magic@; }
+    virtual i32 message_id() const override { return (int)MessageID::@message.name@; }
+    static i32 static_message_id() { return (int)MessageID::@message.name@; }
+    virtual const char* message_name() const override { return "@endpoint.name@::@message.name@"; }
+
+    static OwnPtr<@message.name@> decode(InputMemoryStream& stream, int sockfd)
+    {
+        IPC::Decoder decoder { stream, sockfd };
+)~~~");
 
             for (auto& parameter : parameters) {
-                String initial_value = "{}";
+                auto parameter_generator = message_generator.fork();
+
+                parameter_generator.set("parameter.type", parameter.type);
+                parameter_generator.set("parameter.name", parameter.name);
+
                 if (parameter.type == "bool")
-                    initial_value = "false";
-                out() << "        " << parameter.type << " " << parameter.name << " = " << initial_value << ";";
-                out() << "        if (!decoder.decode(" << parameter.name << "))";
-                out() << "            return nullptr;";
+                    parameter_generator.set("parameter.initial_value", "false");
+                else
+                    parameter_generator.set("parameter.initial_value", "{}");
+
+                parameter_generator.append(R"~~~(
+        @parameter.type@ @parameter.name@ = @parameter.initial_value@;
+        if (!decoder.decode(@parameter.name@))
+            return nullptr;
+)~~~");
+
                 if (parameter.attributes.contains_slow("UTF8")) {
-                    out() << "        if (!Utf8View(" << parameter.name << ").validate())";
-                    out() << "            return nullptr;";
+                    parameter_generator.append(R"~~~(
+        if (!Utf8View(@parameter.name@).validate())
+            return nullptr;
+)~~~");
                 }
             }
 
@@ -342,29 +355,62 @@ int main(int argc, char** argv)
                 if (i != parameters.size() - 1)
                     builder.append(", ");
             }
-            out() << "        size_in_bytes = stream.offset();";
-            out() << "        return make<" << name << ">(" << builder.to_string() << ");";
-            out() << "    }";
-            out() << "    virtual IPC::MessageBuffer encode() const override";
-            out() << "    {";
-            out() << "        IPC::MessageBuffer buffer;";
-            out() << "        IPC::Encoder stream(buffer);";
-            out() << "        stream << endpoint_magic();";
-            out() << "        stream << (int)MessageID::" << name << ";";
+
+            message_generator.set("message.constructor_call_parameters", builder.build());
+
+            message_generator.append(R"~~~(
+        return make<@message.name@>(@message.constructor_call_parameters@);
+    }
+)~~~");
+
+            message_generator.append(R"~~~(
+    virtual IPC::MessageBuffer encode() const override
+    {
+        IPC::MessageBuffer buffer;
+        IPC::Encoder stream(buffer);
+        stream << endpoint_magic();
+        stream << (int)MessageID::@message.name@;
+)~~~");
+
             for (auto& parameter : parameters) {
-                out() << "        stream << m_" << parameter.name << ";";
+                auto parameter_generator = message_generator.fork();
+
+                parameter_generator.set("parameter.name", parameter.name);
+                parameter_generator.append(R"~~~(
+        stream << m_@parameter.name@;
+)~~~");
             }
-            out() << "        return buffer;";
-            out() << "    }";
+
+            message_generator.append(R"~~~(
+        return buffer;
+    }
+)~~~");
+
             for (auto& parameter : parameters) {
-                out() << "    const " << parameter.type << "& " << parameter.name << "() const { return m_" << parameter.name << "; }";
+                auto parameter_generator = message_generator.fork();
+                parameter_generator.set("parameter.type", parameter.type);
+                parameter_generator.set("parameter.name", parameter.name);
+                parameter_generator.append(R"~~~(
+    const @parameter.type@& @parameter.name@() const { return m_@parameter.name@; }
+)~~~");
             }
-            out() << "private:";
+
+            message_generator.append(R"~~~(
+private:
+            )~~~");
+
             for (auto& parameter : parameters) {
-                out() << "    " << parameter.type << " m_" << parameter.name << ";";
+                auto parameter_generator = message_generator.fork();
+                parameter_generator.set("parameter.type", parameter.type);
+                parameter_generator.set("parameter.name", parameter.name);
+                parameter_generator.append(R"~~~(
+    @parameter.type@ m_@parameter.name@;
+)~~~");
             }
-            out() << "};";
-            out();
+
+            message_generator.append(R"~~~(
+};
+            )~~~");
         };
         for (auto& message : endpoint.messages) {
             String response_name;
@@ -374,95 +420,149 @@ int main(int argc, char** argv)
             }
             do_message(message.name, message.inputs, response_name);
         }
-        out() << "} // namespace " << endpoint.name;
-        out() << "} // namespace Messages";
-        out();
 
-        out() << "class " << endpoint.name << "Endpoint : public IPC::Endpoint {";
-        out() << "public:";
-        out() << "    " << endpoint.name << "Endpoint() {}";
-        out() << "    virtual ~" << endpoint.name << "Endpoint() override {}";
-        out() << "    static int static_magic() { return " << endpoint.magic << "; }";
-        out() << "    virtual int magic() const override { return " << endpoint.magic << "; }";
-        out() << "    static String static_name() { return \"" << endpoint.name << "\"; };";
-        out() << "    virtual String name() const override { return \"" << endpoint.name << "\"; };";
-        out() << "    static OwnPtr<IPC::Message> decode_message(const ByteBuffer& buffer, size_t& size_in_bytes)";
-        out() << "    {";
-        out() << "        BufferStream stream(const_cast<ByteBuffer&>(buffer));";
-        out() << "        i32 message_endpoint_magic = 0;";
-        out() << "        stream >> message_endpoint_magic;";
-        out() << "        if (stream.handle_read_failure()) {";
+        endpoint_generator.append(R"~~~(
+} // namespace Messages::@endpoint.name@
+        )~~~");
+
+        endpoint_generator.append(R"~~~(
+class @endpoint.name@Endpoint : public IPC::Endpoint {
+public:
+    @endpoint.name@Endpoint() { }
+    virtual ~@endpoint.name@Endpoint() override { }
+
+    static int static_magic() { return @endpoint.magic@; }
+    virtual int magic() const override { return @endpoint.magic@; }
+    static String static_name() { return "@endpoint.name@"; }
+    virtual String name() const override { return "@endpoint.name@"; }
+
+    static OwnPtr<IPC::Message> decode_message(ReadonlyBytes buffer, int sockfd)
+    {
+        InputMemoryStream stream { buffer };
+        i32 message_endpoint_magic = 0;
+        stream >> message_endpoint_magic;
+        if (stream.handle_any_error()) {
+)~~~");
 #ifdef GENERATE_DEBUG_CODE
-        out() << "            dbg() << \"Failed to read message endpoint magic\";";
+        endpoint_generator.append(R"~~~(
+            dbgln("Failed to read message endpoint magic");
+)~~~");
 #endif
-        out() << "            return nullptr;";
-        out() << "        }";
-        out() << "        if (message_endpoint_magic != " << endpoint.magic << ") {";
+        endpoint_generator.append(R"~~~(
+            return nullptr;
+        }
+
+        if (message_endpoint_magic != @endpoint.magic@) {
+)~~~");
 #ifdef GENERATE_DEBUG_CODE
-        out() << "            dbg() << \"endpoint magic \" << message_endpoint_magic << \" != " << endpoint.magic << "\";";
+        endpoint_generator.append(R"~~~(
+            dbgln("Endpoint magic number message_endpoint_magic != @endpoint.magic@");
+)~~~");
 #endif
-        out() << "            return nullptr;";
-        out() << "        }";
-        out() << "        i32 message_id = 0;";
-        out() << "        stream >> message_id;";
-        out() << "        if (stream.handle_read_failure()) {";
+        endpoint_generator.append(R"~~~(
+            return nullptr;
+        }
+
+        i32 message_id = 0;
+        stream >> message_id;
+        if (stream.handle_any_error()) {
+)~~~");
 #ifdef GENERATE_DEBUG_CODE
-        out() << "            dbg() << \"Failed to read message ID\";";
+        endpoint_generator.append(R"~~~(
+            dbgln("Failed to read message ID");
+)~~~");
 #endif
-        out() << "            return nullptr;";
-        out() << "        }";
-        out() << "        OwnPtr<IPC::Message> message;";
-        out() << "        switch (message_id) {";
+        endpoint_generator.append(R"~~~(
+            return nullptr;
+        }
+
+        OwnPtr<IPC::Message> message;
+        switch (message_id) {
+)~~~");
+
         for (auto& message : endpoint.messages) {
             auto do_decode_message = [&](const String& name) {
-                out() << "        case (int)Messages::" << endpoint.name << "::MessageID::" << name << ":";
-                out() << "            message = Messages::" << endpoint.name << "::" << name << "::decode(stream, size_in_bytes);";
-                out() << "            break;";
+                auto message_generator = endpoint_generator.fork();
+
+                message_generator.set("message.name", name);
+
+                message_generator.append(R"~~~(
+        case (int)Messages::@endpoint.name@::MessageID::@message.name@:
+            message = Messages::@endpoint.name@::@message.name@::decode(stream, sockfd);
+            break;
+)~~~");
             };
+
             do_decode_message(message.name);
             if (message.is_synchronous)
                 do_decode_message(message.response_name());
         }
-        out() << "        default:";
-#ifdef GENERATE_DEBUG_CODE
-        out() << "            dbg() << \"Failed to decode " << endpoint.name << ".(\" << message_id << \")\";";
-#endif
-        out() << "            return nullptr;";
 
-        out() << "        }";
-        out() << "        if (stream.handle_read_failure()) {";
+        endpoint_generator.append(R"~~~(
+        default:
+)~~~");
 #ifdef GENERATE_DEBUG_CODE
-        out() << "            sout() << \"Failed to read the message\";";
+        endpoint_generator.append(R"~~~(
+            dbgln("Failed to decode @endpoint.name@.({})", message_id);
+)~~~");
 #endif
-        out() << "            return nullptr;";
-        out() << "        }";
-        out() << "        return message;";
-        out() << "    }";
-        out();
-        out() << "    virtual OwnPtr<IPC::Message> handle(const IPC::Message& message) override";
-        out() << "    {";
-        out() << "        switch (message.message_id()) {";
+        endpoint_generator.append(R"~~~(
+            return nullptr;
+        }
+
+        if (stream.handle_any_error()) {
+)~~~");
+#ifdef GENERATE_DEBUG_CODE
+        endpoint_generator.append(R"~~~(
+            dbgln("Failed to read the message");
+)~~~");
+#endif
+        endpoint_generator.append(R"~~~(
+            return nullptr;
+        }
+
+        return message;
+    }
+
+    virtual OwnPtr<IPC::Message> handle(const IPC::Message& message) override
+    {
+        switch (message.message_id()) {
+)~~~");
         for (auto& message : endpoint.messages) {
             auto do_decode_message = [&](const String& name, bool returns_something) {
-                out() << "        case (int)Messages::" << endpoint.name << "::MessageID::" << name << ":";
+                auto message_generator = endpoint_generator.fork();
+
+                message_generator.set("message.name", name);
+                message_generator.append(R"~~~(
+        case (int)Messages::@endpoint.name@::MessageID::@message.name@:
+)~~~");
                 if (returns_something) {
-                    out() << "            return handle(static_cast<const Messages::" << endpoint.name << "::" << name << "&>(message));";
+                    message_generator.append(R"~~~(
+            return handle(static_cast<const Messages::@endpoint.name@::@message.name@&>(message));
+)~~~");
                 } else {
-                    out() << "            handle(static_cast<const Messages::" << endpoint.name << "::" << name << "&>(message));";
-                    out() << "            return nullptr;";
+                    message_generator.append(R"~~~(
+            handle(static_cast<const Messages::@endpoint.name@::@message.name@&>(message));
+            return nullptr;
+)~~~");
                 }
             };
             do_decode_message(message.name, message.is_synchronous);
             if (message.is_synchronous)
                 do_decode_message(message.response_name(), false);
         }
-        out() << "        default:";
-        out() << "            return nullptr;";
-
-        out() << "        }";
-        out() << "    }";
+        endpoint_generator.append(R"~~~(
+        default:
+            return nullptr;
+        }
+    }
+)~~~");
 
         for (auto& message : endpoint.messages) {
+            auto message_generator = endpoint_generator.fork();
+
+            message_generator.set("message.name", message.name);
+
             String return_type = "void";
             if (message.is_synchronous) {
                 StringBuilder builder;
@@ -474,34 +574,40 @@ int main(int argc, char** argv)
                 builder.append(">");
                 return_type = builder.to_string();
             }
-            out() << "    virtual " << return_type << " handle(const Messages::" << endpoint.name << "::" << message.name << "&) = 0;";
+            message_generator.set("message.complex_return_type", return_type);
+
+            message_generator.append(R"~~~(
+    virtual @message.complex_return_type@ handle(const Messages::@endpoint.name@::@message.name@&) = 0;
+)~~~");
         }
 
-        out() << "private:";
-        out() << "};";
+        endpoint_generator.append(R"~~~(
+private:
+};
+)~~~");
     }
+
+    outln("{}", generator.as_string_view());
 
 #ifdef DEBUG
     for (auto& endpoint : endpoints) {
-        warn() << "Endpoint: '" << endpoint.name << "' (magic: " << endpoint.magic << ")";
+        warnln("Endpoint '{}' (magic: {})", endpoint.name, endpoint.magic);
         for (auto& message : endpoint.messages) {
-            warn() << "  Message: '" << message.name << "'";
-            warn() << "    Sync: " << message.is_synchronous;
-            warn() << "    Inputs:";
+            warnln("  Message: '{}'", message.name);
+            warnln("    Sync: {}", message.is_synchronous);
+            warnln("    Inputs:");
             for (auto& parameter : message.inputs)
-                warn() << "        Parameter: " << parameter.name << " (" << parameter.type << ")";
+                warnln("      Parameter: {} ({})", parameter.name, parameter.type);
             if (message.inputs.is_empty())
-                warn() << "        (none)";
+                warnln("      (none)");
             if (message.is_synchronous) {
-                warn() << "    Outputs:";
+                warnln("    Outputs:");
                 for (auto& parameter : message.outputs)
-                    warn() << "        Parameter: " << parameter.name << " (" << parameter.type << ")";
+                    warnln("      Parameter: {} ({})", parameter.name, parameter.type);
                 if (message.outputs.is_empty())
-                    warn() << "        (none)";
+                    warnln("      (none)");
             }
         }
     }
 #endif
-
-    return 0;
 }

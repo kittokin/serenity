@@ -35,11 +35,11 @@ class RegExpConstructor final : public NativeFunction {
 
 public:
     explicit RegExpConstructor(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~RegExpConstructor() override;
 
-    virtual Value call(Interpreter&) override;
-    virtual Value construct(Interpreter&, Function& new_target) override;
+    virtual Value call() override;
+    virtual Value construct(Function& new_target) override;
 
 private:
     virtual bool has_constructor() const override { return true; }

@@ -24,16 +24,18 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/String.h>
+#include <AK/ByteBuffer.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
+#include <AK/NumberFormat.h>
+#include <AK/String.h>
 #include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
-#include <string.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 static bool flag_human_readable = false;
@@ -48,28 +50,10 @@ struct FileSystem {
     String mount_point;
 };
 
-// FIXME: Remove this hackery once printf() supports floats.
-// FIXME: Also, we should probably round the sizes in df -h output.
-static String number_string_with_one_decimal(float number, const char* suffix)
-{
-    float decimals = number - (int)number;
-    return String::format("%d.%d%s", (int)number, (int)(decimals * 10), suffix);
-}
-
-static String human_readable_size(size_t size)
-{
-    if (size < 1 * KB)
-        return String::number(size);
-    if (size < 1 * MB)
-        return number_string_with_one_decimal((float)size / (float)KB, "K");
-    if (size < 1 * GB)
-        return number_string_with_one_decimal((float)size / (float)MB, "M");
-    return number_string_with_one_decimal((float)size / (float)GB, "G");
-}
-
 int main(int argc, char** argv)
 {
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Display free disk space of each partition.");
     args_parser.add_option(flag_human_readable, "Print human-readable sizes", "human-readable", 'h');
     args_parser.parse(argc, argv);
 
@@ -94,13 +78,10 @@ int main(int argc, char** argv)
         auto fs = fs_object.get("class_name").to_string();
         auto total_block_count = fs_object.get("total_block_count").to_u32();
         auto free_block_count = fs_object.get("free_block_count").to_u32();
-        auto total_inode_count = fs_object.get("total_inode_count").to_u32();
-        auto free_inode_count = fs_object.get("free_inode_count").to_u32();
+        [[maybe_unused]] auto total_inode_count = fs_object.get("total_inode_count").to_u32();
+        [[maybe_unused]] auto free_inode_count = fs_object.get("free_inode_count").to_u32();
         auto block_size = fs_object.get("block_size").to_u32();
         auto mount_point = fs_object.get("mount_point").to_string();
-
-        (void)total_inode_count;
-        (void)free_inode_count;
 
         printf("%-10s", fs.characters());
 

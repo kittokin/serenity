@@ -27,6 +27,7 @@
 #include "Shell.h"
 #include <AK/LexicalPath.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
 #include <inttypes.h>
 #include <signal.h>
@@ -34,7 +35,8 @@
 #include <unistd.h>
 
 extern char** environ;
-extern RefPtr<Line::Editor> editor;
+
+namespace Shell {
 
 int Shell::builtin_alias(int argc, const char** argv)
 {
@@ -64,6 +66,7 @@ int Shell::builtin_alias(int argc, const char** argv)
             }
         } else {
             m_aliases.set(parts[0], parts[1]);
+            add_entry_to_cache(parts[0]);
         }
     }
 
@@ -95,14 +98,18 @@ int Shell::builtin_bg(int argc, const char** argv)
     }
 
     job->set_running_in_background(true);
+    job->set_should_announce_exit(true);
     job->set_is_suspended(false);
 
-    dbg() << "Resuming " << job->pid() << " (" << job->cmd() << ")";
-    fprintf(stderr, "Resuming job %" PRIu64 " - %s\n", job->job_id(), job->cmd().characters());
+    dbgln("Resuming {} ({})", job->pid(), job->cmd());
+    warnln("Resuming job {} - {}", job->job_id(), job->cmd().characters());
 
+    // Try using the PGID, but if that fails, just use the PID.
     if (killpg(job->pgid(), SIGCONT) < 0) {
-        perror("killpg");
-        return 1;
+        if (kill(job->pid(), SIGCONT) < 0) {
+            perror("kill");
+            return 1;
+        }
     }
 
     return 0;
@@ -122,11 +129,7 @@ int Shell::builtin_cd(int argc, const char** argv)
 
     if (!arg_path) {
         new_path = home;
-        if (cd_history.is_empty() || cd_history.last() != home)
-            cd_history.enqueue(home);
     } else {
-        if (cd_history.is_empty() || cd_history.last() != arg_path)
-            cd_history.enqueue(arg_path);
         if (strcmp(arg_path, "-") == 0) {
             char* oldpwd = getenv("OLDPWD");
             if (oldpwd == nullptr)
@@ -148,6 +151,10 @@ int Shell::builtin_cd(int argc, const char** argv)
         fprintf(stderr, "Invalid path '%s'\n", new_path.characters());
         return 1;
     }
+
+    if (cd_history.is_empty() || cd_history.last() != real_path)
+        cd_history.enqueue(real_path);
+
     const char* path = real_path.characters();
 
     int rc = chdir(path);
@@ -249,6 +256,20 @@ int Shell::builtin_dirs(int argc, const char** argv)
     return 0;
 }
 
+int Shell::builtin_exec(int argc, const char** argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "Shell: No command given to exec\n");
+        return 1;
+    }
+
+    Vector<const char*> argv_vector;
+    argv_vector.append(argv + 1, argc - 1);
+    argv_vector.append(nullptr);
+
+    execute_process(move(argv_vector));
+}
+
 int Shell::builtin_exit(int argc, const char** argv)
 {
     int exit_code = 0;
@@ -257,16 +278,19 @@ int Shell::builtin_exit(int argc, const char** argv)
     if (!parser.parse(argc, const_cast<char**>(argv)))
         return 1;
 
-    if (!jobs.is_empty()) {
-        if (!m_should_ignore_jobs_on_next_exit) {
-            fprintf(stderr, "Shell: You have %zu active job%s, run 'exit' again to really exit.\n", jobs.size(), jobs.size() > 1 ? "s" : "");
-            m_should_ignore_jobs_on_next_exit = true;
-            return 1;
+    if (m_is_interactive) {
+        if (!jobs.is_empty()) {
+            if (!m_should_ignore_jobs_on_next_exit) {
+                fprintf(stderr, "Shell: You have %zu active job%s, run 'exit' again to really exit.\n", jobs.size(), jobs.size() > 1 ? "s" : "");
+                m_should_ignore_jobs_on_next_exit = true;
+                return 1;
+            }
         }
     }
     stop_all_jobs();
-    save_history();
-    printf("Good-bye!\n");
+    m_editor->save_history(get_history_path());
+    if (m_is_interactive)
+        printf("Good-bye!\n");
     exit(exit_code);
     return 0;
 }
@@ -317,6 +341,23 @@ int Shell::builtin_export(int argc, const char** argv)
     return 0;
 }
 
+int Shell::builtin_glob(int argc, const char** argv)
+{
+    Vector<const char*> globs;
+    Core::ArgsParser parser;
+    parser.add_positional_argument(globs, "Globs to resolve", "glob");
+
+    if (!parser.parse(argc, const_cast<char**>(argv), false))
+        return 1;
+
+    for (auto& glob : globs) {
+        for (auto& expanded : expand_globs(glob, cwd))
+            outln("{}", expanded);
+    }
+
+    return 0;
+}
+
 int Shell::builtin_fg(int argc, const char** argv)
 {
     int job_id = -1;
@@ -330,7 +371,7 @@ int Shell::builtin_fg(int argc, const char** argv)
     if (job_id == -1 && !jobs.is_empty())
         job_id = find_last_job_id();
 
-    auto* job = const_cast<Job*>(find_job(job_id));
+    RefPtr<Job> job = find_job(job_id);
 
     if (!job) {
         if (job_id == -1) {
@@ -344,17 +385,26 @@ int Shell::builtin_fg(int argc, const char** argv)
     job->set_running_in_background(false);
     job->set_is_suspended(false);
 
-    dbg() << "Resuming " << job->pid() << " (" << job->cmd() << ")";
-    fprintf(stderr, "Resuming job %" PRIu64 " - %s\n", job->job_id(), job->cmd().characters());
+    dbgln("Resuming {} ({})", job->pid(), job->cmd());
+    warnln("Resuming job {} - {}", job->job_id(), job->cmd().characters());
 
+    tcsetpgrp(STDOUT_FILENO, job->pgid());
+    tcsetpgrp(STDIN_FILENO, job->pgid());
+
+    // Try using the PGID, but if that fails, just use the PID.
     if (killpg(job->pgid(), SIGCONT) < 0) {
-        perror("killpg");
-        return 1;
+        if (kill(job->pid(), SIGCONT) < 0) {
+            perror("kill");
+            return 1;
+        }
     }
 
     block_on_job(job);
 
-    return job->exit_code();
+    if (job->exited())
+        return job->exit_code();
+    else
+        return 0;
 }
 
 int Shell::builtin_disown(int argc, const char** argv)
@@ -410,8 +460,8 @@ int Shell::builtin_disown(int argc, const char** argv)
 
 int Shell::builtin_history(int, const char**)
 {
-    for (size_t i = 0; i < editor->history().size(); ++i) {
-        printf("%6zu  %s\n", i, editor->history()[i].characters());
+    for (size_t i = 0; i < m_editor->history().size(); ++i) {
+        printf("%6zu  %s\n", i, m_editor->history()[i].characters());
     }
     return 0;
 }
@@ -427,55 +477,17 @@ int Shell::builtin_jobs(int argc, const char** argv)
     if (!parser.parse(argc, const_cast<char**>(argv), false))
         return 1;
 
-    enum {
-        Basic,
-        OnlyPID,
-        ListAll,
-    } mode { Basic };
+    Job::PrintStatusMode mode = Job::PrintStatusMode::Basic;
 
     if (show_pid)
-        mode = OnlyPID;
+        mode = Job::PrintStatusMode::OnlyPID;
 
     if (list)
-        mode = ListAll;
+        mode = Job::PrintStatusMode::ListAll;
 
-    for (auto& job : jobs) {
-        auto pid = job.value->pid();
-        int wstatus;
-        auto rc = waitpid(pid, &wstatus, WNOHANG);
-        if (rc == -1) {
-            perror("waitpid");
+    for (auto& it : jobs) {
+        if (!it.value->print_status(mode))
             return 1;
-        }
-        auto status = "running";
-
-        if (rc != 0) {
-            if (WIFEXITED(wstatus))
-                status = "exited";
-
-            if (WIFSTOPPED(wstatus))
-                status = "stopped";
-
-            if (WIFSIGNALED(wstatus))
-                status = "signaled";
-        }
-
-        char background_indicator = '-';
-
-        if (job.value->is_running_in_background())
-            background_indicator = '+';
-
-        switch (mode) {
-        case Basic:
-            printf("[%" PRIu64 "] %c %s %s\n", job.value->job_id(), background_indicator, status, job.value->cmd().characters());
-            break;
-        case OnlyPID:
-            printf("[%" PRIu64 "] %c %d %s %s\n", job.value->job_id(), background_indicator, pid, status, job.value->cmd().characters());
-            break;
-        case ListAll:
-            printf("[%" PRIu64 "] %c %d %d %s %s\n", job.value->job_id(), background_indicator, pid, job.value->pgid(), status, job.value->cmd().characters());
-            break;
-        }
     }
 
     return 0;
@@ -677,6 +689,40 @@ int Shell::builtin_setopt(int argc, const char** argv)
     return 0;
 }
 
+int Shell::builtin_shift(int argc, const char** argv)
+{
+    int count = 1;
+
+    Core::ArgsParser parser;
+    parser.add_positional_argument(count, "Shift count", "count", Core::ArgsParser::Required::No);
+
+    if (!parser.parse(argc, const_cast<char**>(argv), false))
+        return 1;
+
+    if (count < 1)
+        return 0;
+
+    auto argv_ = lookup_local_variable("ARGV");
+    if (!argv_) {
+        fprintf(stderr, "shift: ARGV is unset\n");
+        return 1;
+    }
+
+    if (!argv_->is_list())
+        argv_ = adopt(*new AST::ListValue({ argv_.release_nonnull() }));
+
+    auto& values = static_cast<AST::ListValue*>(argv_.ptr())->values();
+    if ((size_t)count > values.size()) {
+        fprintf(stderr, "shift: shift count must not be greater than %zu\n", values.size());
+        return 1;
+    }
+
+    for (auto i = 0; i < count; ++i)
+        values.take_first();
+
+    return 0;
+}
+
 int Shell::builtin_time(int argc, const char** argv)
 {
     Vector<const char*> args;
@@ -698,7 +744,7 @@ int Shell::builtin_time(int argc, const char** argv)
     timer.start();
     for (auto& job : run_commands(commands)) {
         block_on_job(job);
-        exit_code = job->exit_code();
+        exit_code = job.exit_code();
     }
     fprintf(stderr, "Time: %d ms\n", timer.elapsed());
     return exit_code;
@@ -732,6 +778,44 @@ int Shell::builtin_umask(int argc, const char** argv)
     return 1;
 }
 
+int Shell::builtin_wait(int argc, const char** argv)
+{
+    Vector<const char*> job_ids;
+
+    Core::ArgsParser parser;
+    parser.add_positional_argument(job_ids, "Job IDs to wait for, defaults to all jobs if missing", "jobs", Core::ArgsParser::Required::No);
+
+    if (!parser.parse(argc, const_cast<char**>(argv), false))
+        return 1;
+
+    Vector<NonnullRefPtr<Job>> jobs_to_wait_for;
+
+    if (job_ids.is_empty()) {
+        for (auto it : jobs)
+            jobs_to_wait_for.append(it.value);
+    } else {
+        for (String id_s : job_ids) {
+            auto id_opt = id_s.to_uint();
+            if (id_opt.has_value()) {
+                if (auto job = find_job(id_opt.value())) {
+                    jobs_to_wait_for.append(*job);
+                    continue;
+                }
+            }
+
+            warnln("wait: invalid or nonexistent job id {}", id_s);
+            return 1;
+        }
+    }
+
+    for (auto& job : jobs_to_wait_for) {
+        job->set_running_in_background(false);
+        block_on_job(job);
+    }
+
+    return 0;
+}
+
 int Shell::builtin_unset(int argc, const char** argv)
 {
     Vector<const char*> vars;
@@ -753,23 +837,44 @@ int Shell::builtin_unset(int argc, const char** argv)
     return 0;
 }
 
-bool Shell::run_builtin(int argc, const char** argv, int& retval)
+bool Shell::run_builtin(const AST::Command& command, const NonnullRefPtrVector<AST::Rewiring>& rewirings, int& retval)
 {
-    if (argc == 0)
+    if (command.argv.is_empty())
         return false;
 
-    StringView name { argv[0] };
+    if (!has_builtin(command.argv.first()))
+        return false;
 
-#define __ENUMERATE_SHELL_BUILTIN(builtin)      \
-    if (name == #builtin) {                     \
-        retval = builtin_##builtin(argc, argv); \
-        return true;                            \
+    Vector<const char*> argv;
+    for (auto& arg : command.argv)
+        argv.append(arg.characters());
+
+    argv.append(nullptr);
+
+    StringView name = command.argv.first();
+
+    SavedFileDescriptors fds { rewirings };
+
+    for (auto& rewiring : rewirings) {
+        int rc = dup2(rewiring.old_fd, rewiring.new_fd);
+        if (rc < 0) {
+            perror("dup2(run)");
+            return false;
+        }
+    }
+
+    Core::EventLoop loop;
+    setup_signals();
+
+#define __ENUMERATE_SHELL_BUILTIN(builtin)                        \
+    if (name == #builtin) {                                       \
+        retval = builtin_##builtin(argv.size() - 1, argv.data()); \
+        return true;                                              \
     }
 
     ENUMERATE_SHELL_BUILTINS();
 
 #undef __ENUMERATE_SHELL_BUILTIN
-
     return false;
 }
 
@@ -784,4 +889,6 @@ bool Shell::has_builtin(const StringView& name) const
 
 #undef __ENUMERATE_SHELL_BUILTIN
     return false;
+}
+
 }

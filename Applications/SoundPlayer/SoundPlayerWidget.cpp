@@ -26,11 +26,12 @@
 
 #include "SoundPlayerWidget.h"
 #include <AK/StringBuilder.h>
+#include <LibCore/MimeData.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
-#include <LibM/math.h>
+#include <math.h>
 
 SoundPlayerWidget::SoundPlayerWidget(GUI::Window& window, NonnullRefPtr<Audio::ClientConnection> connection)
     : m_window(window)
@@ -49,12 +50,10 @@ SoundPlayerWidget::SoundPlayerWidget(GUI::Window& window, NonnullRefPtr<Audio::C
     m_elapsed->set_frame_shape(Gfx::FrameShape::Container);
     m_elapsed->set_frame_shadow(Gfx::FrameShadow::Sunken);
     m_elapsed->set_frame_thickness(2);
-    m_elapsed->set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    m_elapsed->set_preferred_size(80, 0);
+    m_elapsed->set_fixed_width(80);
 
     auto& sample_widget_container = status_widget.add<GUI::Widget>();
     sample_widget_container.set_layout<GUI::HorizontalBoxLayout>();
-    sample_widget_container.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fill);
 
     m_sample_widget = sample_widget_container.add<SampleWidget>();
 
@@ -62,8 +61,7 @@ SoundPlayerWidget::SoundPlayerWidget(GUI::Window& window, NonnullRefPtr<Audio::C
     m_remaining->set_frame_shape(Gfx::FrameShape::Container);
     m_remaining->set_frame_shadow(Gfx::FrameShadow::Sunken);
     m_remaining->set_frame_thickness(2);
-    m_remaining->set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    m_remaining->set_preferred_size(80, 0);
+    m_remaining->set_fixed_width(80);
 
     m_slider = add<Slider>(Orientation::Horizontal);
     m_slider->set_min(0);
@@ -73,8 +71,7 @@ SoundPlayerWidget::SoundPlayerWidget(GUI::Window& window, NonnullRefPtr<Audio::C
     auto& control_widget = add<GUI::Widget>();
     control_widget.set_fill_with_background_color(true);
     control_widget.set_layout<GUI::HorizontalBoxLayout>();
-    control_widget.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    control_widget.set_preferred_size(0, 30);
+    control_widget.set_fixed_height(30);
     control_widget.layout()->set_margins({ 10, 2, 10, 2 });
     control_widget.layout()->set_spacing(10);
 
@@ -95,8 +92,7 @@ SoundPlayerWidget::SoundPlayerWidget(GUI::Window& window, NonnullRefPtr<Audio::C
     m_status->set_frame_shadow(Gfx::FrameShadow::Raised);
     m_status->set_frame_thickness(4);
     m_status->set_text_alignment(Gfx::TextAlignment::CenterLeft);
-    m_status->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_status->set_preferred_size(0, 18);
+    m_status->set_fixed_height(18);
     m_status->set_text("No file open!");
 
     update_position(0);
@@ -119,18 +115,11 @@ void SoundPlayerWidget::hide_scope(bool hide)
 
 void SoundPlayerWidget::open_file(String path)
 {
-    if (!path.ends_with(".wav")) {
-        GUI::MessageBox::show(window(), "Selected file is not a \".wav\" file!", "Filetype error", GUI::MessageBox::Type::Error);
-        return;
-    }
-
-    OwnPtr<Audio::WavLoader> loader = make<Audio::WavLoader>(path);
-    if (loader->has_error()) {
+    NonnullRefPtr<Audio::Loader> loader = Audio::Loader::create(path);
+    if (loader->has_error() || !loader->sample_rate()) {
+        const String error_string = loader->error_string();
         GUI::MessageBox::show(window(),
-            String::format(
-                "Failed to load WAV file: %s (%s)",
-                path.characters(),
-                loader->error_string()),
+            String::formatted("Failed to load audio file: {} ({})", path, error_string.is_null() ? "Unknown error" : error_string),
             "Filetype error", GUI::MessageBox::Type::Error);
         return;
     }
@@ -142,16 +131,28 @@ void SoundPlayerWidget::open_file(String path)
     m_play->set_enabled(true);
     m_stop->set_enabled(true);
 
-    m_window.set_title(String::format("%s - SoundPlayer", loader->file()->filename().characters()));
-    m_status->set_text(String::format(
-        "Sample rate %uHz, %u %s, %u bits per sample",
+    m_window.set_title(String::formatted("{} - SoundPlayer", loader->file()->filename()));
+    m_status->set_text(String::formatted(
+        "Sample rate {}Hz, {} channel(s), {} bits per sample",
         loader->sample_rate(),
         loader->num_channels(),
-        (loader->num_channels() == 1) ? "channel" : "channels",
         loader->bits_per_sample()));
 
     m_manager.set_loader(move(loader));
     update_position(0);
+}
+
+void SoundPlayerWidget::drop_event(GUI::DropEvent& event)
+{
+    event.accept();
+    window()->move_to_front();
+
+    if (event.mime_data().has_urls()) {
+        auto urls = event.mime_data().urls();
+        if (urls.is_empty())
+            return;
+        open_file(urls.first().path());
+    }
 }
 
 int SoundPlayerWidget::normalize_rate(int rate) const
@@ -177,14 +178,14 @@ void SoundPlayerWidget::update_position(const int position)
     float seconds = (total_norm_samples / static_cast<float>(PLAYBACK_MANAGER_RATE));
     float remaining_seconds = m_manager.total_length() - seconds;
 
-    m_elapsed->set_text(String::format(
-        "Elapsed:\n%u:%02u.%02u",
+    m_elapsed->set_text(String::formatted(
+        "Elapsed:\n{}:{:02}.{:02}",
         static_cast<int>(seconds / 60),
         static_cast<int>(seconds) % 60,
         static_cast<int>(seconds * 100) % 100));
 
-    m_remaining->set_text(String::format(
-        "Remaining:\n%u:%02u.%02u",
+    m_remaining->set_text(String::formatted(
+        "Remaining:\n{}:{:02}.{:02}",
         static_cast<int>(remaining_seconds / 60),
         static_cast<int>(remaining_seconds) % 60,
         static_cast<int>(remaining_seconds * 100) % 100));

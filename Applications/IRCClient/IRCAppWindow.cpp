@@ -40,7 +40,6 @@
 #include <LibGUI/TableView.h>
 #include <LibGUI/ToolBar.h>
 #include <LibGUI/ToolBarContainer.h>
-#include <stdio.h>
 
 static IRCAppWindow* s_the;
 
@@ -58,7 +57,7 @@ IRCAppWindow::IRCAppWindow(String server, int port)
     set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-irc-client.png"));
 
     update_title();
-    set_rect(200, 200, 600, 400);
+    resize(600, 400);
     setup_actions();
     setup_menus();
     setup_widgets();
@@ -72,7 +71,7 @@ IRCAppWindow::~IRCAppWindow()
 
 void IRCAppWindow::update_title()
 {
-    set_title(String::format("%s@%s:%d - IRC Client", m_client->nickname().characters(), m_client->hostname().characters(), m_client->port()));
+    set_title(String::formatted("{}@{}:{} - IRC Client", m_client->nickname(), m_client->hostname(), m_client->port()));
 }
 
 void IRCAppWindow::setup_client()
@@ -138,7 +137,7 @@ void IRCAppWindow::setup_actions()
     });
 
     m_close_query_action = GUI::Action::create("Close query", { Mod_Ctrl, Key_D }, Gfx::Bitmap::load_from_file("/res/icons/16x16/irc-close-query.png"), [](auto&) {
-        printf("FIXME: Implement close-query action\n");
+        outln("FIXME: Implement close-query action");
     });
 
     m_change_nick_action = GUI::Action::create("Change nickname", Gfx::Bitmap::load_from_file("/res/icons/16x16/irc-nick.png"), [this](auto&) {
@@ -262,7 +261,7 @@ void IRCAppWindow::setup_menus()
     auto menubar = GUI::MenuBar::construct();
     auto& app_menu = menubar->add_menu("IRC Client");
     app_menu.add_action(GUI::CommonActions::make_quit_action([](auto&) {
-        dbgprintf("Terminal: Quit menu activated!\n");
+        dbg() << "Terminal: Quit menu activated!";
         GUI::Application::the()->quit();
         return;
     }));
@@ -330,12 +329,11 @@ void IRCAppWindow::setup_widgets()
     auto& horizontal_container = outer_container.add<GUI::HorizontalSplitter>();
 
     m_window_list = horizontal_container.add<GUI::TableView>();
-    m_window_list->set_headers_visible(false);
+    m_window_list->set_column_headers_visible(false);
     m_window_list->set_alternating_row_colors(false);
     m_window_list->set_model(m_client->client_window_list_model());
     m_window_list->set_activates_on_selection(true);
-    m_window_list->set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    m_window_list->set_preferred_size(100, 0);
+    m_window_list->set_fixed_width(100);
     m_window_list->on_activation = [this](auto& index) {
         set_active_window(m_client->window_at(index.row()));
     };

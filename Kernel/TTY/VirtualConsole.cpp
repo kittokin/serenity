@@ -36,7 +36,7 @@
 namespace Kernel {
 
 static u8* s_vga_buffer;
-static VirtualConsole* s_consoles[6];
+static VirtualConsole* s_consoles[s_max_virtual_consoles];
 static int s_active_console;
 static RecursiveSpinLock s_lock;
 
@@ -63,11 +63,13 @@ void VirtualConsole::set_graphical(bool graphical)
     m_graphical = graphical;
 }
 
-VirtualConsole::VirtualConsole(unsigned index)
+VirtualConsole::VirtualConsole(const unsigned index)
     : TTY(4, index)
     , m_index(index)
     , m_terminal(*this)
 {
+    ASSERT(index < s_max_virtual_consoles);
+
     m_tty_name = String::format("/dev/tty%u", m_index);
     m_terminal.set_size(80, 25);
 
@@ -83,7 +85,7 @@ void VirtualConsole::switch_to(unsigned index)
 {
     if ((int)index == s_active_console)
         return;
-    ASSERT(index < 6);
+    ASSERT(index < s_max_virtual_consoles);
     ASSERT(s_consoles[index]);
 
     ScopedSpinLock lock(s_lock);
@@ -239,14 +241,17 @@ void VirtualConsole::on_key_pressed(KeyboardDevice::Event event)
     m_terminal.handle_key_press(event.key, event.code_point, event.flags);
 }
 
-ssize_t VirtualConsole::on_tty_write(const u8* data, ssize_t size)
+ssize_t VirtualConsole::on_tty_write(const UserOrKernelBuffer& data, ssize_t size)
 {
     ScopedSpinLock lock(s_lock);
-    for (ssize_t i = 0; i < size; ++i)
-        m_terminal.on_input(data[i]);
+    ssize_t nread = data.read_buffered<512>((size_t)size, [&](const u8* buffer, size_t buffer_bytes) {
+        for (size_t i = 0; i < buffer_bytes; ++i)
+            m_terminal.on_input(buffer[i]);
+        return (ssize_t)buffer_bytes;
+    });
     if (m_active)
         flush_dirty_lines();
-    return size;
+    return nread;
 }
 
 void VirtualConsole::set_vga_start_row(u16 row)
@@ -285,10 +290,10 @@ void VirtualConsole::flush_dirty_lines()
         if (!line.is_dirty() && !m_terminal.m_need_full_flush)
             continue;
         for (size_t column = 0; column < line.length(); ++column) {
-            u32 codepoint = line.codepoint(column);
+            u32 code_point = line.code_point(column);
             auto attribute = line.attributes()[column];
             u16 vga_index = (visual_row * 160) + (column * 2);
-            m_current_vga_window[vga_index] = codepoint < 128 ? codepoint : '?';
+            m_current_vga_window[vga_index] = code_point < 128 ? code_point : '?';
             m_current_vga_window[vga_index + 1] = attribute_to_vga(attribute);
         }
         line.set_dirty(false);
@@ -334,7 +339,8 @@ void VirtualConsole::emit(const u8* data, size_t size)
 void VirtualConsole::echo(u8 ch)
 {
     if (should_echo_input()) {
-        on_tty_write(&ch, 1);
+        auto buffer = UserOrKernelBuffer::for_kernel_buffer(&ch);
+        on_tty_write(buffer, 1);
     }
 }
 

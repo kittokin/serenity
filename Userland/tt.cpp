@@ -24,6 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <LibCore/ArgsParser.h>
 #include <mman.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -35,20 +36,36 @@ static int mutex_test();
 static int detached_test();
 static int priority_test();
 static int stack_size_test();
+static int staying_alive_test();
 static int set_stack_test();
 
 int main(int argc, char** argv)
 {
-    if (argc == 2 && *argv[1] == 'm')
+    const char* test_name = "n";
+
+    Core::ArgsParser args_parser;
+    args_parser.set_general_help(
+        "Exercise error-handling and edge-case paths of the execution environment "
+        "(i.e., Kernel or UE) by doing unusual thread-related things.");
+    args_parser.add_positional_argument(test_name, "Test to run (m = mutex, d = detached, p = priority, s = stack size, t = simple thread test, x = set stack, nothing = join race)", "test-name", Core::ArgsParser::Required::No);
+    args_parser.parse(argc, argv);
+
+    if (*test_name == 'm')
         return mutex_test();
-    if (argc == 2 && *argv[1] == 'd')
+    if (*test_name == 'd')
         return detached_test();
-    if (argc == 2 && *argv[1] == 'p')
+    if (*test_name == 'p')
         return priority_test();
-    if (argc == 2 && *argv[1] == 's')
+    if (*test_name == 's')
         return stack_size_test();
-    if (argc == 2 && *argv[1] == 'x')
+    if (*test_name == 't')
+        return staying_alive_test();
+    if (*test_name == 'x')
         return set_stack_test();
+    if (*test_name != 'n') {
+        args_parser.print_usage(stdout, argv[0]);
+        return 1;
+    }
 
     printf("Hello from the first thread!\n");
     pthread_t thread_id;
@@ -116,14 +133,14 @@ int detached_test()
     pthread_attr_t attributes;
     int rc = pthread_attr_init(&attributes);
     if (rc != 0) {
-        printf("pthread_attr_setdetachstate: %s\n", strerror(rc));
+        printf("pthread_attr_init: %s\n", strerror(rc));
         return 1;
     }
 
     int detach_state = 99; // clearly invalid
     rc = pthread_attr_getdetachstate(&attributes, &detach_state);
     if (rc != 0) {
-        printf("pthread_attr_setdetachstate: %s\n", strerror(rc));
+        printf("pthread_attr_getdetachstate: %s\n", strerror(rc));
         return 2;
     }
     printf("Default detach state: %s\n", detach_state == PTHREAD_CREATE_JOINABLE ? "joinable" : "detached");
@@ -145,19 +162,18 @@ int detached_test()
             return nullptr;
         },
         nullptr);
-    if (rc < 0) {
-        perror("pthread_create");
+    if (rc != 0) {
+        printf("pthread_create: %s\n", strerror(rc));
         return 4;
     }
 
     void* ret_val;
-    errno = 0;
     rc = pthread_join(thread_id, &ret_val);
-    if (rc < 0 && errno != EINVAL) {
-        perror("pthread_join");
+    if (rc != 0 && rc != EINVAL) {
+        printf("pthread_join: %s\n", strerror(rc));
         return 5;
     }
-    if (errno != EINVAL) {
+    if (rc != EINVAL) {
         printf("Expected EINVAL! Thread was joinable?\n");
         return 6;
     }
@@ -167,7 +183,7 @@ int detached_test()
 
     rc = pthread_attr_destroy(&attributes);
     if (rc != 0) {
-        printf("pthread_attr_setdetachstate: %s\n", strerror(rc));
+        printf("pthread_attr_destroy: %s\n", strerror(rc));
         return 7;
     }
 
@@ -251,7 +267,7 @@ int stack_size_test()
         printf("pthread_attr_setstacksize: %s\n", strerror(rc));
         return 3;
     }
-    printf("Set thread stack size to 8 MB\n");
+    printf("Set thread stack size to 8 MiB\n");
 
     pthread_t thread_id;
     rc = pthread_create(
@@ -279,6 +295,33 @@ int stack_size_test()
         return 6;
     }
 
+    return 0;
+}
+
+int staying_alive_test()
+{
+    pthread_t thread_id;
+    int rc = pthread_create(
+        &thread_id, nullptr, [](void*) -> void* {
+            printf("I'm the secondary thread :^)\n");
+            sleep(20);
+            printf("Secondary thread is still alive\n");
+            sleep(3520);
+            printf("Secondary thread exiting\n");
+            pthread_exit((void*)0xDEADBEEF);
+            return nullptr;
+        },
+        nullptr);
+    if (rc < 0) {
+        perror("pthread_create");
+        return 1;
+    }
+
+    sleep(1);
+    printf("I'm the main thread :^)\n");
+    sleep(3600);
+
+    printf("Main thread exiting\n");
     return 0;
 }
 

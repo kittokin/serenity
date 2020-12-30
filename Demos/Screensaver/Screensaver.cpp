@@ -25,15 +25,16 @@
  */
 
 #include <LibCore/ElapsedTimer.h>
-#include <LibGfx/Bitmap.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Event.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
-#include <time.h>
+#include <LibGfx/Bitmap.h>
 #include <stdio.h>
+#include <time.h>
 
 #define WIDTH 64
 #define HEIGHT 48
@@ -126,8 +127,7 @@ void Screensaver::draw()
         orientations[rand() % (sizeof(orientations) / sizeof(orientations[0]))],
         m_bitmap->rect(),
         colors[start_color_index],
-        colors[end_color_index]
-    );
+        colors[end_color_index]);
 
     update();
 }
@@ -135,6 +135,21 @@ void Screensaver::draw()
 int main(int argc, char** argv)
 {
     auto app = GUI::Application::construct(argc, argv);
+
+    if (pledge("stdio rpath shared_buffer", nullptr) < 0) {
+        perror("pledge");
+        return 1;
+    }
+
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(nullptr, nullptr) < 0) {
+        perror("unveil");
+        return 1;
+    }
 
     auto window = GUI::Window::construct();
     window->set_double_buffering_enabled(true);
@@ -146,7 +161,9 @@ int main(int argc, char** argv)
     screensaver_window.update();
 
     window->show();
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-screensaver.png"));
+
+    auto app_icon = GUI::Icon::default_icon("app-screensaver");
+    window->set_icon(app_icon.bitmap_for_size(16));
 
     return app->exec();
 }

@@ -32,8 +32,10 @@
 #include <AK/QuickSort.h>
 #include <AK/RefPtr.h>
 #include <LibCore/File.h>
-#include <LibELF/Loader.h>
+#include <LibCoreDump/Reader.h>
+#include <LibELF/Image.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 static void sort_profile_nodes(Vector<NonnullRefPtr<ProfileNode>>& nodes)
 {
@@ -43,6 +45,59 @@ static void sort_profile_nodes(Vector<NonnullRefPtr<ProfileNode>>& nodes)
 
     for (auto& child : nodes)
         child->sort_children();
+}
+
+struct CachedLibData {
+    OwnPtr<MappedFile> file;
+    ELF::Image lib_elf;
+};
+
+static String symbolicate(FlatPtr eip, const ELF::Core::MemoryRegionInfo* region, u32& offset)
+{
+
+    static HashMap<String, OwnPtr<CachedLibData>> cached_libs;
+
+    auto name = region->object_name();
+
+    String path;
+    if (name.contains(".so"))
+        path = String::format("/usr/lib/%s", name.characters());
+    else {
+        path = name;
+    }
+
+    struct stat st;
+    if (stat(path.characters(), &st)) {
+        return {};
+    }
+
+    if (!cached_libs.contains(path)) {
+        auto lib_file = make<MappedFile>(path);
+        if (!lib_file->is_valid())
+            return {};
+        auto image = ELF::Image((const u8*)lib_file->data(), lib_file->size());
+        cached_libs.set(path, make<CachedLibData>(move(lib_file), move(image)));
+    }
+
+    auto lib_data = cached_libs.get(path).value();
+
+    return String::format("[%s] %s", name.characters(), lib_data->lib_elf.symbolicate(eip - region->region_start, &offset).characters());
+}
+
+static String symbolicate_from_coredump(CoreDump::Reader& coredump, u32 ptr, [[maybe_unused]] u32& offset)
+{
+    auto* region = coredump.region_containing((FlatPtr)ptr);
+    if (!region) {
+        dbgln("did not find region for eip: {:p}", ptr);
+        return "??";
+    }
+
+    auto name = symbolicate((FlatPtr)ptr, region, offset);
+    if (name.is_null()) {
+        dbgln("could not symbolicate: {:p}", ptr);
+        return "??";
+    }
+    return name;
 }
 
 Profile::Profile(String executable_path, Vector<Event> events)
@@ -102,7 +157,8 @@ void Profile::rebuild_tree()
             live_allocations.remove(event.ptr);
     }
 
-    for (auto& event : m_events) {
+    for (size_t event_index = 0; event_index < m_events.size(); ++event_index) {
+        auto& event = m_events.at(event_index);
         if (has_timestamp_filter_range()) {
             auto timestamp = event.timestamp;
             if (timestamp < m_timestamp_filter_range_start || timestamp > m_timestamp_filter_range_end)
@@ -115,10 +171,7 @@ void Profile::rebuild_tree()
         if (event.type == "free")
             continue;
 
-        ProfileNode* node = nullptr;
-
-        auto for_each_frame = [&]<typename Callback>(Callback callback)
-        {
+        auto for_each_frame = [&]<typename Callback>(Callback callback) {
             if (!m_inverted) {
                 for (size_t i = 0; i < event.frames.size(); ++i) {
                     if (callback(event.frames.at(i), i == event.frames.size() - 1) == IterationDecision::Break)
@@ -132,26 +185,62 @@ void Profile::rebuild_tree()
             }
         };
 
-        for_each_frame([&](const Frame& frame, bool is_innermost_frame) {
-            auto& symbol = frame.symbol;
-            auto& address = frame.address;
-            auto& offset = frame.offset;
+        if (!m_show_top_functions) {
+            ProfileNode* node = nullptr;
+            for_each_frame([&](const Frame& frame, bool is_innermost_frame) {
+                auto& symbol = frame.symbol;
+                auto& address = frame.address;
+                auto& offset = frame.offset;
 
-            if (symbol.is_empty())
-                return IterationDecision::Break;
+                if (symbol.is_empty())
+                    return IterationDecision::Break;
 
-            if (!node)
-                node = &find_or_create_root(symbol, address, offset, event.timestamp);
-            else
-                node = &node->find_or_create_child(symbol, address, offset, event.timestamp);
+                if (!node)
+                    node = &find_or_create_root(symbol, address, offset, event.timestamp);
+                else
+                    node = &node->find_or_create_child(symbol, address, offset, event.timestamp);
 
-            node->increment_event_count();
-            if (is_innermost_frame) {
-                node->add_event_address(address);
-                node->increment_self_count();
+                node->increment_event_count();
+                if (is_innermost_frame) {
+                    node->add_event_address(address);
+                    node->increment_self_count();
+                }
+                return IterationDecision::Continue;
+            });
+        } else {
+            for (size_t i = 0; i < event.frames.size(); ++i) {
+                ProfileNode* node = nullptr;
+                ProfileNode* root = nullptr;
+                for (size_t j = i; j < event.frames.size(); ++j) {
+                    auto& frame = event.frames.at(j);
+                    auto& symbol = frame.symbol;
+                    auto& address = frame.address;
+                    auto& offset = frame.offset;
+                    if (symbol.is_empty())
+                        break;
+
+                    if (!node) {
+                        node = &find_or_create_root(symbol, address, offset, event.timestamp);
+                        root = node;
+                        root->will_track_seen_events(m_events.size());
+                    } else {
+                        node = &node->find_or_create_child(symbol, address, offset, event.timestamp);
+                    }
+
+                    if (!root->has_seen_event(event_index)) {
+                        root->did_see_event(event_index);
+                        root->increment_event_count();
+                    } else if (node != root) {
+                        node->increment_event_count();
+                    }
+
+                    if (j == event.frames.size() - 1) {
+                        node->add_event_address(address);
+                        node->increment_self_count();
+                    }
+                }
             }
-            return IterationDecision::Continue;
-        });
+        }
 
         ++filtered_event_count;
     }
@@ -163,44 +252,36 @@ void Profile::rebuild_tree()
     m_model->update();
 }
 
-OwnPtr<Profile> Profile::load_from_perfcore_file(const StringView& path)
+Result<NonnullOwnPtr<Profile>, String> Profile::load_from_perfcore_file(const StringView& path)
 {
     auto file = Core::File::construct(path);
-    if (!file->open(Core::IODevice::ReadOnly)) {
-        fprintf(stderr, "Unable to open %s, error: %s\n", path.to_string().characters(), file->error_string());
-        return nullptr;
-    }
+    if (!file->open(Core::IODevice::ReadOnly))
+        return String::formatted("Unable to open {}, error: {}", path, file->error_string());
 
     auto json = JsonValue::from_string(file->read_all());
     ASSERT(json.has_value());
-    if (!json.value().is_object()) {
-        fprintf(stderr, "Invalid perfcore format (not a JSON object)\n");
-        return nullptr;
-    }
+    if (!json.value().is_object())
+        return String { "Invalid perfcore format (not a JSON object)" };
 
     auto& object = json.value().as_object();
     auto executable_path = object.get("executable").to_string();
 
-    MappedFile elf_file(executable_path);
-    if (!elf_file.is_valid()) {
-        fprintf(stderr, "Unable to open executable '%s' for symbolication.\n", executable_path.characters());
-        return nullptr;
-    }
-
-    auto elf_loader = ELF::Loader::create(static_cast<const u8*>(elf_file.data()), elf_file.size());
+    auto coredump = CoreDump::Reader::create(String::formatted("/tmp/profiler_coredumps/{}", object.get("pid").as_u32()));
+    if (!coredump)
+        return String { "Could not open coredump" };
 
     MappedFile kernel_elf_file("/boot/Kernel");
-    RefPtr<ELF::Loader> kernel_elf_loader;
+    OwnPtr<ELF::Image> kernel_elf;
     if (kernel_elf_file.is_valid())
-        kernel_elf_loader = ELF::Loader::create(static_cast<const u8*>(kernel_elf_file.data()), kernel_elf_file.size());
+        kernel_elf = make<ELF::Image>(static_cast<const u8*>(kernel_elf_file.data()), kernel_elf_file.size());
 
     auto events_value = object.get("events");
     if (!events_value.is_array())
-        return nullptr;
+        return String { "Malformed profile (events is not an array)" };
 
     auto& perf_events = events_value.as_array();
     if (perf_events.is_empty())
-        return nullptr;
+        return String { "No events captured (targeted process was never on CPU)" };
 
     Vector<Event> events;
 
@@ -227,13 +308,13 @@ OwnPtr<Profile> Profile::load_from_perfcore_file(const StringView& path)
             String symbol;
 
             if (ptr >= 0xc0000000) {
-                if (kernel_elf_loader) {
-                    symbol = kernel_elf_loader->symbolicate(ptr, &offset);
+                if (kernel_elf) {
+                    symbol = kernel_elf->symbolicate(ptr, &offset);
                 } else {
                     symbol = "??";
                 }
             } else {
-                symbol = elf_loader->symbolicate(ptr, &offset);
+                symbol = symbolicate_from_coredump(*coredump, ptr, offset);
             }
 
             event.frames.append({ symbol, ptr, offset });
@@ -248,7 +329,7 @@ OwnPtr<Profile> Profile::load_from_perfcore_file(const StringView& path)
         events.append(move(event));
     }
 
-    return NonnullOwnPtr<Profile>(NonnullOwnPtr<Profile>::Adopt, *new Profile(executable_path, move(events)));
+    return adopt_own(*new Profile(executable_path, move(events)));
 }
 
 void ProfileNode::sort_children()
@@ -281,6 +362,14 @@ void Profile::set_inverted(bool inverted)
     if (m_inverted == inverted)
         return;
     m_inverted = inverted;
+    rebuild_tree();
+}
+
+void Profile::set_show_top_functions(bool show)
+{
+    if (m_show_top_functions == show)
+        return;
+    m_show_top_functions = show;
     rebuild_tree();
 }
 

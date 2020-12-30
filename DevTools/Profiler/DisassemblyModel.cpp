@@ -27,9 +27,10 @@
 #include "DisassemblyModel.h"
 #include "Profile.h"
 #include <AK/MappedFile.h>
-#include <LibELF/Loader.h>
+#include <LibELF/Image.h>
 #include <LibGUI/Painter.h>
 #include <LibX86/Disassembler.h>
+#include <LibX86/ELFSymbolProvider.h>
 #include <ctype.h>
 #include <stdio.h>
 
@@ -37,7 +38,7 @@ static const Gfx::Bitmap& heat_gradient()
 {
     static RefPtr<Gfx::Bitmap> bitmap;
     if (!bitmap) {
-        bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::RGB32, { 100, 1 });
+        bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::RGB32, { 101, 1 });
         GUI::Painter painter(*bitmap);
         painter.fill_rect_with_gradient(Orientation::Horizontal, bitmap->rect(), Color::from_rgb(0xffc080), Color::from_rgb(0xff3000));
     }
@@ -49,22 +50,6 @@ static Color color_for_percent(int percent)
     ASSERT(percent >= 0 && percent <= 100);
     return heat_gradient().get_pixel(percent, 0);
 }
-
-class ELFSymbolProvider final : public X86::SymbolProvider {
-public:
-    ELFSymbolProvider(ELF::Loader& loader)
-        : m_loader(loader)
-    {
-    }
-
-    virtual String symbolicate(FlatPtr address, u32* offset = nullptr) const
-    {
-        return m_loader.symbolicate(address, offset);
-    }
-
-private:
-    ELF::Loader& m_loader;
-};
 
 DisassemblyModel::DisassemblyModel(Profile& profile, ProfileNode& node)
     : m_profile(profile)
@@ -80,16 +65,16 @@ DisassemblyModel::DisassemblyModel(Profile& profile, ProfileNode& node)
     if (!m_file->is_valid())
         return;
 
-    auto elf_loader = ELF::Loader::create((const u8*)m_file->data(), m_file->size());
+    auto elf = ELF::Image((const u8*)m_file->data(), m_file->size());
 
-    auto symbol = elf_loader->find_symbol(node.address());
+    auto symbol = elf.find_symbol(node.address());
     if (!symbol.has_value())
         return;
     ASSERT(symbol.has_value());
 
     auto view = symbol.value().raw_data();
 
-    ELFSymbolProvider symbol_provider(*elf_loader);
+    X86::ELFSymbolProvider symbol_provider(elf);
     X86::SimpleInstructionStream stream((const u8*)view.characters_without_null_termination(), view.length());
     X86::Disassembler disassembler(stream);
 
@@ -157,36 +142,36 @@ static Optional<ColorPair> color_pair_for(const InstructionData& insn)
     return ColorPair { background, foreground };
 }
 
-GUI::Variant DisassemblyModel::data(const GUI::ModelIndex& index, Role role) const
+GUI::Variant DisassemblyModel::data(const GUI::ModelIndex& index, GUI::ModelRole role) const
 {
     auto& insn = m_instructions[index.row()];
 
-    if (role == Role::BackgroundColor) {
+    if (role == GUI::ModelRole::BackgroundColor) {
         auto colors = color_pair_for(insn);
         if (!colors.has_value())
             return {};
         return colors.value().background;
     }
 
-    if (role == Role::ForegroundColor) {
+    if (role == GUI::ModelRole::ForegroundColor) {
         auto colors = color_pair_for(insn);
         if (!colors.has_value())
             return {};
         return colors.value().foreground;
     }
 
-    if (role == Role::Display) {
+    if (role == GUI::ModelRole::Display) {
         if (index.column() == Column::SampleCount) {
             if (m_profile.show_percentages())
                 return ((float)insn.event_count / (float)m_node.event_count()) * 100.0f;
             return insn.event_count;
         }
         if (index.column() == Column::Address)
-            return String::format("%#08x", insn.address);
+            return String::formatted("{:p}", insn.address);
         if (index.column() == Column::InstructionBytes) {
             StringBuilder builder;
             for (auto ch : insn.bytes) {
-                builder.appendf("%02x ", (u8)ch);
+                builder.appendff("{:02x} ", (u8)ch);
             }
             return builder.to_string();
         }

@@ -66,14 +66,15 @@ public:
         // FIXME: More than 2^20 bytes cannot be generated without refreshing the key.
         ASSERT(n < (1 << 20));
 
-        typename CipherType::CTRMode cipher(m_key, KeySize);
+        typename CipherType::CTRMode cipher(m_key, KeySize, Crypto::Cipher::Intent::Encryption);
 
-        auto wrapped_buffer = ByteBuffer::wrap(buffer, n);
-        m_counter = cipher.key_stream(wrapped_buffer, m_counter).value();
+        Bytes buffer_span { buffer, n };
+        auto counter_span = m_counter.bytes();
+        cipher.key_stream(buffer_span, counter_span, &counter_span);
 
         // Extract a new key from the prng stream.
-
-        m_counter = cipher.key_stream(m_key, m_counter).value();
+        Bytes key_span = m_key.bytes();
+        cipher.key_stream(key_span, counter_span, &counter_span);
     }
 
     template<typename T>
@@ -86,12 +87,12 @@ public:
         m_pools[pool].update(reinterpret_cast<const u8*>(&event_data), sizeof(T));
     }
 
-    bool is_seeded() const
+    [[nodiscard]] bool is_seeded() const
     {
         return m_reseed_number > 0;
     }
 
-    bool is_ready() const
+    [[nodiscard]] bool is_ready() const
     {
         return is_seeded() || m_p0_len >= reseed_threshold;
     }
@@ -126,6 +127,7 @@ class KernelRng : public Lockable<FortunaPRNG<Crypto::Cipher::AESCipher, Crypto:
     AK_MAKE_ETERNAL;
 
 public:
+    KernelRng();
     static KernelRng& the();
 
     void wait_for_entropy();
@@ -133,8 +135,6 @@ public:
     void wake_if_ready();
 
 private:
-    KernelRng();
-
     WaitQueue m_seed_queue;
 };
 

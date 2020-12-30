@@ -38,7 +38,7 @@ SlavePTY::SlavePTY(MasterPTY& master, unsigned index)
     , m_master(master)
     , m_index(index)
 {
-    sprintf(m_tty_name, "/dev/pts/%u", m_index);
+    snprintf(m_tty_name, sizeof(m_tty_name), "/dev/pts/%u", m_index);
     auto process = Process::current();
     set_uid(process->uid());
     set_gid(process->gid());
@@ -54,7 +54,7 @@ SlavePTY::~SlavePTY()
     DevPtsFS::unregister_slave_pty(*this);
 }
 
-StringView SlavePTY::tty_name() const
+String SlavePTY::tty_name() const
 {
     return m_tty_name;
 }
@@ -62,18 +62,25 @@ StringView SlavePTY::tty_name() const
 void SlavePTY::echo(u8 ch)
 {
     if (should_echo_input()) {
-        m_master->on_slave_write(&ch, 1);
+        auto buffer = UserOrKernelBuffer::for_kernel_buffer(&ch);
+        m_master->on_slave_write(buffer, 1);
     }
 }
 
-void SlavePTY::on_master_write(const u8* buffer, ssize_t size)
+void SlavePTY::on_master_write(const UserOrKernelBuffer& buffer, ssize_t size)
 {
-    for (ssize_t i = 0; i < size; ++i)
-        emit(buffer[i]);
+    ssize_t nread = buffer.read_buffered<128>(size, [&](const u8* data, size_t data_size) {
+        for (size_t i = 0; i < data_size; ++i)
+            emit(data[i], false);
+        return (ssize_t)data_size;
+    });
+    if (nread > 0)
+        evaluate_block_conditions();
 }
 
-ssize_t SlavePTY::on_tty_write(const u8* data, ssize_t size)
+ssize_t SlavePTY::on_tty_write(const UserOrKernelBuffer& data, ssize_t size)
 {
+    m_time_of_last_write = kgettimeofday().tv_sec;
     return m_master->on_slave_write(data, size);
 }
 
@@ -89,7 +96,7 @@ bool SlavePTY::can_read(const FileDescription& description, size_t offset) const
     return TTY::can_read(description, offset);
 }
 
-ssize_t SlavePTY::read(FileDescription& description, size_t offset, u8* buffer, ssize_t size)
+KResultOr<size_t> SlavePTY::read(FileDescription& description, size_t offset, UserOrKernelBuffer& buffer, size_t size)
 {
     if (m_master->is_closed())
         return 0;
@@ -100,6 +107,11 @@ KResult SlavePTY::close()
 {
     m_master->notify_slave_closed({});
     return KSuccess;
+}
+
+FileBlockCondition& SlavePTY::block_condition()
+{
+    return m_master->block_condition();
 }
 
 }

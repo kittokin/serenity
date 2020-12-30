@@ -40,7 +40,7 @@ ScrollableWidget::ScrollableWidget()
 
     m_horizontal_scrollbar = add<ScrollBar>(Orientation::Horizontal);
     m_horizontal_scrollbar->set_step(4);
-    m_horizontal_scrollbar->set_big_step(30);
+    m_horizontal_scrollbar->set_page_step(30);
     m_horizontal_scrollbar->on_change = [this](int) {
         did_scroll();
         update();
@@ -61,26 +61,30 @@ void ScrollableWidget::mousewheel_event(MouseEvent& event)
         return;
     }
     // FIXME: The wheel delta multiplier should probably come from... somewhere?
-    vertical_scrollbar().set_value(vertical_scrollbar().value() + event.wheel_delta() * 20);
+    if (event.shift()) {
+        horizontal_scrollbar().set_value(horizontal_scrollbar().value() + event.wheel_delta() * 60);
+    } else {
+        vertical_scrollbar().set_value(vertical_scrollbar().value() + event.wheel_delta() * 20);
+    }
 }
 
 void ScrollableWidget::custom_layout()
 {
     auto inner_rect = frame_inner_rect_for_size(size());
-    int height_wanted_by_horizontal_scrollbar = m_horizontal_scrollbar->is_visible() ? m_horizontal_scrollbar->preferred_size().height() : 0;
-    int width_wanted_by_vertical_scrollbar = m_vertical_scrollbar->is_visible() ? m_vertical_scrollbar->preferred_size().width() : 0;
+    int height_wanted_by_horizontal_scrollbar = m_horizontal_scrollbar->is_visible() ? m_horizontal_scrollbar->min_height() : 0;
+    int width_wanted_by_vertical_scrollbar = m_vertical_scrollbar->is_visible() ? m_vertical_scrollbar->min_width() : 0;
 
     m_vertical_scrollbar->set_relative_rect(
-        inner_rect.right() + 1 - m_vertical_scrollbar->preferred_size().width(),
+        inner_rect.right() + 1 - m_vertical_scrollbar->min_width(),
         inner_rect.top(),
-        m_vertical_scrollbar->preferred_size().width(),
+        m_vertical_scrollbar->min_width(),
         inner_rect.height() - height_wanted_by_horizontal_scrollbar);
 
     m_horizontal_scrollbar->set_relative_rect(
         inner_rect.left(),
-        inner_rect.bottom() + 1 - m_horizontal_scrollbar->preferred_size().height(),
+        inner_rect.bottom() + 1 - m_horizontal_scrollbar->min_height(),
         inner_rect.width() - width_wanted_by_vertical_scrollbar,
-        m_horizontal_scrollbar->preferred_size().height());
+        m_horizontal_scrollbar->min_height());
 
     m_corner_widget->set_visible(m_vertical_scrollbar->is_visible() && m_horizontal_scrollbar->is_visible());
     if (m_corner_widget->is_visible()) {
@@ -97,8 +101,8 @@ void ScrollableWidget::resize_event(ResizeEvent& event)
 
 Gfx::IntSize ScrollableWidget::available_size() const
 {
-    int available_width = frame_inner_rect().width() - m_size_occupied_by_fixed_elements.width() - width_occupied_by_vertical_scrollbar();
-    int available_height = frame_inner_rect().height() - m_size_occupied_by_fixed_elements.height() - height_occupied_by_horizontal_scrollbar();
+    unsigned available_width = max(frame_inner_rect().width() - m_size_occupied_by_fixed_elements.width() - width_occupied_by_vertical_scrollbar(), 0);
+    unsigned available_height = max(frame_inner_rect().height() - m_size_occupied_by_fixed_elements.height() - height_occupied_by_horizontal_scrollbar(), 0);
     return { available_width, available_height };
 }
 
@@ -107,18 +111,20 @@ void ScrollableWidget::update_scrollbar_ranges()
     auto available_size = this->available_size();
 
     int excess_height = max(0, m_content_size.height() - available_size.height());
-    m_vertical_scrollbar->set_range(0, excess_height, available_size.height());
+    m_vertical_scrollbar->set_range(0, excess_height);
+    m_vertical_scrollbar->set_page_step(available_size.height());
 
     if (should_hide_unnecessary_scrollbars())
         m_vertical_scrollbar->set_visible(excess_height > 0);
 
     int excess_width = max(0, m_content_size.width() - available_size.width());
-    m_horizontal_scrollbar->set_range(0, excess_width, available_size.width());
+    m_horizontal_scrollbar->set_range(0, excess_width);
+    m_horizontal_scrollbar->set_page_step(available_size.width());
 
     if (should_hide_unnecessary_scrollbars())
         m_horizontal_scrollbar->set_visible(excess_width > 0);
 
-    m_vertical_scrollbar->set_big_step(visible_content_rect().height() - m_vertical_scrollbar->step());
+    m_vertical_scrollbar->set_page_step(visible_content_rect().height() - m_vertical_scrollbar->step());
 }
 
 void ScrollableWidget::set_content_size(const Gfx::IntSize& size)
@@ -176,14 +182,14 @@ void ScrollableWidget::scroll_into_view(const Gfx::IntRect& rect, bool scroll_ho
     if (scroll_vertically) {
         if (rect.top() < visible_content_rect.top()) {
             m_vertical_scrollbar->set_value(rect.top());
-        } else if (rect.bottom() > visible_content_rect.bottom()) {
+        } else if (rect.top() > visible_content_rect.top() && rect.bottom() > visible_content_rect.bottom()) {
             m_vertical_scrollbar->set_value(rect.bottom() - visible_content_rect.height() + 1);
         }
     }
     if (scroll_horizontally) {
         if (rect.left() < visible_content_rect.left()) {
             m_horizontal_scrollbar->set_value(rect.left());
-        } else if (rect.right() > visible_content_rect.right()) {
+        } else if (rect.left() > visible_content_rect.left() && rect.right() > visible_content_rect.right()) {
             m_horizontal_scrollbar->set_value(rect.right() - visible_content_rect.width() + 1);
         }
     }

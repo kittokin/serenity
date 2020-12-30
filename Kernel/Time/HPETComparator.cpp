@@ -41,21 +41,32 @@ HPETComparator::HPETComparator(u8 number, u8 irq, bool periodic_capable)
     : HardwareTimer(irq)
     , m_periodic(false)
     , m_periodic_capable(periodic_capable)
+    , m_enabled(false)
     , m_comparator_number(number)
 {
+}
+
+void HPETComparator::disable()
+{
+    if (!m_enabled)
+        return;
+    m_enabled = false;
+    HPET::the().disable(*this);
 }
 
 void HPETComparator::set_periodic()
 {
     ASSERT(m_periodic_capable);
-    HPET::the().enable_periodic_interrupt(*this);
     m_periodic = true;
+    m_enabled = true;
+    HPET::the().enable_periodic_interrupt(*this);
 }
 void HPETComparator::set_non_periodic()
 {
     ASSERT(m_periodic_capable);
-    HPET::the().disable_periodic_interrupt(*this);
     m_periodic = false;
+    m_enabled = true;
+    HPET::the().disable_periodic_interrupt(*this);
 }
 
 void HPETComparator::handle_irq(const RegisterState& regs)
@@ -69,7 +80,7 @@ void HPETComparator::set_new_countdown()
 {
     ASSERT_INTERRUPTS_DISABLED();
     ASSERT(m_frequency <= HPET::the().frequency());
-    HPET::the().set_non_periodic_comparator_value(*this, HPET::the().frequency() / m_frequency);
+    HPET::the().update_non_periodic_comparator_value(*this);
 }
 
 size_t HPETComparator::ticks_per_second() const
@@ -79,7 +90,7 @@ size_t HPETComparator::ticks_per_second() const
 
 void HPETComparator::reset_to_default_ticks_per_second()
 {
-    ASSERT(is_capable_of_frequency(OPTIMAL_TICKS_PER_SECOND_RATE));
+    dbg() << "reset_to_default_ticks_per_second";
     m_frequency = OPTIMAL_TICKS_PER_SECOND_RATE;
     if (!is_periodic())
         set_new_countdown();
@@ -89,38 +100,43 @@ void HPETComparator::reset_to_default_ticks_per_second()
 bool HPETComparator::try_to_set_frequency(size_t frequency)
 {
     InterruptDisabler disabler;
-    if (!is_capable_of_frequency(frequency))
+    if (!is_capable_of_frequency(frequency)) {
+        dbg() << "HPETComparator: not cable of frequency: " << frequency;
         return false;
-    disable_irq();
+    }
+
     auto hpet_frequency = HPET::the().frequency();
     ASSERT(frequency <= hpet_frequency);
-#ifdef HPET_COMPARATOR_DEBUG
-    dbg() << "HPET Comparator: Max frequency - " << hpet_frequency << " Hz, want to set " << frequency << " Hz";
-#endif
-    if (is_periodic())
-        HPET::the().set_periodic_comparator_value(*this, hpet_frequency / frequency);
-    else {
-        HPET::the().set_non_periodic_comparator_value(*this, hpet_frequency / frequency);
-        HPET::the().enable(*this);
-    }
     m_frequency = frequency;
-    enable_irq();
+    m_enabled = true;
+
+#ifdef HPET_COMPARATOR_DEBUG
+    dbg() << "HPET Comparator: Max frequency " << hpet_frequency << " Hz, want to set " << frequency << " Hz, periodic: " << is_periodic();
+#endif
+
+    if (is_periodic()) {
+        HPET::the().update_periodic_comparator_value();
+    } else {
+        HPET::the().update_non_periodic_comparator_value(*this);
+    }
+    enable_irq(); // Enable if we haven't already
     return true;
 }
 bool HPETComparator::is_capable_of_frequency(size_t frequency) const
 {
     if (frequency > HPET::the().frequency())
         return false;
-    if ((HPET::the().frequency() % frequency) != 0)
-        return false;
+    // HPET::update_periodic_comparator_value and HPET::update_non_periodic_comparator_value
+    // calculate the best counter based on the desired frequency.
     return true;
 }
 size_t HPETComparator::calculate_nearest_possible_frequency(size_t frequency) const
 {
-    if (frequency >= HPET::the().frequency())
+    if (frequency > HPET::the().frequency())
         return HPET::the().frequency();
-    // FIXME: Use better math here
-    return (frequency + (HPET::the().frequency() % frequency));
+    // HPET::update_periodic_comparator_value and HPET::update_non_periodic_comparator_value
+    // calculate the best counter based on the desired frequency.
+    return frequency;
 }
 
 }

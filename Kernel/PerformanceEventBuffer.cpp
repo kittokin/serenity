@@ -33,7 +33,7 @@
 namespace Kernel {
 
 PerformanceEventBuffer::PerformanceEventBuffer()
-    : m_buffer(KBuffer::create_with_size(4 * MB))
+    : m_buffer(KBuffer::try_create_with_size(4 * MiB))
 {
 }
 
@@ -66,9 +66,8 @@ KResult PerformanceEventBuffer::append(int type, FlatPtr arg1, FlatPtr arg2)
     FlatPtr ebp;
     asm volatile("movl %%ebp, %%eax"
                  : "=a"(ebp));
-    FlatPtr eip;
     auto current_thread = Thread::current();
-    copy_from_user(&eip, (FlatPtr*)&current_thread->get_register_dump_from_stack().eip);
+    auto eip = current_thread->get_register_dump_from_stack().eip;
     Vector<FlatPtr> backtrace;
     {
         SmapDisabler disabler;
@@ -82,7 +81,7 @@ KResult PerformanceEventBuffer::append(int type, FlatPtr arg1, FlatPtr arg2)
         dbg() << "    " << (void*)event.stack[i];
 #endif
 
-    event.timestamp = g_uptime;
+    event.timestamp = TimeManagement::the().uptime_ms();
     at(m_count++) = event;
     return KSuccess;
 }
@@ -90,16 +89,16 @@ KResult PerformanceEventBuffer::append(int type, FlatPtr arg1, FlatPtr arg2)
 PerformanceEvent& PerformanceEventBuffer::at(size_t index)
 {
     ASSERT(index < capacity());
-    auto* events = reinterpret_cast<PerformanceEvent*>(m_buffer.data());
+    auto* events = reinterpret_cast<PerformanceEvent*>(m_buffer->data());
     return events[index];
 }
 
-KBuffer PerformanceEventBuffer::to_json(pid_t pid, const String& executable_path) const
+OwnPtr<KBuffer> PerformanceEventBuffer::to_json(ProcessID pid, const String& executable_path) const
 {
     KBufferBuilder builder;
 
     JsonObjectSerializer object(builder);
-    object.add("pid", pid);
+    object.add("pid", pid.value());
     object.add("executable", executable_path);
 
     auto array = object.add_array("events");

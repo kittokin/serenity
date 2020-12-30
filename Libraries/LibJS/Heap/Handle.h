@@ -55,7 +55,7 @@ private:
 template<class T>
 class Handle {
 public:
-    Handle() {}
+    Handle() { }
 
     static Handle create(T* cell)
     {
@@ -64,6 +64,8 @@ public:
 
     T* cell() { return static_cast<T*>(m_impl->cell()); }
     const T* cell() const { return static_cast<const T*>(m_impl->cell()); }
+
+    bool is_null() const { return m_impl.is_null(); }
 
 private:
     explicit Handle(NonnullRefPtr<HandleImpl> impl)

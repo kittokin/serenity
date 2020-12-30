@@ -26,6 +26,7 @@
 
 #include "MmapRegion.h"
 #include "Emulator.h"
+#include <string.h>
 #include <sys/mman.h>
 
 namespace UserspaceEmulator {
@@ -38,136 +39,186 @@ NonnullOwnPtr<MmapRegion> MmapRegion::create_anonymous(u32 base, u32 size, u32 p
     return region;
 }
 
-NonnullOwnPtr<MmapRegion> MmapRegion::create_file_backed(u32 base, u32 size, u32 prot, int flags, int fd, off_t offset)
+NonnullOwnPtr<MmapRegion> MmapRegion::create_file_backed(u32 base, u32 size, u32 prot, int flags, int fd, off_t offset, String name)
 {
     auto region = adopt_own(*new MmapRegion(base, size, prot));
     region->m_file_backed = true;
-    region->m_data = (u8*)mmap(nullptr, size, prot, flags, fd, offset);
+    if (!name.is_empty()) {
+        name = String::format("%s (Emulated)", name.characters());
+        region->m_name = name;
+    }
+    region->m_data = (u8*)mmap_with_name(nullptr, size, prot, flags, fd, offset, name.is_empty() ? nullptr : name.characters());
     ASSERT(region->m_data != MAP_FAILED);
     return region;
 }
 
 MmapRegion::MmapRegion(u32 base, u32 size, int prot)
     : Region(base, size)
-    , m_prot(prot)
 {
+    set_prot(prot);
+    m_shadow_data = (u8*)malloc(size);
+    memset(m_shadow_data, 1, size);
 }
 
 MmapRegion::~MmapRegion()
 {
+    free(m_shadow_data);
     if (m_file_backed)
         munmap(m_data, size());
     else
         free(m_data);
 }
 
-bool MmapRegion::is_malloc_block() const
-{
-    // FIXME: This is obviously incomplete!
-    //        We should somehow know which mmap regions are malloc blocks.
-    return !m_file_backed;
-}
-
-u8 MmapRegion::read8(FlatPtr offset)
+ValueWithShadow<u8> MmapRegion::read8(FlatPtr offset)
 {
     if (!is_readable()) {
-        warn() << "8-bit read from unreadable MmapRegion @ " << (const void*)(base() + offset);
-        Emulator::the().dump_backtrace();
+        reportln("8-bit read from unreadable MmapRegion @ {:p}", base() + offset);
+        emulator().dump_backtrace();
         TODO();
     }
 
     if (is_malloc_block()) {
-        if (auto* tracer = Emulator::the().malloc_tracer())
-            tracer->audit_read(base() + offset, 1);
+        if (auto* tracer = emulator().malloc_tracer())
+            tracer->audit_read(*this, base() + offset, 1);
     }
 
     ASSERT(offset < size());
-    return *reinterpret_cast<const u8*>(m_data + offset);
+    return { *reinterpret_cast<const u8*>(m_data + offset), *reinterpret_cast<const u8*>(m_shadow_data + offset) };
 }
 
-u16 MmapRegion::read16(u32 offset)
+ValueWithShadow<u16> MmapRegion::read16(u32 offset)
 {
     if (!is_readable()) {
-        warn() << "16-bit from unreadable MmapRegion @ " << (const void*)(base() + offset);
-        Emulator::the().dump_backtrace();
+        reportln("16-bit read from unreadable MmapRegion @ {:p}", base() + offset);
+        emulator().dump_backtrace();
         TODO();
     }
 
     if (is_malloc_block()) {
-        if (auto* tracer = Emulator::the().malloc_tracer())
-            tracer->audit_read(base() + offset, 2);
+        if (auto* tracer = emulator().malloc_tracer())
+            tracer->audit_read(*this, base() + offset, 2);
     }
 
     ASSERT(offset + 1 < size());
-    return *reinterpret_cast<const u16*>(m_data + offset);
+    return { *reinterpret_cast<const u16*>(m_data + offset), *reinterpret_cast<const u16*>(m_shadow_data + offset) };
 }
 
-u32 MmapRegion::read32(u32 offset)
+ValueWithShadow<u32> MmapRegion::read32(u32 offset)
 {
     if (!is_readable()) {
-        warn() << "32-bit read from unreadable MmapRegion @ " << (const void*)(base() + offset);
-        Emulator::the().dump_backtrace();
+        reportln("32-bit read from unreadable MmapRegion @ {:p}", base() + offset);
+        emulator().dump_backtrace();
         TODO();
     }
 
     if (is_malloc_block()) {
-        if (auto* tracer = Emulator::the().malloc_tracer())
-            tracer->audit_read(base() + offset, 4);
+        if (auto* tracer = emulator().malloc_tracer())
+            tracer->audit_read(*this, base() + offset, 4);
     }
 
     ASSERT(offset + 3 < size());
-    return *reinterpret_cast<const u32*>(m_data + offset);
+    return { *reinterpret_cast<const u32*>(m_data + offset), *reinterpret_cast<const u32*>(m_shadow_data + offset) };
 }
 
-void MmapRegion::write8(u32 offset, u8 value)
+ValueWithShadow<u64> MmapRegion::read64(u32 offset)
 {
-    if (!is_writable()) {
-        warn() << "8-bit write to unreadable MmapRegion @ " << (const void*)(base() + offset);
-        Emulator::the().dump_backtrace();
+    if (!is_readable()) {
+        reportln("64-bit read from unreadable MmapRegion @ {:p}", base() + offset);
+        emulator().dump_backtrace();
         TODO();
     }
 
     if (is_malloc_block()) {
-        if (auto* tracer = Emulator::the().malloc_tracer())
-            tracer->audit_write(base() + offset, 1);
+        if (auto* tracer = emulator().malloc_tracer())
+            tracer->audit_read(*this, base() + offset, 8);
+    }
+
+    ASSERT(offset + 7 < size());
+    return { *reinterpret_cast<const u64*>(m_data + offset), *reinterpret_cast<const u64*>(m_shadow_data + offset) };
+}
+
+void MmapRegion::write8(u32 offset, ValueWithShadow<u8> value)
+{
+    if (!is_writable()) {
+        reportln("8-bit write from unwritable MmapRegion @ {:p}", base() + offset);
+        emulator().dump_backtrace();
+        TODO();
+    }
+
+    if (is_malloc_block()) {
+        if (auto* tracer = emulator().malloc_tracer())
+            tracer->audit_write(*this, base() + offset, 1);
     }
 
     ASSERT(offset < size());
-    *reinterpret_cast<u8*>(m_data + offset) = value;
+    *reinterpret_cast<u8*>(m_data + offset) = value.value();
+    *reinterpret_cast<u8*>(m_shadow_data + offset) = value.shadow();
 }
 
-void MmapRegion::write16(u32 offset, u16 value)
+void MmapRegion::write16(u32 offset, ValueWithShadow<u16> value)
 {
     if (!is_writable()) {
-        warn() << "16-bit write to unreadable MmapRegion @ " << (const void*)(base() + offset);
-        Emulator::the().dump_backtrace();
+        reportln("16-bit write from unwritable MmapRegion @ {:p}", base() + offset);
+        emulator().dump_backtrace();
         TODO();
     }
 
     if (is_malloc_block()) {
-        if (auto* tracer = Emulator::the().malloc_tracer())
-            tracer->audit_write(base() + offset, 2);
+        if (auto* tracer = emulator().malloc_tracer())
+            tracer->audit_write(*this, base() + offset, 2);
     }
 
     ASSERT(offset + 1 < size());
-    *reinterpret_cast<u16*>(m_data + offset) = value;
+    *reinterpret_cast<u16*>(m_data + offset) = value.value();
+    *reinterpret_cast<u16*>(m_shadow_data + offset) = value.shadow();
 }
 
-void MmapRegion::write32(u32 offset, u32 value)
+void MmapRegion::write32(u32 offset, ValueWithShadow<u32> value)
 {
     if (!is_writable()) {
-        warn() << "32-bit write to unreadable MmapRegion @ " << (const void*)(base() + offset);
-        Emulator::the().dump_backtrace();
+        reportln("32-bit write from unwritable MmapRegion @ {:p}", base() + offset);
+        emulator().dump_backtrace();
         TODO();
     }
 
     if (is_malloc_block()) {
-        if (auto* tracer = Emulator::the().malloc_tracer())
-            tracer->audit_write(base() + offset, 4);
+        if (auto* tracer = emulator().malloc_tracer())
+            tracer->audit_write(*this, base() + offset, 4);
     }
 
     ASSERT(offset + 3 < size());
-    *reinterpret_cast<u32*>(m_data + offset) = value;
+    ASSERT(m_data != m_shadow_data);
+    *reinterpret_cast<u32*>(m_data + offset) = value.value();
+    *reinterpret_cast<u32*>(m_shadow_data + offset) = value.shadow();
+}
+
+void MmapRegion::write64(u32 offset, ValueWithShadow<u64> value)
+{
+    if (!is_writable()) {
+        reportln("64-bit write from unwritable MmapRegion @ {:p}", base() + offset);
+        emulator().dump_backtrace();
+        TODO();
+    }
+
+    if (is_malloc_block()) {
+        if (auto* tracer = emulator().malloc_tracer())
+            tracer->audit_write(*this, base() + offset, 8);
+    }
+
+    ASSERT(offset + 7 < size());
+    ASSERT(m_data != m_shadow_data);
+    *reinterpret_cast<u64*>(m_data + offset) = value.value();
+    *reinterpret_cast<u64*>(m_shadow_data + offset) = value.shadow();
+}
+
+void MmapRegion::set_prot(int prot)
+{
+    set_readable(prot & PROT_READ);
+    set_writable(prot & PROT_WRITE);
+    set_executable(prot & PROT_EXEC);
+    if (m_file_backed) {
+        mprotect(m_data, size(), prot);
+    }
 }
 
 }

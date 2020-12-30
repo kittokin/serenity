@@ -42,6 +42,8 @@ PurgeableVMObject::PurgeableVMObject(size_t size)
 
 PurgeableVMObject::PurgeableVMObject(const PurgeableVMObject& other)
     : AnonymousVMObject(other)
+    , m_was_purged(other.m_was_purged)
+    , m_volatile(other.m_volatile)
 {
 }
 
@@ -80,9 +82,12 @@ int PurgeableVMObject::purge_impl()
     }
     m_was_purged = true;
 
-    for_each_region([&](auto& region) {
-        region.remap();
-    });
+    if (purged_page_count > 0) {
+        for_each_region([&](auto& region) {
+            if (&region.vmobject() == this)
+                region.remap();
+        });
+    }
 
     return purged_page_count;
 }

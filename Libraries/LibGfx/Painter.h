@@ -58,14 +58,17 @@ public:
     void fill_rect_with_gradient(const IntRect&, Color gradient_start, Color gradient_end);
     void fill_ellipse(const IntRect&, Color);
     void draw_rect(const IntRect&, Color, bool rough = false);
+    void draw_focus_rect(const IntRect&, Color);
     void draw_bitmap(const IntPoint&, const CharacterBitmap&, Color = Color());
     void draw_bitmap(const IntPoint&, const GlyphBitmap&, Color = Color());
+    void draw_scaled_bitmap(const IntRect& dst_rect, const Gfx::Bitmap&, const IntRect& src_rect, float opacity = 1.0f);
     void draw_triangle(const IntPoint&, const IntPoint&, const IntPoint&, Color);
     void draw_ellipse_intersecting(const IntRect&, Color, int thickness = 1);
     void set_pixel(const IntPoint&, Color);
+    void set_pixel(int x, int y, Color color) { set_pixel({ x, y }, color); }
     void draw_line(const IntPoint&, const IntPoint&, Color, int thickness = 1, LineStyle style = LineStyle::Solid);
     void draw_quadratic_bezier_curve(const IntPoint& control_point, const IntPoint&, const IntPoint&, Color, int thickness = 1, LineStyle style = LineStyle::Solid);
-    void draw_scaled_bitmap(const IntRect& dst_rect, const Gfx::Bitmap&, const IntRect& src_rect);
+    void draw_elliptical_arc(const IntPoint& p1, const IntPoint& p2, const IntPoint& center, const FloatPoint& radii, float x_axis_rotation, float theta_1, float theta_delta, Color, int thickness = 1, LineStyle style = LineStyle::Solid);
     void blit(const IntPoint&, const Gfx::Bitmap&, const IntRect& src_rect, float opacity = 1.0f);
     void blit_dimmed(const IntPoint&, const Gfx::Bitmap&, const IntRect& src_rect);
     void blit_brightened(const IntPoint&, const Gfx::Bitmap&, const IntRect& src_rect);
@@ -73,17 +76,24 @@ public:
     void draw_tiled_bitmap(const IntRect& dst_rect, const Gfx::Bitmap&);
     void blit_offset(const IntPoint&, const Gfx::Bitmap&, const IntRect& src_rect, const IntPoint&);
     void blit_scaled(const IntRect&, const Gfx::Bitmap&, const IntRect&, float, float);
+    void blit_disabled(const IntPoint&, const Gfx::Bitmap&, const IntRect&, const Palette&);
     void draw_text(const IntRect&, const StringView&, const Font&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
     void draw_text(const IntRect&, const StringView&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
     void draw_text(const IntRect&, const Utf32View&, const Font&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
     void draw_text(const IntRect&, const Utf32View&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
+    void draw_text(Function<void(const IntRect&, u32)>, const IntRect&, const StringView&, const Font&, TextAlignment = TextAlignment::TopLeft, TextElision = TextElision::None);
+    void draw_text(Function<void(const IntRect&, u32)>, const IntRect&, const Utf8View&, const Font&, TextAlignment = TextAlignment::TopLeft, TextElision = TextElision::None);
+    void draw_text(Function<void(const IntRect&, u32)>, const IntRect&, const Utf32View&, const Font&, TextAlignment = TextAlignment::TopLeft, TextElision = TextElision::None);
     void draw_glyph(const IntPoint&, u32, Color);
     void draw_glyph(const IntPoint&, u32, const Font&, Color);
     void draw_emoji(const IntPoint&, const Gfx::Bitmap&, const Font&);
-    void draw_glyph_or_emoji(const IntPoint&, u32 codepoint, const Font&, Color);
+    void draw_glyph_or_emoji(const IntPoint&, u32 code_point, const Font&, Color);
 
     static void for_each_line_segment_on_bezier_curve(const FloatPoint& control_point, const FloatPoint& p1, const FloatPoint& p2, Function<void(const FloatPoint&, const FloatPoint&)>&);
     static void for_each_line_segment_on_bezier_curve(const FloatPoint& control_point, const FloatPoint& p1, const FloatPoint& p2, Function<void(const FloatPoint&, const FloatPoint&)>&&);
+
+    static void for_each_line_segment_on_elliptical_arc(const FloatPoint& p1, const FloatPoint& p2, const FloatPoint& center, const FloatPoint radii, float x_axis_rotation, float theta_1, float theta_delta, Function<void(const FloatPoint&, const FloatPoint&)>&);
+    static void for_each_line_segment_on_elliptical_arc(const FloatPoint& p1, const FloatPoint& p2, const FloatPoint& center, const FloatPoint radii, float x_axis_rotation, float theta_1, float theta_delta, Function<void(const FloatPoint&, const FloatPoint&)>&&);
 
     void stroke_path(const Path&, Color, int thickness);
 
@@ -98,7 +108,8 @@ public:
 
     enum class DrawOp {
         Copy,
-        Xor
+        Xor,
+        Invert
     };
     void set_draw_op(DrawOp op) { state().draw_op = op; }
     DrawOp draw_op() const { return state().draw_op; }
@@ -123,13 +134,11 @@ public:
 
 protected:
     void set_pixel_with_draw_op(u32& pixel, const Color&);
+    void fill_scanline_with_draw_op(int y, int x, int width, const Color& color);
     void fill_rect_with_draw_op(const IntRect&, Color);
     void blit_with_alpha(const IntPoint&, const Gfx::Bitmap&, const IntRect& src_rect);
     void blit_with_opacity(const IntPoint&, const Gfx::Bitmap&, const IntRect& src_rect, float opacity);
     void draw_pixel(const IntPoint&, Color, int thickness = 1);
-
-    void draw_text_line(const IntRect&, const Utf8View&, const Font&, TextAlignment, Color, TextElision);
-    void draw_text_line(const IntRect&, const Utf32View&, const Font&, TextAlignment, Color, TextElision);
 
     struct State {
         const Font* font;

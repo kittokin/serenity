@@ -31,20 +31,17 @@
 
 static int key_fd;
 
-void wait_for_key()
+static void wait_for_key()
 {
     printf("\033[7m--[ more ]--\033[0m");
     fflush(stdout);
     char dummy;
-    read(key_fd, &dummy, 1);
+    [[maybe_unused]] auto rc = read(key_fd, &dummy, 1);
     printf("\n");
 }
 
-int main(int argc, char** argv)
+int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
 {
-    (void)argc;
-    (void)argv;
-
     if (pledge("stdio rpath tty", nullptr) < 0) {
         perror("pledge");
         return 1;

@@ -37,6 +37,7 @@
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Point.h>
 #include <stdio.h>
 
@@ -62,11 +63,11 @@ int main(int argc, char** argv)
     RefPtr<Gfx::Font> edited_font;
     if (path == nullptr) {
         path = "/tmp/saved.font";
-        edited_font = Gfx::Font::default_font().clone();
+        edited_font = Gfx::FontDatabase::default_font().clone();
     } else {
         edited_font = Gfx::Font::load_from_file(path)->clone();
         if (!edited_font) {
-            String message = String::format("Couldn't load font: %s\n", path);
+            String message = String::formatted("Couldn't load font: {}\n", path);
             GUI::MessageBox::show(nullptr, message, "Font Editor", GUI::MessageBox::Type::Error);
             return 1;
         }
@@ -82,11 +83,11 @@ int main(int argc, char** argv)
         if (font->type() == Gfx::FontTypes::Default)
             font->set_type(Gfx::FontTypes::LatinExtendedA);
 
-        window->set_title(String::format("%s - Font Editor", path.characters()));
+        window->set_title(String::formatted("{} - Font Editor", path));
         auto& font_editor_widget = window->set_main_widget<FontEditorWidget>(path, move(font));
         window->set_rect({ point, { font_editor_widget.preferred_width(), font_editor_widget.preferred_height() } });
     };
-    set_edited_font(path, move(edited_font), { 50, 50 });
+    set_edited_font(path, move(edited_font), window->position());
 
     auto menubar = GUI::MenuBar::construct();
 
@@ -98,18 +99,18 @@ int main(int argc, char** argv)
 
         RefPtr<Gfx::Font> new_font = Gfx::Font::load_from_file(open_path.value())->clone();
         if (!new_font) {
-            String message = String::format("Couldn't load font: %s\n", open_path.value().characters());
+            String message = String::formatted("Couldn't load font: {}\n", open_path.value());
             GUI::MessageBox::show(window, message, "Font Editor", GUI::MessageBox::Type::Error);
             return;
         }
 
         set_edited_font(open_path.value(), move(new_font), window->position());
     }));
-    app_menu.add_action(GUI::Action::create("Save", { Mod_Ctrl, Key_S }, Gfx::Bitmap::load_from_file("/res/icons/16x16/save.png"), [&](auto&) {
+    app_menu.add_action(GUI::CommonActions::make_save_action([&](auto&) {
         FontEditorWidget* editor = static_cast<FontEditorWidget*>(window->main_widget());
         editor->save_as(editor->path());
     }));
-    app_menu.add_action(GUI::Action::create("Save as...", { Mod_Ctrl | Mod_Shift, Key_S }, Gfx::Bitmap::load_from_file("/res/icons/16x16/save.png"), [&](auto&) {
+    app_menu.add_action(GUI::CommonActions::make_save_as_action([&](auto&) {
         FontEditorWidget* editor = static_cast<FontEditorWidget*>(window->main_widget());
         LexicalPath lexical_path(editor->path());
         Optional<String> save_path = GUI::FilePicker::get_save_filepath(window, lexical_path.title(), lexical_path.extension());
@@ -117,7 +118,7 @@ int main(int argc, char** argv)
             return;
 
         if (editor->save_as(save_path.value()))
-            window->set_title(String::format("%s - Font Editor", save_path.value().characters()));
+            window->set_title(String::formatted("{} - Font Editor", save_path.value()));
     }));
     app_menu.add_separator();
     app_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2020, Hüseyin Aslıtürk <asliturk@hotmail.com>
+ * Copyright (c) 2020, Hüseyin Aslıtürk <asliturk@hotmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,6 +29,7 @@
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
 #include <stdio.h>
 
@@ -38,10 +39,10 @@ public:
     UserNameWidget()
     {
         m_username = getlogin();
-        m_username_width = Gfx::Font::default_bold_font().width(m_username);
+        m_username_width = Gfx::FontDatabase::default_bold_font().width(m_username);
     }
 
-    virtual ~UserNameWidget() override {}
+    virtual ~UserNameWidget() override { }
 
     int get_width()
     {
@@ -55,7 +56,7 @@ private:
     {
         GUI::Painter painter(*this);
         painter.fill_rect(event.rect(), palette().window());
-        painter.draw_text(event.rect(), m_username, Gfx::Font::default_bold_font(), Gfx::TextAlignment::Center, palette().window_text());
+        painter.draw_text(event.rect(), m_username, Gfx::FontDatabase::default_bold_font(), Gfx::TextAlignment::Center, palette().window_text());
     }
 
     String m_username;
@@ -69,12 +70,14 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
+    auto app = GUI::Application::construct(argc, argv);
+
+    if (pledge("stdio shared_buffer rpath", nullptr) < 0) {
+        perror("pledge");
         return 1;
     }
 
-    if (unveil("/tmp", "rwc") < 0) {
+    if (unveil("/res", "r") < 0) {
         perror("unveil");
         return 1;
     }
@@ -86,8 +89,6 @@ int main(int argc, char** argv)
 
     unveil(nullptr, nullptr);
 
-    auto app = GUI::Application::construct(argc, argv);
-
     auto window = GUI::Window::construct();
     window->set_title("UserName");
     window->set_window_type(GUI::WindowType::MenuApplet);
@@ -95,11 +96,6 @@ int main(int argc, char** argv)
     auto& widget = window->set_main_widget<UserNameWidget>();
     window->resize(widget.get_width(), 16);
     window->show();
-
-    if (pledge("stdio shared_buffer rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
 
     return app->exec();
 }

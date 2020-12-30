@@ -37,12 +37,13 @@ enum class SyntaxLanguage {
     PlainText,
     Cpp,
     JavaScript,
-    INI
+    INI,
+    Shell,
 };
 
 struct TextStyle {
-    Color color;
-    const Gfx::Font* font { nullptr };
+    const Color color;
+    const bool bold { false };
 };
 
 class SyntaxHighlighter {
@@ -64,7 +65,7 @@ public:
     void cursor_did_change();
 
 protected:
-    SyntaxHighlighter() {}
+    SyntaxHighlighter() { }
 
     WeakPtr<TextEditor> m_editor;
 

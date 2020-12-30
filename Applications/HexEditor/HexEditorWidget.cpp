@@ -33,7 +33,6 @@
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/FilePicker.h>
-#include <LibGUI/FontDatabase.h>
 #include <LibGUI/InputBox.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/MenuBar.h>
@@ -54,11 +53,11 @@ HexEditorWidget::HexEditorWidget()
     m_editor = add<HexEditor>();
 
     m_editor->on_status_change = [this](int position, HexEditor::EditMode edit_mode, int selection_start, int selection_end) {
-        m_statusbar->set_text(0, String::format("Offset: %8X", position));
-        m_statusbar->set_text(1, String::format("Edit Mode: %s", edit_mode == HexEditor::EditMode::Hex ? "Hex" : "Text"));
-        m_statusbar->set_text(2, String::format("Selection Start: %d", selection_start));
-        m_statusbar->set_text(3, String::format("Selection End: %d", selection_end));
-        m_statusbar->set_text(4, String::format("Selected Bytes: %d", abs(selection_end - selection_start) + 1));
+        m_statusbar->set_text(0, String::formatted("Offset: {:#08X}", position));
+        m_statusbar->set_text(1, String::formatted("Edit Mode: {}", edit_mode == HexEditor::EditMode::Hex ? "Hex" : "Text"));
+        m_statusbar->set_text(2, String::formatted("Selection Start: {}", selection_start));
+        m_statusbar->set_text(3, String::formatted("Selection End: {}", selection_end));
+        m_statusbar->set_text(4, String::formatted("Selected Bytes: {}", abs(selection_end - selection_start) + 1));
     };
 
     m_editor->on_change = [this] {
@@ -72,7 +71,7 @@ HexEditorWidget::HexEditorWidget()
 
     m_new_action = GUI::Action::create("New", { Mod_Ctrl, Key_N }, Gfx::Bitmap::load_from_file("/res/icons/16x16/new.png"), [this](const GUI::Action&) {
         if (m_document_dirty) {
-            if (GUI::MessageBox::show(window(), "Save Document First?", "Warning", GUI::MessageBox::Type::Warning, GUI::MessageBox::InputType::OKCancel) != GUI::Dialog::ExecResult::ExecOK)
+            if (GUI::MessageBox::show(window(), "Save changes to current file first?", "Warning", GUI::MessageBox::Type::Warning, GUI::MessageBox::InputType::OKCancel) != GUI::Dialog::ExecResult::ExecOK)
                 return;
             m_save_action->activate();
         }
@@ -100,7 +99,7 @@ HexEditorWidget::HexEditorWidget()
         open_file(open_path.value());
     });
 
-    m_save_action = GUI::Action::create("Save", { Mod_Ctrl, Key_S }, Gfx::Bitmap::load_from_file("/res/icons/16x16/save.png"), [&](const GUI::Action&) {
+    m_save_action = GUI::CommonActions::make_save_action([&](auto&) {
         if (!m_path.is_empty()) {
             if (!m_editor->write_to_file(m_path)) {
                 GUI::MessageBox::show(window(), "Unable to save file.\n", "Error", GUI::MessageBox::Type::Error);
@@ -114,7 +113,7 @@ HexEditorWidget::HexEditorWidget()
         m_save_as_action->activate();
     });
 
-    m_save_as_action = GUI::Action::create("Save as...", { Mod_Ctrl | Mod_Shift, Key_S }, Gfx::Bitmap::load_from_file("/res/icons/16x16/save.png"), [this](const GUI::Action&) {
+    m_save_as_action = GUI::CommonActions::make_save_as_action([&](auto&) {
         Optional<String> save_path = GUI::FilePicker::get_save_filepath(window(), m_name.is_null() ? "Untitled" : m_name, m_extension.is_null() ? "bin" : m_extension);
         if (!save_path.has_value())
             return;
@@ -126,7 +125,7 @@ HexEditorWidget::HexEditorWidget()
 
         m_document_dirty = false;
         set_path(LexicalPath(save_path.value()));
-        dbg() << "Wrote document to " << save_path.value();
+        dbgln("Wrote document to {}", save_path.value());
     });
 
     auto menubar = GUI::MenuBar::construct();
@@ -227,7 +226,7 @@ void HexEditorWidget::open_file(const String& path)
 {
     auto file = Core::File::construct(path);
     if (!file->open(Core::IODevice::ReadOnly)) {
-        GUI::MessageBox::show(window(), String::format("Opening \"%s\" failed: %s", path.characters(), strerror(errno)), "Error", GUI::MessageBox::Type::Error);
+        GUI::MessageBox::show(window(), String::formatted("Opening \"{}\" failed: {}", path, strerror(errno)), "Error", GUI::MessageBox::Type::Error);
         return;
     }
 

@@ -37,8 +37,8 @@ namespace AK {
 
 class JsonObject {
 public:
-    JsonObject() {}
-    ~JsonObject() {}
+    JsonObject() { }
+    ~JsonObject() { }
 
     JsonObject(const JsonObject& other)
         : m_order(other.m_order)
@@ -100,8 +100,9 @@ public:
 
     void set(const String& key, JsonValue value)
     {
+        if (m_members.set(key, move(value)) == HashSetResult::ReplacedExistingEntry)
+            m_order.remove(m_order.find_first_index(key).value());
         m_order.append(key);
-        m_members.set(key, move(value));
     }
 
     template<typename Callback>
@@ -111,6 +112,15 @@ public:
             auto property = m_order[i];
             callback(property, m_members.get(property).value());
         }
+    }
+
+    bool remove(const String& key)
+    {
+        if (m_members.remove(key)) {
+            m_order.remove(m_order.find_first_index(key).value());
+            return true;
+        }
+        return false;
     }
 
     template<typename Builder>
@@ -148,33 +158,8 @@ inline void JsonValue::serialize(Builder& builder) const
 {
     switch (m_type) {
     case Type::String: {
-        auto size = m_value.as_string->length();
         builder.append("\"");
-        for (size_t i = 0; i < size; i++) {
-            char ch = m_value.as_string->characters()[i];
-            switch (ch) {
-            case '\e':
-                builder.append("\\u001B");
-                break;
-            case '\b':
-                builder.append("\\b");
-                break;
-            case '\n':
-                builder.append("\\n");
-                break;
-            case '\t':
-                builder.append("\\t");
-                break;
-            case '\"':
-                builder.append("\\\"");
-                break;
-            case '\\':
-                builder.append("\\\\");
-                break;
-            default:
-                builder.appendf("%c", ch);
-            }
-        }
+        builder.append_escaped_for_json({ m_value.as_string->characters(), m_value.as_string->length() });
         builder.append("\"");
     } break;
     case Type::Array:
@@ -192,16 +177,16 @@ inline void JsonValue::serialize(Builder& builder) const
         break;
 #endif
     case Type::Int32:
-        builder.appendf("%d", as_i32());
+        builder.appendff("{}", as_i32());
         break;
     case Type::Int64:
-        builder.appendf("%lld", as_i64());
+        builder.appendff("{}", as_i64());
         break;
     case Type::UnsignedInt32:
-        builder.appendf("%u", as_u32());
+        builder.appendff("{}", as_u32());
         break;
     case Type::UnsignedInt64:
-        builder.appendf("%llu", as_u64());
+        builder.appendff("{}", as_u64());
         break;
     case Type::Null:
         builder.append("null");

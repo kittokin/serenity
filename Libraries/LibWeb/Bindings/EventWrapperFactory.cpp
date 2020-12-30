@@ -25,15 +25,16 @@
  */
 
 #include <LibWeb/Bindings/EventWrapper.h>
+#include <LibWeb/Bindings/EventWrapperFactory.h>
 #include <LibWeb/Bindings/MouseEventWrapper.h>
 
 namespace Web {
 namespace Bindings {
 
-EventWrapper* wrap(JS::GlobalObject& global_object, Event& event)
+EventWrapper* wrap(JS::GlobalObject& global_object, DOM::Event& event)
 {
     if (event.is_mouse_event())
-        return static_cast<MouseEventWrapper*>(wrap_impl(global_object, static_cast<MouseEvent&>(event)));
+        return static_cast<MouseEventWrapper*>(wrap_impl(global_object, static_cast<UIEvents::MouseEvent&>(event)));
     return static_cast<EventWrapper*>(wrap_impl(global_object, event));
 }
 

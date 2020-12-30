@@ -25,6 +25,7 @@
  */
 
 #include <AK/HashMap.h>
+#include <AK/NumberFormat.h>
 #include <AK/QuickSort.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
@@ -50,11 +51,16 @@
 static int do_file_system_object_long(const char* path);
 static int do_file_system_object_short(const char* path);
 
+static bool flag_classify = false;
 static bool flag_colorize = false;
 static bool flag_long = false;
 static bool flag_show_dotfiles = false;
+static bool flag_show_almost_all_dotfiles = false;
+static bool flag_ignore_backups = false;
+static bool flag_list_directories_only = false;
 static bool flag_show_inode = false;
 static bool flag_print_numeric = false;
+static bool flag_hide_group = false;
 static bool flag_human_readable = false;
 static bool flag_sort_by_timestamp = false;
 static bool flag_reverse_sort = false;
@@ -95,17 +101,26 @@ int main(int argc, char** argv)
     Vector<const char*> paths;
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("List files in a directory.");
     args_parser.add_option(flag_show_dotfiles, "Show dotfiles", "all", 'a');
+    args_parser.add_option(flag_show_almost_all_dotfiles, "Do not list implied . and .. directories", nullptr, 'A');
+    args_parser.add_option(flag_ignore_backups, "Do not list implied entries ending with ~", "--ignore-backups", 'B');
+    args_parser.add_option(flag_list_directories_only, "List directories themselves, not their contents", "directory", 'd');
     args_parser.add_option(flag_long, "Display long info", "long", 'l');
     args_parser.add_option(flag_sort_by_timestamp, "Sort files by timestamp", nullptr, 't');
     args_parser.add_option(flag_reverse_sort, "Reverse sort order", "reverse", 'r');
+    args_parser.add_option(flag_classify, "Append a file type indicator to entries", "classify", 'F');
     args_parser.add_option(flag_colorize, "Use pretty colors", nullptr, 'G');
     args_parser.add_option(flag_show_inode, "Show inode ids", "inode", 'i');
     args_parser.add_option(flag_print_numeric, "In long format, display numeric UID/GID", "numeric-uid-gid", 'n');
+    args_parser.add_option(flag_hide_group, "In long format, do not show group information", nullptr, 'o');
     args_parser.add_option(flag_human_readable, "Print human-readable sizes", "human-readable", 'h');
     args_parser.add_option(flag_disable_hyperlinks, "Disable hyperlinks", "no-hyperlinks", 'K');
     args_parser.add_positional_argument(paths, "Directory to list", "path", Core::ArgsParser::Required::No);
     args_parser.parse(argc, argv);
+
+    if (flag_show_almost_all_dotfiles)
+        flag_show_dotfiles = true;
 
     if (flag_long) {
         setpwent();
@@ -137,14 +152,14 @@ int main(int argc, char** argv)
     return status;
 }
 
-int print_escaped(const char* name)
+static int print_escaped(const char* name)
 {
     int printed = 0;
 
     Utf8View utf8_name(name);
     if (utf8_name.validate()) {
         printf("%s", name);
-        return utf8_name.length_in_codepoints();
+        return utf8_name.length();
     }
 
     for (int i = 0; name[i] != '\0'; i++) {
@@ -172,7 +187,7 @@ static String& hostname()
     return s_hostname;
 }
 
-size_t print_name(const struct stat& st, const String& name, const char* path_for_link_resolution, const char* path_for_hyperlink)
+static size_t print_name(const struct stat& st, const String& name, const char* path_for_link_resolution, const char* path_for_hyperlink)
 {
     if (!flag_disable_hyperlinks) {
         if (auto* full_path = realpath(path_for_hyperlink, nullptr)) {
@@ -193,6 +208,8 @@ size_t print_name(const struct stat& st, const String& name, const char* path_fo
             begin_color = "\033[42;30;1m";
         else if (st.st_mode & S_ISUID)
             begin_color = "\033[41;1m";
+        else if (st.st_mode & S_ISGID)
+            begin_color = "\033[43;1m";
         else if (S_ISLNK(st.st_mode))
             begin_color = "\033[36;1m";
         else if (S_ISDIR(st.st_mode))
@@ -216,12 +233,15 @@ size_t print_name(const struct stat& st, const String& name, const char* path_fo
                 nprinted += printf(" -> ") + print_escaped(link_destination.characters());
             }
         } else {
-            nprinted += printf("@");
+            if (flag_classify)
+                nprinted += printf("@");
         }
     } else if (S_ISDIR(st.st_mode)) {
-        nprinted += printf("/");
+        if (flag_classify)
+            nprinted += printf("/");
     } else if (st.st_mode & 0111) {
-        nprinted += printf("*");
+        if (flag_classify)
+            nprinted += printf("*");
     }
 
     if (!flag_disable_hyperlinks) {
@@ -231,26 +251,7 @@ size_t print_name(const struct stat& st, const String& name, const char* path_fo
     return nprinted;
 }
 
-// FIXME: Remove this hackery once printf() supports floats.
-// FIXME: Also, we should probably round the sizes in ls -lh output.
-static String number_string_with_one_decimal(float number, const char* suffix)
-{
-    float decimals = number - (int)number;
-    return String::format("%d.%d%s", (int)number, (int)(decimals * 10), suffix);
-}
-
-static String human_readable_size(size_t size)
-{
-    if (size < 1 * KB)
-        return String::number(size);
-    if (size < 1 * MB)
-        return number_string_with_one_decimal((float)size / (float)KB, "K");
-    if (size < 1 * GB)
-        return number_string_with_one_decimal((float)size / (float)MB, "M");
-    return number_string_with_one_decimal((float)size / (float)GB, "G");
-}
-
-bool print_filesystem_object(const String& path, const String& name, const struct stat& st)
+static bool print_filesystem_object(const String& path, const String& name, const struct stat& st)
 {
     if (flag_show_inode)
         printf("%08u ", st.st_ino);
@@ -288,16 +289,19 @@ bool print_filesystem_object(const String& path, const String& name, const struc
         printf("%c", st.st_mode & S_IXOTH ? 'x' : '-');
 
     auto username = users.get(st.st_uid);
-    auto groupname = groups.get(st.st_gid);
     if (!flag_print_numeric && username.has_value()) {
         printf(" %7s", username.value().characters());
     } else {
         printf(" %7u", st.st_uid);
     }
-    if (!flag_print_numeric && groupname.has_value()) {
-        printf(" %7s", groupname.value().characters());
-    } else {
-        printf(" %7u", st.st_gid);
+
+    if (!flag_hide_group) {
+        auto groupname = groups.get(st.st_gid);
+        if (!flag_print_numeric && groupname.has_value()) {
+            printf(" %7s", groupname.value().characters());
+        } else {
+            printf(" %7u", st.st_gid);
+        }
     }
 
     if (S_ISCHR(st.st_mode) || S_ISBLK(st.st_mode)) {
@@ -318,9 +322,28 @@ bool print_filesystem_object(const String& path, const String& name, const struc
     return true;
 }
 
-int do_file_system_object_long(const char* path)
+static int do_file_system_object_long(const char* path)
 {
-    Core::DirIterator di(path, !flag_show_dotfiles ? Core::DirIterator::SkipDots : Core::DirIterator::Flags::NoFlags);
+    if (flag_list_directories_only) {
+        struct stat stat;
+        int rc = lstat(path, &stat);
+        if (rc < 0) {
+            perror("lstat");
+            memset(&stat, 0, sizeof(stat));
+        }
+        if (print_filesystem_object(path, path, stat))
+            return 0;
+        return 2;
+    }
+
+    auto flags = Core::DirIterator::SkipDots;
+    if (flag_show_dotfiles)
+        flags = Core::DirIterator::Flags::NoFlags;
+    if (flag_show_almost_all_dotfiles)
+        flags = Core::DirIterator::SkipParentAndBaseDir;
+
+    Core::DirIterator di(path, flags);
+
     if (di.has_error()) {
         if (di.error() == ENOTDIR) {
             struct stat stat;
@@ -348,8 +371,10 @@ int do_file_system_object_long(const char* path)
         FileMetadata metadata;
         metadata.name = di.next_path();
         ASSERT(!metadata.name.is_empty());
-        if (metadata.name[0] == '.' && !flag_show_dotfiles)
+
+        if (metadata.name.ends_with('~') && flag_ignore_backups && metadata.name != path)
             continue;
+
         StringBuilder builder;
         builder.append(path);
         builder.append('/');
@@ -383,7 +408,7 @@ int do_file_system_object_long(const char* path)
     return 0;
 }
 
-bool print_filesystem_object_short(const char* path, const char* name, size_t* nprinted)
+static bool print_filesystem_object_short(const char* path, const char* name, size_t* nprinted)
 {
     struct stat st;
     int rc = lstat(path, &st);
@@ -392,13 +417,31 @@ bool print_filesystem_object_short(const char* path, const char* name, size_t* n
         return false;
     }
 
+    if (flag_show_inode)
+        printf("%08u ", st.st_ino);
+
     *nprinted = print_name(st, name, nullptr, path);
     return true;
 }
 
 int do_file_system_object_short(const char* path)
 {
-    Core::DirIterator di(path, !flag_show_dotfiles ? Core::DirIterator::SkipDots : Core::DirIterator::Flags::NoFlags);
+    if (flag_list_directories_only) {
+        size_t nprinted = 0;
+        bool status = print_filesystem_object_short(path, path, &nprinted);
+        printf("\n");
+        if (status)
+            return 0;
+        return 2;
+    }
+
+    auto flags = Core::DirIterator::SkipDots;
+    if (flag_show_dotfiles)
+        flags = Core::DirIterator::Flags::NoFlags;
+    if (flag_show_almost_all_dotfiles)
+        flags = Core::DirIterator::SkipParentAndBaseDir;
+
+    Core::DirIterator di(path, flags);
     if (di.has_error()) {
         if (di.error() == ENOTDIR) {
             size_t nprinted = 0;
@@ -416,6 +459,10 @@ int do_file_system_object_short(const char* path)
     size_t longest_name = 0;
     while (di.has_next()) {
         String name = di.next_path();
+
+        if (name.ends_with('~') && flag_ignore_backups && name != path)
+            continue;
+
         names.append(name);
         if (names.last().length() > longest_name)
             longest_name = name.length();
@@ -439,7 +486,7 @@ int do_file_system_object_short(const char* path)
         // The offset must be at least 2 because:
         // - With each file an additional char is printed e.g. '@','*'.
         // - Each filename must be separated by a space.
-        size_t column_width = longest_name + (offset > 0 ? offset : 2);
+        size_t column_width = longest_name + max(offset, 2);
         printed_on_row += column_width;
 
         for (size_t j = nprinted; i != (names.size() - 1) && j < column_width; ++j)

@@ -39,6 +39,7 @@ void GeminiJob::start()
 {
     ASSERT(!m_socket);
     m_socket = TLS::TLSv12::construct(this);
+    m_socket->set_root_certificates(m_override_ca_certificates ? *m_override_ca_certificates : DefaultRootCACertificates::the().certificates());
     m_socket->on_tls_connected = [this] {
 #ifdef GEMINIJOB_DEBUG
         dbg() << "GeminiJob: on_connected callback";
@@ -62,6 +63,10 @@ void GeminiJob::start()
     };
     m_socket->on_tls_finished = [this] {
         finish_up();
+    };
+    m_socket->on_tls_certificate_request = [this](auto&) {
+        if (on_certificate_requested)
+            on_certificate_requested(*this);
     };
     bool success = ((TLS::TLSv12&)*m_socket).connect(m_request.url().host(), m_request.url().port());
     if (!success) {
@@ -89,6 +94,15 @@ void GeminiJob::read_while_data_available(Function<IterationDecision()> read)
     }
 }
 
+void GeminiJob::set_certificate(String certificate, String private_key)
+{
+    if (!m_socket->add_client_key(certificate.bytes(), private_key.bytes())) {
+        dbg() << "LibGemini: Failed to set a client certificate";
+        // FIXME: Do something about this failure
+        ASSERT_NOT_REACHED();
+    }
+}
+
 void GeminiJob::register_on_ready_to_read(Function<void()> callback)
 {
     m_socket->on_tls_ready_to_read = [callback = move(callback)](auto&) {
@@ -108,7 +122,7 @@ bool GeminiJob::can_read_line() const
     return m_socket->can_read_line();
 }
 
-ByteBuffer GeminiJob::read_line(size_t size)
+String GeminiJob::read_line(size_t size)
 {
     return m_socket->read_line(size);
 }
@@ -128,9 +142,9 @@ bool GeminiJob::eof() const
     return m_socket->eof();
 }
 
-bool GeminiJob::write(const ByteBuffer& data)
+bool GeminiJob::write(ReadonlyBytes bytes)
 {
-    return m_socket->write(data);
+    return m_socket->write(bytes);
 }
 
 }

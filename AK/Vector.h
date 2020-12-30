@@ -28,9 +28,12 @@
 
 #include <AK/Assertions.h>
 #include <AK/Forward.h>
+#include <AK/Iterator.h>
 #include <AK/Optional.h>
+#include <AK/Span.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Traits.h>
+#include <AK/TypedTransfer.h>
 #include <AK/kmalloc.h>
 
 // NOTE: We can't include <initializer_list> during the toolchain bootstrap,
@@ -46,94 +49,11 @@
 
 namespace AK {
 
-template<typename VectorType, typename ElementType>
-class VectorIterator {
-public:
-    bool operator!=(const VectorIterator& other) const { return m_index != other.m_index; }
-    bool operator==(const VectorIterator& other) const { return m_index == other.m_index; }
-    bool operator<(const VectorIterator& other) const { return m_index < other.m_index; }
-    bool operator>(const VectorIterator& other) const { return m_index > other.m_index; }
-    bool operator>=(const VectorIterator& other) const { return m_index >= other.m_index; }
-    ALWAYS_INLINE VectorIterator& operator++()
-    {
-        ++m_index;
-        return *this;
-    }
-    VectorIterator& operator--()
-    {
-        --m_index;
-        return *this;
-    }
-    VectorIterator operator-(size_t value) { return { m_vector, m_index - value }; }
-    VectorIterator operator+(size_t value) { return { m_vector, m_index + value }; }
-    VectorIterator& operator=(const VectorIterator& other)
-    {
-        m_index = other.m_index;
-        return *this;
-    }
-    ALWAYS_INLINE ElementType& operator*() { return m_vector[m_index]; }
-    size_t operator-(const VectorIterator& other) { return m_index - other.m_index; }
-
-    bool is_end() const { return m_index == m_vector.size(); }
-    size_t index() const { return m_index; }
-
-private:
-    friend VectorType;
-    VectorIterator(VectorType& vector, size_t index)
-        : m_vector(vector)
-        , m_index(index)
-    {
-    }
-    VectorType& m_vector;
-    size_t m_index { 0 };
-};
-
-template<typename T>
-class TypedTransfer {
-public:
-    static void move(T* destination, T* source, size_t count)
-    {
-        if (!count)
-            return;
-        if constexpr (Traits<T>::is_trivial()) {
-            __builtin_memmove(destination, source, count * sizeof(T));
-            return;
-        }
-        for (size_t i = 0; i < count; ++i)
-            new (&destination[i]) T(AK::move(source[i]));
-    }
-
-    static void copy(T* destination, const T* source, size_t count)
-    {
-        if (!count)
-            return;
-        if constexpr (Traits<T>::is_trivial()) {
-            __builtin_memmove(destination, source, count * sizeof(T));
-            return;
-        }
-        for (size_t i = 0; i < count; ++i)
-            new (&destination[i]) T(source[i]);
-    }
-
-    static bool compare(const T* a, const T* b, size_t count)
-    {
-        if (!count)
-            return true;
-
-        if constexpr (Traits<T>::is_trivial())
-            return !__builtin_memcmp(a, b, count * sizeof(T));
-
-        for (size_t i = 0; i < count; ++i) {
-            if (a[i] != b[i])
-                return false;
-        }
-        return true;
-    }
-};
-
 template<typename T, size_t inline_capacity>
 class Vector {
 public:
+    using value_type = T;
+
     Vector()
         : m_capacity(inline_capacity)
     {
@@ -186,6 +106,9 @@ public:
         m_size = other.size();
     }
 
+    Span<T> span() { return { data(), size() }; }
+    Span<const T> span() const { return { data(), size() }; }
+
     // FIXME: What about assigning from a vector with lower inline capacity?
     Vector& operator=(Vector&& other)
     {
@@ -226,22 +149,21 @@ public:
         m_size = 0;
     }
 
-    bool operator==(const Vector& other) const
+    template<typename V>
+    bool operator==(const V& other) const
     {
-        if (m_size != other.m_size)
+        if (m_size != other.size())
             return false;
         return TypedTransfer<T>::compare(data(), other.data(), size());
     }
 
-    bool operator!=(const Vector& other) const
-    {
-        return !(*this == other);
-    }
+    operator Span<T>() { return span(); }
+    operator Span<const T>() const { return span(); }
 
     bool contains_slow(const T& value) const
     {
         for (size_t i = 0; i < size(); ++i) {
-            if (at(i) == value)
+            if (Traits<T>::equals(at(i), value))
                 return true;
         }
         return false;
@@ -415,14 +337,37 @@ public:
     }
 
     template<typename Callback>
-    void remove_first_matching(Callback callback)
+    Optional<T> first_matching(Callback callback)
+    {
+        for (size_t i = 0; i < size(); ++i) {
+            if (callback(at(i))) {
+                return at(i);
+            }
+        }
+        return {};
+    }
+
+    template<typename Callback>
+    Optional<T> last_matching(Callback callback)
+    {
+        for (ssize_t i = size() - 1; i >= 0; --i) {
+            if (callback(at(i))) {
+                return at(i);
+            }
+        }
+        return {};
+    }
+
+    template<typename Callback>
+    bool remove_first_matching(Callback callback)
     {
         for (size_t i = 0; i < size(); ++i) {
             if (callback(at(i))) {
                 remove(i);
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     template<typename Callback>
@@ -453,7 +398,7 @@ public:
     void empend(Args&&... args)
     {
         grow_capacity(m_size + 1);
-        new (slot(m_size)) T(forward<Args>(args)...);
+        new (slot(m_size)) T { forward<Args>(args)... };
         ++m_size;
     }
 
@@ -500,6 +445,16 @@ public:
         Vector tmp = move(other);
         TypedTransfer<T>::move(slot(0), tmp.data(), tmp.size());
         m_size += other_size;
+    }
+
+    void prepend(const T* values, size_t count)
+    {
+        if (!count)
+            return;
+        grow_capacity(size() + count);
+        TypedTransfer<T>::move(slot(count), slot(0), m_size);
+        TypedTransfer<T>::copy(slot(0), values, count);
+        m_size += count;
     }
 
     void append(const T* values, size_t count)
@@ -574,13 +529,14 @@ public:
         return resize(new_size, true);
     }
 
-    using Iterator = VectorIterator<Vector, T>;
-    Iterator begin() { return Iterator(*this, 0); }
-    Iterator end() { return Iterator(*this, size()); }
+    using ConstIterator = SimpleIterator<const Vector, const T>;
+    using Iterator = SimpleIterator<Vector, T>;
 
-    using ConstIterator = VectorIterator<const Vector, const T>;
-    ConstIterator begin() const { return ConstIterator(*this, 0); }
-    ConstIterator end() const { return ConstIterator(*this, size()); }
+    ConstIterator begin() const { return ConstIterator::begin(*this); }
+    Iterator begin() { return Iterator::begin(*this); }
+
+    ConstIterator end() const { return ConstIterator::end(*this); }
+    Iterator end() { return Iterator::end(*this); }
 
     template<typename Finder>
     ConstIterator find(Finder finder) const
@@ -597,25 +553,25 @@ public:
     {
         for (size_t i = 0; i < m_size; ++i) {
             if (finder(at(i)))
-                return Iterator(*this, i);
+                return Iterator { *this, i };
         }
         return end();
     }
 
     ConstIterator find(const T& value) const
     {
-        return find([&](auto& other) { return value == other; });
+        return find([&](auto& other) { return Traits<T>::equals(value, other); });
     }
 
     Iterator find(const T& value)
     {
-        return find([&](auto& other) { return value == other; });
+        return find([&](auto& other) { return Traits<T>::equals(value, other); });
     }
 
     Optional<size_t> find_first_index(const T& value)
     {
         for (size_t i = 0; i < m_size; ++i) {
-            if (value == at(i))
+            if (Traits<T>::equals(value, at(i)))
                 return i;
         }
         return {};

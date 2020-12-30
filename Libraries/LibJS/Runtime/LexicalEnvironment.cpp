@@ -27,30 +27,33 @@
 #include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/Function.h>
+#include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/LexicalEnvironment.h>
 #include <LibJS/Runtime/Value.h>
 
 namespace JS {
 
 LexicalEnvironment::LexicalEnvironment()
+    : ScopeObject(nullptr)
 {
 }
 
 LexicalEnvironment::LexicalEnvironment(EnvironmentRecordType environment_record_type)
-    : m_environment_record_type(environment_record_type)
-{
-}
-
-LexicalEnvironment::LexicalEnvironment(HashMap<FlyString, Variable> variables, LexicalEnvironment* parent)
-    : m_parent(parent)
-    , m_variables(move(variables))
-{
-}
-
-LexicalEnvironment::LexicalEnvironment(HashMap<FlyString, Variable> variables, LexicalEnvironment* parent, EnvironmentRecordType environment_record_type)
-    : m_parent(parent)
-    , m_variables(move(variables))
+    : ScopeObject(nullptr)
     , m_environment_record_type(environment_record_type)
+{
+}
+
+LexicalEnvironment::LexicalEnvironment(HashMap<FlyString, Variable> variables, ScopeObject* parent_scope)
+    : ScopeObject(parent_scope)
+    , m_variables(move(variables))
+{
+}
+
+LexicalEnvironment::LexicalEnvironment(HashMap<FlyString, Variable> variables, ScopeObject* parent_scope, EnvironmentRecordType environment_record_type)
+    : ScopeObject(parent_scope)
+    , m_environment_record_type(environment_record_type)
+    , m_variables(move(variables))
 {
 }
 
@@ -58,10 +61,9 @@ LexicalEnvironment::~LexicalEnvironment()
 {
 }
 
-void LexicalEnvironment::visit_children(Visitor& visitor)
+void LexicalEnvironment::visit_edges(Visitor& visitor)
 {
-    Cell::visit_children(visitor);
-    visitor.visit(m_parent);
+    Cell::visit_edges(visitor);
     visitor.visit(m_this_value);
     visitor.visit(m_home_object);
     visitor.visit(m_new_target);
@@ -70,12 +72,12 @@ void LexicalEnvironment::visit_children(Visitor& visitor)
         visitor.visit(it.value.value);
 }
 
-Optional<Variable> LexicalEnvironment::get(const FlyString& name) const
+Optional<Variable> LexicalEnvironment::get_from_scope(const FlyString& name) const
 {
     return m_variables.get(name);
 }
 
-void LexicalEnvironment::set(const FlyString& name, Variable variable)
+void LexicalEnvironment::put_to_scope(const FlyString& name, Variable variable)
 {
     m_variables.set(name, variable);
 }
@@ -103,26 +105,26 @@ bool LexicalEnvironment::has_this_binding() const
     case EnvironmentRecordType::Function:
         return this_binding_status() != ThisBindingStatus::Lexical;
     case EnvironmentRecordType::Module:
-    case EnvironmentRecordType::Global:
         return true;
     }
     ASSERT_NOT_REACHED();
 }
 
-Value LexicalEnvironment::get_this_binding() const
+Value LexicalEnvironment::get_this_binding(GlobalObject& global_object) const
 {
     ASSERT(has_this_binding());
-    if (this_binding_status() == ThisBindingStatus::Uninitialized)
-        return interpreter().throw_exception<ReferenceError>(ErrorType::ThisHasNotBeenInitialized);
-
+    if (this_binding_status() == ThisBindingStatus::Uninitialized) {
+        vm().throw_exception<ReferenceError>(global_object, ErrorType::ThisHasNotBeenInitialized);
+        return {};
+    }
     return m_this_value;
 }
 
-void LexicalEnvironment::bind_this_value(Value this_value)
+void LexicalEnvironment::bind_this_value(GlobalObject& global_object, Value this_value)
 {
     ASSERT(has_this_binding());
     if (m_this_binding_status == ThisBindingStatus::Initialized) {
-        interpreter().throw_exception<ReferenceError>(ErrorType::ThisIsAlreadyInitialized);
+        vm().throw_exception<ReferenceError>(global_object, ErrorType::ThisIsAlreadyInitialized);
         return;
     }
     m_this_value = this_value;

@@ -30,7 +30,7 @@
 
 namespace PixelPaint {
 
-RefPtr<Layer> Layer::create_with_size(const Gfx::IntSize& size, const String& name)
+RefPtr<Layer> Layer::create_with_size(Image& image, const Gfx::IntSize& size, const String& name)
 {
     if (size.is_empty())
         return nullptr;
@@ -38,18 +38,71 @@ RefPtr<Layer> Layer::create_with_size(const Gfx::IntSize& size, const String& na
     if (size.width() > 16384 || size.height() > 16384)
         return nullptr;
 
-    return adopt(*new Layer(size, name));
+    return adopt(*new Layer(image, size, name));
 }
 
-Layer::Layer(const Gfx::IntSize& size, const String& name)
-    : m_name(name)
+RefPtr<Layer> Layer::create_with_bitmap(Image& image, const Gfx::Bitmap& bitmap, const String& name)
+{
+    if (bitmap.size().is_empty())
+        return nullptr;
+
+    if (bitmap.size().width() > 16384 || bitmap.size().height() > 16384)
+        return nullptr;
+
+    return adopt(*new Layer(image, bitmap, name));
+}
+
+RefPtr<Layer> Layer::create_snapshot(Image& image, const Layer& layer)
+{
+    auto snapshot = create_with_bitmap(image, *layer.bitmap().clone(), layer.name());
+    snapshot->set_opacity_percent(layer.opacity_percent());
+    snapshot->set_visible(layer.is_visible());
+    snapshot->set_selected(layer.is_selected());
+    snapshot->set_location(layer.location());
+    return snapshot;
+}
+
+Layer::Layer(Image& image, const Gfx::IntSize& size, const String& name)
+    : m_image(image)
+    , m_name(name)
 {
     m_bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::RGBA32, size);
+}
+
+Layer::Layer(Image& image, const Gfx::Bitmap& bitmap, const String& name)
+    : m_image(image)
+    , m_name(name)
+    , m_bitmap(bitmap)
+{
 }
 
 void Layer::did_modify_bitmap(Image& image)
 {
     image.layer_did_modify_bitmap({}, *this);
+}
+
+void Layer::set_visible(bool visible)
+{
+    if (m_visible == visible)
+        return;
+    m_visible = visible;
+    m_image.layer_did_modify_properties({}, *this);
+}
+
+void Layer::set_opacity_percent(int opacity_percent)
+{
+    if (m_opacity_percent == opacity_percent)
+        return;
+    m_opacity_percent = opacity_percent;
+    m_image.layer_did_modify_properties({}, *this);
+}
+
+void Layer::set_name(const String& name)
+{
+    if (m_name == name)
+        return;
+    m_name = name;
+    m_image.layer_did_modify_properties({}, *this);
 }
 
 }

@@ -45,6 +45,8 @@ public:
 private:
     explicit SoundPlayerWidget(GUI::Window&, NonnullRefPtr<Audio::ClientConnection>);
 
+    virtual void drop_event(GUI::DropEvent&) override;
+
     void update_position(const int position);
     void update_ui();
     int normalize_rate(int) const;
@@ -79,7 +81,7 @@ private:
     GUI::Window& m_window;
     NonnullRefPtr<Audio::ClientConnection> m_connection;
     PlaybackManager m_manager;
-    float m_sample_ratio;
+    float m_sample_ratio { 1.0 };
     RefPtr<GUI::Label> m_status;
     RefPtr<GUI::Label> m_elapsed;
     RefPtr<GUI::Label> m_remaining;

@@ -34,35 +34,45 @@
 #include <AK/QuickSort.h>
 #include <AK/Result.h>
 #include <AK/String.h>
+#include <AK/Traits.h>
 #include <AK/Utf32View.h>
 #include <AK/Utf8View.h>
 #include <AK/Vector.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/Notifier.h>
 #include <LibCore/Object.h>
+#include <LibLine/KeyCallbackMachine.h>
 #include <LibLine/Span.h>
 #include <LibLine/StringMetrics.h>
 #include <LibLine/Style.h>
 #include <LibLine/SuggestionDisplay.h>
 #include <LibLine/SuggestionManager.h>
 #include <LibLine/VT.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <termios.h>
 
 namespace Line {
 
+struct KeyBinding {
+    Vector<Key> keys;
+    enum class Kind {
+        InternalFunction,
+        Insertion,
+    } kind { Kind::InternalFunction };
+    String binding;
+};
+
 struct Configuration {
-    enum TokenSplitMechanism {
-        Spaces,
-        UnescapedSpaces,
-    };
     enum RefreshBehaviour {
         Lazy,
         Eager,
     };
     enum OperationMode {
+        Unset,
         Full,
         NoEscapeSequences,
+        NonInteractive,
     };
 
     Configuration()
@@ -77,13 +87,45 @@ struct Configuration {
     }
 
     void set(RefreshBehaviour refresh) { refresh_behaviour = refresh; }
-    void set(TokenSplitMechanism split) { split_mechanism = split; }
     void set(OperationMode mode) { operation_mode = mode; }
+    void set(const KeyBinding& binding) { keybindings.append(binding); }
+
+    static Configuration from_config(const StringView& libname = "line");
 
     RefreshBehaviour refresh_behaviour { RefreshBehaviour::Lazy };
-    TokenSplitMechanism split_mechanism { TokenSplitMechanism::Spaces };
-    OperationMode operation_mode { OperationMode::Full };
+    OperationMode operation_mode { OperationMode::Unset };
+    Vector<KeyBinding> keybindings;
 };
+
+#define ENUMERATE_EDITOR_INTERNAL_FUNCTIONS(M) \
+    M(clear_screen)                            \
+    M(cursor_left_character)                   \
+    M(cursor_left_word)                        \
+    M(cursor_right_character)                  \
+    M(cursor_right_word)                       \
+    M(enter_search)                            \
+    M(erase_character_backwards)               \
+    M(erase_character_forwards)                \
+    M(erase_to_beginning)                      \
+    M(erase_to_end)                            \
+    M(erase_word_backwards)                    \
+    M(finish_edit)                             \
+    M(go_end)                                  \
+    M(go_home)                                 \
+    M(kill_line)                               \
+    M(search_backwards)                        \
+    M(search_forwards)                         \
+    M(transpose_characters)                    \
+    M(transpose_words)                         \
+    M(insert_last_words)                       \
+    M(erase_alnum_word_backwards)              \
+    M(erase_alnum_word_forwards)               \
+    M(capitalize_word)                         \
+    M(lowercase_word)                          \
+    M(uppercase_word)
+
+#define EDITOR_INTERNAL_FUNCTION(name) \
+    [](auto& editor) { editor.name();  return false; }
 
 class Editor : public Core::Object {
     C_OBJECT(Editor);
@@ -101,26 +143,37 @@ public:
 
     void initialize();
 
-    void add_to_history(const String&);
+    void add_to_history(const String& line);
+    bool load_history(const String& path);
+    bool save_history(const String& path);
     const Vector<String>& history() const { return m_history; }
 
-    void register_character_input_callback(char ch, Function<bool(Editor&)> callback);
-    StringMetrics actual_rendered_string_metrics(const StringView&) const;
-    StringMetrics actual_rendered_string_metrics(const Utf32View&) const;
+    void register_key_input_callback(const KeyBinding&);
+    void register_key_input_callback(Vector<Key> keys, Function<bool(Editor&)> callback) { m_callback_machine.register_key_input_callback(move(keys), move(callback)); }
+    void register_key_input_callback(Key key, Function<bool(Editor&)> callback) { register_key_input_callback(Vector<Key> { key }, move(callback)); }
+
+    static StringMetrics actual_rendered_string_metrics(const StringView&);
+    static StringMetrics actual_rendered_string_metrics(const Utf32View&);
 
     Function<Vector<CompletionSuggestion>(const Editor&)> on_tab_complete;
     Function<void()> on_interrupt_handled;
     Function<void(Editor&)> on_display_refresh;
 
-    // FIXME: we will have to kindly ask our instantiators to set our signal handlers,
-    // since we can not do this cleanly ourselves. (signal() limitation: cannot give member functions)
-    void interrupted()
-    {
-        if (m_is_editing) {
-            m_was_interrupted = true;
-            handle_interrupt_event();
-        }
-    }
+    static Function<bool(Editor&)> find_internal_function(const StringView& name);
+    enum class CaseChangeOp {
+        Lowercase,
+        Uppercase,
+        Capital,
+    };
+    void case_change_word(CaseChangeOp);
+#define __ENUMERATE_EDITOR_INTERNAL_FUNCTION(name) \
+    void name();
+
+    ENUMERATE_EDITOR_INTERNAL_FUNCTIONS(__ENUMERATE_EDITOR_INTERNAL_FUNCTION)
+
+#undef __ENUMERATE_EDITOR_INTERNAL_FUNCTION
+
+    void interrupted();
     void resized()
     {
         m_was_resized = true;
@@ -130,6 +183,12 @@ public:
     }
 
     size_t cursor() const { return m_cursor; }
+    void set_cursor(size_t cursor)
+    {
+        if (cursor > m_buffer.size())
+            cursor = m_buffer.size();
+        m_cursor = cursor;
+    }
     const Vector<u32, 1024>& buffer() const { return m_buffer; }
     u32 buffer_at(size_t pos) const { return m_buffer.at(pos); }
     String line() const { return line(m_buffer.size()); }
@@ -147,6 +206,7 @@ public:
 
     void clear_line();
     void insert(const String&);
+    void insert(const StringView&);
     void insert(const Utf32View&);
     void insert(const u32);
     void stylize(const Span&, const Style&);
@@ -164,6 +224,11 @@ public:
 
     const struct termios& termios() const { return m_termios; }
     const struct termios& default_termios() const { return m_default_termios; }
+    struct winsize terminal_size() const
+    {
+        winsize ws { (u16)m_num_lines, (u16)m_num_columns, 0, 0 };
+        return ws;
+    }
 
     void finish()
     {
@@ -175,7 +240,9 @@ public:
     const Utf32View buffer_view() const { return { m_buffer.data(), m_buffer.size() }; }
 
 private:
-    explicit Editor(Configuration configuration = {});
+    explicit Editor(Configuration configuration = Configuration::from_config());
+
+    void set_default_keybinds();
 
     enum VTState {
         Free = 1,
@@ -185,19 +252,17 @@ private:
         Title = 9,
     };
 
-    VTState actual_rendered_string_length_step(StringMetrics&, size_t& length, u32, u32, VTState) const;
+    static VTState actual_rendered_string_length_step(StringMetrics&, size_t& length, u32, u32, VTState);
 
-    // ^Core::Object
-    virtual void save_to(JsonObject&) override;
-
-    struct KeyCallback {
-        KeyCallback(Function<bool(Editor&)> cb)
-            : callback(move(cb))
-        {
-        }
-        Function<bool(Editor&)> callback;
+    enum LoopExitCode {
+        Exit = 0,
+        Retry
     };
 
+    // FIXME: Port to Core::Property
+    void save_to(JsonObject&);
+
+    void try_update_once();
     void handle_interrupt_event();
     void handle_read_event();
 
@@ -213,7 +278,7 @@ private:
 
     Style find_applicable_style(size_t offset) const;
 
-    bool search(const StringView&, bool allow_empty = false, bool from_beginning = false);
+    bool search(const StringView&, bool allow_empty = false, bool from_beginning = true);
     inline void end_search()
     {
         m_is_searching = false;
@@ -236,6 +301,8 @@ private:
         m_cursor = 0;
         m_drawn_cursor = 0;
         m_inline_search_cursor = 0;
+        m_search_offset = 0;
+        m_search_offset_state = SearchOffsetState::Unbiased;
         m_old_prompt_metrics = m_cached_prompt_metrics;
         set_origin(0, 0);
         m_prompt_lines_at_suggestion_initiation = 0;
@@ -246,6 +313,8 @@ private:
 
     void refresh_display();
     void cleanup();
+    void cleanup_suggestions();
+    void really_quit_event_loop();
 
     void restore()
     {
@@ -299,8 +368,6 @@ private:
         m_suggestion_display->set_origin(row, col, {});
     }
 
-    bool should_break_token(Vector<u32, 1024>& buffer, size_t index);
-
     void recalculate_origin();
     void reposition_cursor(bool to_end = false);
 
@@ -308,7 +375,7 @@ private:
         size_t start { 0 };
         size_t end { 0 };
     };
-    CodepointRange byte_offset_range_to_codepoint_offset_range(size_t byte_start, size_t byte_end, size_t codepoint_scan_offset, bool reverse = false) const;
+    CodepointRange byte_offset_range_to_code_point_offset_range(size_t byte_start, size_t byte_end, size_t code_point_scan_offset, bool reverse = false) const;
 
     void get_terminal_size();
 
@@ -318,7 +385,11 @@ private:
     bool m_is_searching { false };
     bool m_reset_buffer_on_search_end { true };
     size_t m_search_offset { 0 };
-    bool m_searching_backwards { true };
+    enum class SearchOffsetState {
+        Unbiased,
+        Backwards,
+        Forwards,
+    } m_search_offset_state { SearchOffsetState::Unbiased };
     size_t m_pre_search_cursor { 0 };
     Vector<u32, 1024> m_pre_search_buffer;
 
@@ -361,10 +432,12 @@ private:
     };
     TabDirection m_tab_direction { TabDirection::Forward };
 
-    HashMap<char, NonnullOwnPtr<KeyCallback>> m_key_callbacks;
+    KeyCallbackMachine m_callback_machine;
 
-    // TODO: handle signals internally.
-    struct termios m_termios, m_default_termios;
+    struct termios m_termios {
+    };
+    struct termios m_default_termios {
+    };
     bool m_was_interrupted { false };
     bool m_was_resized { false };
 
@@ -375,9 +448,10 @@ private:
 
     enum class InputState {
         Free,
-        ExpectBracket,
-        ExpectFinal,
-        ExpectTerminator,
+        GotEscape,
+        CSIExpectParameter,
+        CSIExpectIntermediate,
+        CSIExpectFinal,
     };
     InputState m_state { InputState::Free };
 

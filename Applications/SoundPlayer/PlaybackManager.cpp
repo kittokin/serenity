@@ -41,10 +41,10 @@ PlaybackManager::~PlaybackManager()
 {
 }
 
-void PlaybackManager::set_loader(OwnPtr<Audio::WavLoader>&& loader)
+void PlaybackManager::set_loader(NonnullRefPtr<Audio::Loader>&& loader)
 {
     stop();
-    m_loader = move(loader);
+    m_loader = loader;
     if (m_loader) {
         m_total_length = m_loader->total_samples() / static_cast<float>(m_loader->sample_rate());
         m_timer->start();
@@ -71,6 +71,11 @@ void PlaybackManager::stop()
 void PlaybackManager::play()
 {
     set_paused(false);
+}
+
+void PlaybackManager::loop(bool loop)
+{
+    m_loop = loop;
 }
 
 void PlaybackManager::seek(const int position)
@@ -165,8 +170,11 @@ void PlaybackManager::next_buffer()
     remove_dead_buffers();
     if (!m_next_buffer) {
         if (!m_connection->get_remaining_samples() && !m_paused) {
-            dbg() << "Exhausted samples :^)";
-            stop();
+            dbgln("Exhausted samples :^)");
+            if (m_loop)
+                seek(0);
+            else
+                stop();
         }
 
         return;

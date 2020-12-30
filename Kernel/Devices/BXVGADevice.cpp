@@ -25,12 +25,13 @@
  */
 
 #include <AK/Checked.h>
+#include <AK/Singleton.h>
 #include <Kernel/Devices/BXVGADevice.h>
+#include <Kernel/IO.h>
 #include <Kernel/PCI/Access.h>
 #include <Kernel/Process.h>
 #include <Kernel/VM/AnonymousVMObject.h>
 #include <Kernel/VM/MemoryManager.h>
-#include <Kernel/IO.h>
 #include <LibC/errno_numbers.h>
 #include <LibC/sys/ioctl_numbers.h>
 
@@ -56,7 +57,12 @@ namespace Kernel {
 #define VBE_DISPI_ENABLED 0x01
 #define VBE_DISPI_LFB_ENABLED 0x40
 
-static BXVGADevice* s_the;
+static AK::Singleton<BXVGADevice> s_the;
+
+void BXVGADevice::initialize()
+{
+    s_the.ensure_instance();
+}
 
 BXVGADevice& BXVGADevice::the()
 {
@@ -67,7 +73,6 @@ BXVGADevice::BXVGADevice()
     : BlockDevice(29, 0)
 
 {
-    s_the = this;
     m_framebuffer_address = PhysicalAddress(find_framebuffer_address());
     set_safe_resolution();
 }
@@ -187,8 +192,9 @@ KResultOr<Region*> BXVGADevice::mmap(Process& process, FileDescription&, Virtual
         0,
         "BXVGA Framebuffer",
         prot);
+    if (!region)
+        return KResult(-ENOMEM);
     dbg() << "BXVGADevice: mmap with size " << region->size() << " at " << region->vaddr();
-    ASSERT(region);
     return region;
 }
 
@@ -198,16 +204,16 @@ int BXVGADevice::ioctl(FileDescription&, unsigned request, FlatPtr arg)
     switch (request) {
     case FB_IOCTL_GET_SIZE_IN_BYTES: {
         auto* out = (size_t*)arg;
-        if (!Process::current()->validate_write_typed(out))
+        size_t value = framebuffer_size_in_bytes();
+        if (!copy_to_user(out, &value))
             return -EFAULT;
-        *out = framebuffer_size_in_bytes();
         return 0;
     }
     case FB_IOCTL_GET_BUFFER: {
         auto* index = (int*)arg;
-        if (!Process::current()->validate_write_typed(index))
+        int value = m_y_offset == 0 ? 0 : 1;
+        if (!copy_to_user(index, &value))
             return -EFAULT;
-        *index = m_y_offset == 0 ? 0 : 1;
         return 0;
     }
     case FB_IOCTL_SET_BUFFER: {
@@ -217,35 +223,41 @@ int BXVGADevice::ioctl(FileDescription&, unsigned request, FlatPtr arg)
         return 0;
     }
     case FB_IOCTL_GET_RESOLUTION: {
-        auto* resolution = (FBResolution*)arg;
-        if (!Process::current()->validate_write_typed(resolution))
+        auto* user_resolution = (FBResolution*)arg;
+        FBResolution resolution;
+        resolution.pitch = m_framebuffer_pitch;
+        resolution.width = m_framebuffer_width;
+        resolution.height = m_framebuffer_height;
+        if (!copy_to_user(user_resolution, &resolution))
             return -EFAULT;
-        resolution->pitch = m_framebuffer_pitch;
-        resolution->width = m_framebuffer_width;
-        resolution->height = m_framebuffer_height;
         return 0;
     }
     case FB_IOCTL_SET_RESOLUTION: {
-        auto* resolution = (FBResolution*)arg;
-        if (!Process::current()->validate_read_typed(resolution) || !Process::current()->validate_write_typed(resolution))
+        auto* user_resolution = (FBResolution*)arg;
+        FBResolution resolution;
+        if (!copy_from_user(&resolution, user_resolution))
             return -EFAULT;
-        if (resolution->width > MAX_RESOLUTION_WIDTH || resolution->height > MAX_RESOLUTION_HEIGHT)
+        if (resolution.width > MAX_RESOLUTION_WIDTH || resolution.height > MAX_RESOLUTION_HEIGHT)
             return -EINVAL;
-        if (!set_resolution(resolution->width, resolution->height)) {
+        if (!set_resolution(resolution.width, resolution.height)) {
 #ifdef BXVGA_DEBUG
             dbg() << "Reverting Resolution: [" << m_framebuffer_width << "x" << m_framebuffer_height << "]";
 #endif
-            resolution->pitch = m_framebuffer_pitch;
-            resolution->width = m_framebuffer_width;
-            resolution->height = m_framebuffer_height;
+            resolution.pitch = m_framebuffer_pitch;
+            resolution.width = m_framebuffer_width;
+            resolution.height = m_framebuffer_height;
+            if (!copy_to_user(user_resolution, &resolution))
+                return -EFAULT;
             return -EINVAL;
         }
 #ifdef BXVGA_DEBUG
         dbg() << "New resolution: [" << m_framebuffer_width << "x" << m_framebuffer_height << "]";
 #endif
-        resolution->pitch = m_framebuffer_pitch;
-        resolution->width = m_framebuffer_width;
-        resolution->height = m_framebuffer_height;
+        resolution.pitch = m_framebuffer_pitch;
+        resolution.width = m_framebuffer_width;
+        resolution.height = m_framebuffer_height;
+        if (!copy_to_user(user_resolution, &resolution))
+            return -EFAULT;
         return 0;
     }
     default:

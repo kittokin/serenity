@@ -48,6 +48,8 @@ typedef uint32_t gid_t;
 typedef int __pid_t;
 #define pid_t __pid_t
 
+typedef char* caddr_t;
+
 typedef int id_t;
 
 typedef __WINT_TYPE__ wint_t;
@@ -76,7 +78,7 @@ struct utimbuf {
 
 typedef int pthread_t;
 typedef int pthread_key_t;
-typedef void* pthread_once_t;
+typedef int32_t pthread_once_t;
 
 typedef struct __pthread_mutex_t {
     uint32_t lock;

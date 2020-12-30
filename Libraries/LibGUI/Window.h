@@ -30,30 +30,15 @@
 #include <AK/String.h>
 #include <AK/WeakPtr.h>
 #include <LibCore/Object.h>
+#include <LibGUI/FocusSource.h>
 #include <LibGUI/Forward.h>
 #include <LibGUI/WindowType.h>
 #include <LibGfx/Color.h>
 #include <LibGfx/Forward.h>
 #include <LibGfx/Rect.h>
+#include <LibGfx/StandardCursor.h>
 
 namespace GUI {
-
-enum class StandardCursor {
-    None = 0,
-    Arrow,
-    IBeam,
-    ResizeHorizontal,
-    ResizeVertical,
-    ResizeDiagonalTLBR,
-    ResizeDiagonalBLTR,
-    ResizeColumn,
-    ResizeRow,
-    Hand,
-    Help,
-    Drag,
-    Move,
-    Wait,
-};
 
 class Window : public Core::Object {
     C_OBJECT(Window)
@@ -82,6 +67,8 @@ public:
     void set_double_buffering_enabled(bool);
     void set_has_alpha_channel(bool);
     void set_opacity(float);
+
+    WindowType window_type() const { return m_window_type; }
     void set_window_type(WindowType);
 
     int window_id() const { return m_window_id; }
@@ -107,6 +94,7 @@ public:
     int height() const { return rect().height(); }
 
     Gfx::IntRect rect() const;
+    Gfx::IntRect rect_in_menubar() const;
     Gfx::IntSize size() const { return rect().size(); }
     void set_rect(const Gfx::IntRect&);
     void set_rect(int x, int y, int width, int height) { set_rect({ x, y, width, height }); }
@@ -118,6 +106,9 @@ public:
 
     void resize(int width, int height) { resize({ width, height }); }
     void resize(const Gfx::IntSize& size) { set_rect({ position(), size }); }
+
+    void center_on_screen();
+    void center_within(const Window&);
 
     virtual void event(Core::Event&) override;
 
@@ -149,7 +140,7 @@ public:
 
     Widget* focused_widget() { return m_focused_widget; }
     const Widget* focused_widget() const { return m_focused_widget; }
-    void set_focused_widget(Widget*);
+    void set_focused_widget(Widget*, FocusSource = FocusSource::Programmatic);
 
     void update();
     void update(const Gfx::IntRect&);
@@ -173,17 +164,19 @@ public:
     void set_size_increment(const Gfx::IntSize&);
     Gfx::IntSize base_size() const { return m_base_size; }
     void set_base_size(const Gfx::IntSize&);
+    const Optional<Gfx::IntSize>& resize_aspect_ratio() const { return m_resize_aspect_ratio; }
+    void set_resize_aspect_ratio(int width, int height) { set_resize_aspect_ratio(Gfx::IntSize(width, height)); }
+    void set_no_resize_aspect_ratio() { set_resize_aspect_ratio({}); }
+    void set_resize_aspect_ratio(const Optional<Gfx::IntSize>& ratio);
 
-    void set_override_cursor(StandardCursor);
-    void set_override_cursor(const Gfx::Bitmap&);
+    void set_cursor(Gfx::StandardCursor);
+    void set_cursor(const Gfx::Bitmap&);
 
     void set_icon(const Gfx::Bitmap*);
     void apply_icon();
     const Gfx::Bitmap* icon() const { return m_icon.ptr(); }
 
-    Vector<Widget*> focusable_widgets() const;
-
-    virtual void save_to(AK::JsonObject&) override;
+    Vector<Widget*> focusable_widgets(FocusSource) const;
 
     void schedule_relayout();
 
@@ -202,12 +195,31 @@ public:
 
     void set_progress(int);
 
+    void update_cursor(Badge<Widget>) { update_cursor(); }
+
+    void did_disable_focused_widget(Badge<Widget>);
+
 protected:
     Window(Core::Object* parent = nullptr);
     virtual void wm_event(WMEvent&);
 
 private:
     virtual bool is_window() const override final { return true; }
+
+    void update_cursor();
+    void focus_a_widget_if_possible(FocusSource);
+
+    void handle_drop_event(DropEvent&);
+    void handle_mouse_event(MouseEvent&);
+    void handle_multi_paint_event(MultiPaintEvent&);
+    void handle_key_event(KeyEvent&);
+    void handle_resize_event(ResizeEvent&);
+    void handle_input_entered_or_left_event(Core::Event&);
+    void handle_became_active_or_inactive_event(Core::Event&);
+    void handle_close_request();
+    void handle_theme_change_event(ThemeChangeEvent&);
+    void handle_drag_move_event(DragEvent&);
+    void handle_left_event();
 
     void server_did_destroy();
 
@@ -235,13 +247,15 @@ private:
     Gfx::IntSize m_base_size;
     Color m_background_color { Color::WarmGray };
     WindowType m_window_type { WindowType::Normal };
-    StandardCursor m_override_cursor { StandardCursor::None };
+    Gfx::StandardCursor m_cursor { Gfx::StandardCursor::None };
+    Gfx::StandardCursor m_effective_cursor { Gfx::StandardCursor::None };
     bool m_is_active { false };
     bool m_is_active_input { false };
     bool m_has_alpha_channel { false };
     bool m_double_buffering_enabled { true };
     bool m_modal { false };
     bool m_resizable { true };
+    Optional<Gfx::IntSize> m_resize_aspect_ratio {};
     bool m_minimizable { true };
     bool m_fullscreen { false };
     bool m_frameless { false };
@@ -249,12 +263,11 @@ private:
     bool m_visible_for_timer_purposes { true };
     bool m_visible { false };
     bool m_accessory { false };
+    bool m_moved_by_client { false };
 };
 
 }
 
-template<>
-inline bool Core::is<GUI::Window>(const Core::Object& object)
-{
-    return object.is_window();
-}
+AK_BEGIN_TYPE_TRAITS(GUI::Window)
+static bool is_type(const Core::Object& object) { return object.is_window(); }
+AK_END_TYPE_TRAITS()

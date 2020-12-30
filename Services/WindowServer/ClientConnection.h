@@ -35,6 +35,7 @@
 #include <LibGfx/Bitmap.h>
 #include <LibIPC/ClientConnection.h>
 #include <WindowServer/Event.h>
+#include <WindowServer/WindowClientEndpoint.h>
 #include <WindowServer/WindowServerEndpoint.h>
 
 namespace WindowServer {
@@ -45,7 +46,7 @@ class Menu;
 class MenuBar;
 
 class ClientConnection final
-    : public IPC::ClientConnection<WindowServerEndpoint>
+    : public IPC::ClientConnection<WindowClientEndpoint, WindowServerEndpoint>
     , public WindowServerEndpoint {
     C_OBJECT(ClientConnection)
 public:
@@ -109,6 +110,7 @@ private:
     virtual OwnPtr<Messages::WindowServer::IsMaximizedResponse> handle(const Messages::WindowServer::IsMaximized&) override;
     virtual OwnPtr<Messages::WindowServer::SetWindowRectResponse> handle(const Messages::WindowServer::SetWindowRect&) override;
     virtual OwnPtr<Messages::WindowServer::GetWindowRectResponse> handle(const Messages::WindowServer::GetWindowRect&) override;
+    virtual OwnPtr<Messages::WindowServer::GetWindowRectInMenubarResponse> handle(const Messages::WindowServer::GetWindowRectInMenubar&) override;
     virtual void handle(const Messages::WindowServer::InvalidateRect&) override;
     virtual void handle(const Messages::WindowServer::DidFinishPainting&) override;
     virtual OwnPtr<Messages::WindowServer::SetGlobalCursorTrackingResponse> handle(const Messages::WindowServer::SetGlobalCursorTracking&) override;
@@ -126,8 +128,8 @@ private:
     virtual OwnPtr<Messages::WindowServer::SetWallpaperModeResponse> handle(const Messages::WindowServer::SetWallpaperMode&) override;
     virtual OwnPtr<Messages::WindowServer::GetWallpaperResponse> handle(const Messages::WindowServer::GetWallpaper&) override;
     virtual OwnPtr<Messages::WindowServer::SetResolutionResponse> handle(const Messages::WindowServer::SetResolution&) override;
-    virtual OwnPtr<Messages::WindowServer::SetWindowOverrideCursorResponse> handle(const Messages::WindowServer::SetWindowOverrideCursor&) override;
-    virtual OwnPtr<Messages::WindowServer::SetWindowCustomOverrideCursorResponse> handle(const Messages::WindowServer::SetWindowCustomOverrideCursor&) override;
+    virtual OwnPtr<Messages::WindowServer::SetWindowCursorResponse> handle(const Messages::WindowServer::SetWindowCursor&) override;
+    virtual OwnPtr<Messages::WindowServer::SetWindowCustomCursorResponse> handle(const Messages::WindowServer::SetWindowCustomCursor&) override;
     virtual OwnPtr<Messages::WindowServer::PopupMenuResponse> handle(const Messages::WindowServer::PopupMenu&) override;
     virtual OwnPtr<Messages::WindowServer::DismissMenuResponse> handle(const Messages::WindowServer::DismissMenu&) override;
     virtual OwnPtr<Messages::WindowServer::SetWindowIconBitmapResponse> handle(const Messages::WindowServer::SetWindowIconBitmap&) override;
@@ -137,10 +139,16 @@ private:
     virtual OwnPtr<Messages::WindowServer::SetSystemThemeResponse> handle(const Messages::WindowServer::SetSystemTheme&) override;
     virtual OwnPtr<Messages::WindowServer::GetSystemThemeResponse> handle(const Messages::WindowServer::GetSystemTheme&) override;
     virtual OwnPtr<Messages::WindowServer::SetWindowBaseSizeAndSizeIncrementResponse> handle(const Messages::WindowServer::SetWindowBaseSizeAndSizeIncrement&) override;
+    virtual OwnPtr<Messages::WindowServer::SetWindowResizeAspectRatioResponse> handle(const Messages::WindowServer::SetWindowResizeAspectRatio&) override;
     virtual void handle(const Messages::WindowServer::EnableDisplayLink&) override;
     virtual void handle(const Messages::WindowServer::DisableDisplayLink&) override;
     virtual void handle(const Messages::WindowServer::SetWindowProgress&) override;
     virtual void handle(const Messages::WindowServer::Pong&) override;
+    virtual OwnPtr<Messages::WindowServer::GetGlobalCursorPositionResponse> handle(const Messages::WindowServer::GetGlobalCursorPosition&) override;
+    virtual OwnPtr<Messages::WindowServer::SetMouseAccelerationResponse> handle(const Messages::WindowServer::SetMouseAcceleration&) override;
+    virtual OwnPtr<Messages::WindowServer::GetMouseAccelerationResponse> handle(const Messages::WindowServer::GetMouseAcceleration&) override;
+    virtual OwnPtr<Messages::WindowServer::SetScrollStepSizeResponse> handle(const Messages::WindowServer::SetScrollStepSize&) override;
+    virtual OwnPtr<Messages::WindowServer::GetScrollStepSizeResponse> handle(const Messages::WindowServer::GetScrollStepSize&) override;
 
     Window* window_from_id(i32 window_id);
 

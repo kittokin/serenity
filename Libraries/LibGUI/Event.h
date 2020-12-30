@@ -30,6 +30,7 @@
 #include <AK/Vector.h>
 #include <Kernel/API/KeyCode.h>
 #include <LibCore/Event.h>
+#include <LibGUI/FocusSource.h>
 #include <LibGUI/WindowType.h>
 #include <LibGfx/Point.h>
 #include <LibGfx/Rect.h>
@@ -76,12 +77,12 @@ public:
         __End_WM_Events,
     };
 
-    Event() {}
+    Event() { }
     explicit Event(Type type)
         : Core::Event(type)
     {
     }
-    virtual ~Event() {}
+    virtual ~Event() { }
 
     bool is_key_event() const { return type() == KeyUp || type() == KeyDown; }
     bool is_paint_event() const { return type() == Paint; }
@@ -131,8 +132,8 @@ public:
 
     int parent_client_id() const { return m_parent_client_id; }
     int parent_window_id() const { return m_parent_window_id; }
-    String title() const { return m_title; }
-    Gfx::IntRect rect() const { return m_rect; }
+    const String& title() const { return m_title; }
+    const Gfx::IntRect& rect() const { return m_rect; }
     bool is_active() const { return m_active; }
     bool is_modal() const { return m_modal; }
     WindowType window_type() const { return m_window_type; }
@@ -161,7 +162,7 @@ public:
     {
     }
 
-    Gfx::IntRect rect() const { return m_rect; }
+    const Gfx::IntRect& rect() const { return m_rect; }
 
 private:
     Gfx::IntRect m_rect;
@@ -194,7 +195,7 @@ public:
     }
 
     const Vector<Gfx::IntRect, 32>& rects() const { return m_rects; }
-    Gfx::IntSize window_size() const { return m_window_size; }
+    const Gfx::IntSize& window_size() const { return m_window_size; }
 
 private:
     Vector<Gfx::IntRect, 32> m_rects;
@@ -210,8 +211,8 @@ public:
     {
     }
 
-    Gfx::IntRect rect() const { return m_rect; }
-    Gfx::IntSize window_size() const { return m_window_size; }
+    const Gfx::IntRect& rect() const { return m_rect; }
+    const Gfx::IntSize& window_size() const { return m_window_size; }
 
 private:
     Gfx::IntRect m_rect;
@@ -220,18 +221,15 @@ private:
 
 class ResizeEvent final : public Event {
 public:
-    explicit ResizeEvent(const Gfx::IntSize& old_size, const Gfx::IntSize& size)
+    explicit ResizeEvent(const Gfx::IntSize& size)
         : Event(Event::Resize)
-        , m_old_size(old_size)
         , m_size(size)
     {
     }
 
-    const Gfx::IntSize& old_size() const { return m_old_size; }
     const Gfx::IntSize& size() const { return m_size; }
 
 private:
-    Gfx::IntSize m_old_size;
     Gfx::IntSize m_size;
 };
 
@@ -298,7 +296,7 @@ public:
     String text() const
     {
         StringBuilder sb;
-        sb.append_codepoint(m_code_point);
+        sb.append_code_point(m_code_point);
         return sb.to_string();
     }
     u32 scancode() const { return m_scancode; }
@@ -311,7 +309,6 @@ private:
     u8 m_modifiers { 0 };
     u32 m_code_point { 0 };
     u32 m_scancode { 0 };
-    String m_text2;
 };
 
 class MouseEvent final : public Event {
@@ -326,11 +323,15 @@ public:
     {
     }
 
-    Gfx::IntPoint position() const { return m_position; }
+    const Gfx::IntPoint& position() const { return m_position; }
     int x() const { return m_position.x(); }
     int y() const { return m_position.y(); }
     MouseButton button() const { return m_button; }
     unsigned buttons() const { return m_buttons; }
+    bool ctrl() const { return m_modifiers & Mod_Ctrl; }
+    bool alt() const { return m_modifiers & Mod_Alt; }
+    bool shift() const { return m_modifiers & Mod_Shift; }
+    bool logo() const { return m_modifiers & Mod_Logo; }
     unsigned modifiers() const { return m_modifiers; }
     int wheel_delta() const { return m_wheel_delta; }
 
@@ -381,6 +382,20 @@ public:
         : Event(Type::ThemeChange)
     {
     }
+};
+
+class FocusEvent final : public Event {
+public:
+    explicit FocusEvent(Type type, FocusSource source)
+        : Event(type)
+        , m_source(source)
+    {
+    }
+
+    FocusSource source() const { return m_source; }
+
+private:
+    FocusSource m_source { FocusSource::Programmatic };
 };
 
 }

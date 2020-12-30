@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <AK/Span.h>
 #include <AK/Vector.h>
 #include <LibCrypto/BigInt/UnsignedBigInteger.h>
 #include <LibCrypto/NumberTheory/ModularFunctions.h>
@@ -119,7 +120,7 @@ class RSA : public PKSystem<RSAPrivateKey<IntegerType>, RSAPublicKey<IntegerType
 public:
     using KeyPairType = RSAKeyPair<PublicKeyType, PrivateKeyType>;
 
-    static KeyPairType parse_rsa_key(const ByteBuffer&);
+    static KeyPairType parse_rsa_key(ReadonlyBytes);
     static KeyPairType generate_key_pair(size_t bits = 256)
     {
         IntegerType e { 65537 }; // :P
@@ -165,7 +166,7 @@ public:
 
     RSA(const StringView& privKeyPEM)
     {
-        import_private_key(ByteBuffer::wrap(privKeyPEM.characters_without_null_termination(), privKeyPEM.length()));
+        import_private_key(privKeyPEM.bytes());
         m_public_key.set(m_private_key.modulus(), m_private_key.public_exponent());
     }
 
@@ -177,18 +178,18 @@ public:
         m_private_key = pair.private_key;
     }
 
-    virtual void encrypt(const ByteBuffer& in, ByteBuffer& out) override;
-    virtual void decrypt(const ByteBuffer& in, ByteBuffer& out) override;
+    virtual void encrypt(ReadonlyBytes in, Bytes& out) override;
+    virtual void decrypt(ReadonlyBytes in, Bytes& out) override;
 
-    virtual void sign(const ByteBuffer& in, ByteBuffer& out) override;
-    virtual void verify(const ByteBuffer& in, ByteBuffer& out) override;
+    virtual void sign(ReadonlyBytes in, Bytes& out) override;
+    virtual void verify(ReadonlyBytes in, Bytes& out) override;
 
     virtual String class_name() const override { return "RSA"; }
 
     virtual size_t output_size() const override { return m_public_key.length(); }
 
-    void import_public_key(const ByteBuffer& buffer, bool pem = true);
-    void import_private_key(const ByteBuffer& buffer, bool pem = true);
+    void import_public_key(ReadonlyBytes, bool pem = true);
+    void import_private_key(ReadonlyBytes, bool pem = true);
 
     const PrivateKeyType& private_key() const { return m_private_key; }
     const PublicKeyType& public_key() const { return m_public_key; }
@@ -202,8 +203,8 @@ public:
     {
     }
 
-    void sign(const ByteBuffer& in, ByteBuffer& out);
-    VerificationConsistency verify(const ByteBuffer& in);
+    void sign(ReadonlyBytes in, Bytes& out);
+    VerificationConsistency verify(ReadonlyBytes in);
 
 private:
     EMSA_PSS<HashFunction, HashFunction::DigestSize> m_emsa_pss;
@@ -221,11 +222,11 @@ public:
 
     ~RSA_PKCS1_EME() { }
 
-    virtual void encrypt(const ByteBuffer& in, ByteBuffer& out) override;
-    virtual void decrypt(const ByteBuffer& in, ByteBuffer& out) override;
+    virtual void encrypt(ReadonlyBytes in, Bytes& out) override;
+    virtual void decrypt(ReadonlyBytes in, Bytes& out) override;
 
-    virtual void sign(const ByteBuffer&, ByteBuffer&) override;
-    virtual void verify(const ByteBuffer&, ByteBuffer&) override;
+    virtual void sign(ReadonlyBytes, Bytes&) override;
+    virtual void verify(ReadonlyBytes, Bytes&) override;
 
     virtual String class_name() const override { return "RSA_PKCS1-EME"; }
     virtual size_t output_size() const override { return m_public_key.length(); }

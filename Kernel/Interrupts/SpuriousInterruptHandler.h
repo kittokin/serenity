@@ -26,7 +26,6 @@
 
 #pragma once
 
-#include <AK/HashTable.h>
 #include <AK/OwnPtr.h>
 #include <AK/Types.h>
 #include <Kernel/Arch/i386/CPU.h>
@@ -59,6 +58,7 @@ private:
     void disable_interrupt_vector();
     explicit SpuriousInterruptHandler(u8 interrupt_number);
     bool m_enabled;
+    bool m_real_irq { false };
     RefPtr<IRQController> m_responsible_irq_controller;
     OwnPtr<GenericInterruptHandler> m_real_handler;
 };

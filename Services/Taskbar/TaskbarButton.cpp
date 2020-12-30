@@ -30,6 +30,7 @@
 #include <LibGUI/Painter.h>
 #include <LibGUI/WindowServerConnection.h>
 #include <LibGfx/Font.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/StylePainter.h>
 
@@ -47,13 +48,27 @@ void TaskbarButton::context_menu_event(GUI::ContextMenuEvent&)
     GUI::WindowServerConnection::the().post_message(Messages::WindowServer::WM_PopupWindowMenu(m_identifier.client_id(), m_identifier.window_id(), screen_relative_rect().location()));
 }
 
-void TaskbarButton::resize_event(GUI::ResizeEvent& event)
+void TaskbarButton::update_taskbar_rect()
 {
     GUI::WindowServerConnection::the().post_message(
         Messages::WindowServer::WM_SetWindowTaskbarRect(
             m_identifier.client_id(),
             m_identifier.window_id(),
             screen_relative_rect()));
+}
+
+void TaskbarButton::clear_taskbar_rect()
+{
+    GUI::WindowServerConnection::the().post_message(
+        Messages::WindowServer::WM_SetWindowTaskbarRect(
+            m_identifier.client_id(),
+            m_identifier.window_id(),
+            {}));
+}
+
+void TaskbarButton::resize_event(GUI::ResizeEvent& event)
+{
+    update_taskbar_rect();
     return GUI::Button::resize_event(event);
 }
 
@@ -92,7 +107,7 @@ void TaskbarButton::paint_event(GUI::PaintEvent& event)
 {
     ASSERT(icon());
     auto& icon = *this->icon();
-    auto& font = is_checked() ? Gfx::Font::default_bold_font() : this->font();
+    auto& font = is_checked() ? Gfx::FontDatabase::default_bold_font() : this->font();
     auto& window = WindowList::the().ensure_window(m_identifier);
 
     GUI::Painter painter(*this);
@@ -139,7 +154,7 @@ void TaskbarButton::paint_event(GUI::PaintEvent& event)
         else
             painter.blit(icon_location, icon, icon.rect());
     } else {
-        painter.blit_dimmed(icon_location, icon, icon.rect());
+        painter.blit_disabled(icon_location, icon, icon.rect(), palette());
     }
 
     if (!has_progress)

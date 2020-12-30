@@ -35,16 +35,16 @@ class BoundFunction final : public Function {
 
 public:
     BoundFunction(GlobalObject&, Function& target_function, Value bound_this, Vector<Value> arguments, i32 length, Object* constructor_prototype);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~BoundFunction();
 
-    virtual Value call(Interpreter& interpreter) override;
+    virtual Value call() override;
 
-    virtual Value construct(Interpreter&, Function& new_target) override;
+    virtual Value construct(Function& new_target) override;
 
     virtual LexicalEnvironment* create_environment() override;
 
-    virtual void visit_children(Visitor&) override;
+    virtual void visit_edges(Visitor&) override;
 
     virtual const FlyString& name() const override
     {
@@ -55,6 +55,8 @@ public:
     {
         return *m_target_function;
     }
+
+    virtual bool is_strict_mode() const override { return m_target_function->is_strict_mode(); }
 
 private:
     virtual bool is_bound_function() const override { return true; }

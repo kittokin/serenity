@@ -32,6 +32,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <grp.h>
 #include <pwd.h>
 #include <stdarg.h>
@@ -42,11 +43,18 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 extern "C" {
 
+#ifdef NO_TLS
+static int s_cached_tid = 0;
+#else
 static __thread int s_cached_tid = 0;
+#endif
+
+static int s_cached_pid = 0;
 
 int chown(const char* pathname, uid_t uid, gid_t gid)
 {
@@ -68,8 +76,10 @@ int fchown(int fd, uid_t uid, gid_t gid)
 pid_t fork()
 {
     int rc = syscall(SC_fork);
-    if (rc == 0)
+    if (rc == 0) {
         s_cached_tid = 0;
+        s_cached_pid = 0;
+    }
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -199,7 +209,12 @@ gid_t getgid()
 
 pid_t getpid()
 {
-    return syscall(SC_getpid);
+    int cached_pid = s_cached_pid;
+    if (!cached_pid) {
+        cached_pid = syscall(SC_getpid);
+        s_cached_pid = cached_pid;
+    }
+    return cached_pid;
 }
 
 pid_t getppid()
@@ -271,7 +286,7 @@ ssize_t write(int fd, const void* buf, size_t count)
 
 int ttyname_r(int fd, char* buffer, size_t size)
 {
-    int rc = syscall(SC_ttyname_r, fd, buffer, size);
+    int rc = syscall(SC_ttyname, fd, buffer, size);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -286,33 +301,6 @@ char* ttyname(int fd)
 int close(int fd)
 {
     int rc = syscall(SC_close, fd);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
-}
-
-static int do_stat(const char* path, struct stat* statbuf, bool follow_symlinks)
-{
-    if (!path) {
-        errno = EFAULT;
-        return -1;
-    }
-    Syscall::SC_stat_params params { { path, strlen(path) }, statbuf, follow_symlinks };
-    int rc = syscall(SC_stat, &params);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
-}
-
-int lstat(const char* path, struct stat* statbuf)
-{
-    return do_stat(path, statbuf, false);
-}
-
-int stat(const char* path, struct stat* statbuf)
-{
-    return do_stat(path, statbuf, true);
-}
-
-int fstat(int fd, struct stat* statbuf)
-{
-    int rc = syscall(SC_fstat, fd, statbuf);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -350,12 +338,16 @@ char* getwd(char* buf)
 
 int sleep(unsigned seconds)
 {
-    return syscall(SC_sleep, seconds);
+    struct timespec ts = { seconds, 0 };
+    if (clock_nanosleep(CLOCK_MONOTONIC_COARSE, 0, &ts, nullptr) < 0)
+        return ts.tv_sec;
+    return 0;
 }
 
 int usleep(useconds_t usec)
 {
-    return syscall(SC_usleep, usec);
+    struct timespec ts = { (long)(usec / 1000000), (long)(usec % 1000000) * 1000 };
+    return clock_nanosleep(CLOCK_MONOTONIC_COARSE, 0, &ts, nullptr);
 }
 
 int gethostname(char* buffer, size_t size)
@@ -429,8 +421,7 @@ int isatty(int fd)
 
 int dup(int old_fd)
 {
-    int rc = syscall(SC_dup, old_fd);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
+    return fcntl(old_fd, F_DUPFD, 0);
 }
 
 int dup2(int old_fd, int new_fd)
@@ -524,11 +515,8 @@ int mknod(const char* pathname, mode_t mode, dev_t dev)
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
-long fpathconf(int fd, int name)
+long fpathconf([[maybe_unused]] int fd, [[maybe_unused]] int name)
 {
-    (void)fd;
-    (void)name;
-
     switch (name) {
     case _PC_PATH_MAX:
         return PATH_MAX;
@@ -539,10 +527,8 @@ long fpathconf(int fd, int name)
     ASSERT_NOT_REACHED();
 }
 
-long pathconf(const char* path, int name)
+long pathconf([[maybe_unused]] const char* path, int name)
 {
-    (void)path;
-
     switch (name) {
     case _PC_PATH_MAX:
         return PATH_MAX;
@@ -564,22 +550,17 @@ void sync()
     syscall(SC_sync);
 }
 
-int set_process_icon(int icon_id)
-{
-    int rc = syscall(SC_set_process_icon, icon_id);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
-}
+static String getlogin_buffer;
 
 char* getlogin()
 {
-    static char __getlogin_buffer[256];
-    if (auto* passwd = getpwuid(getuid())) {
-        strncpy(__getlogin_buffer, passwd->pw_name, sizeof(__getlogin_buffer) - 1);
+    if (getlogin_buffer.is_null()) {
+        if (auto* passwd = getpwuid(getuid())) {
+            getlogin_buffer = String(passwd->pw_name);
+        }
         endpwent();
-        return __getlogin_buffer;
     }
-    endpwent();
-    return nullptr;
+    return const_cast<char*>(getlogin_buffer.characters());
 }
 
 int ftruncate(int fd, off_t length)
@@ -603,9 +584,12 @@ int truncate(const char* path, off_t length)
 
 int gettid()
 {
-    if (!s_cached_tid)
-        s_cached_tid = syscall(SC_gettid);
-    return s_cached_tid;
+    int cached_tid = s_cached_tid;
+    if (!cached_tid) {
+        cached_tid = syscall(SC_gettid);
+        s_cached_tid = cached_tid;
+    }
+    return cached_tid;
 }
 
 int donate(int tid)
@@ -619,9 +603,8 @@ void sysbeep()
     syscall(SC_beep);
 }
 
-int fsync(int fd)
+int fsync([[maybe_unused]] int fd)
 {
-    UNUSED_PARAM(fd);
     dbgprintf("FIXME: Implement fsync()\n");
     return 0;
 }
@@ -669,6 +652,12 @@ void dump_backtrace()
 int get_process_name(char* buffer, int buffer_size)
 {
     int rc = syscall(SC_get_process_name, buffer, buffer_size);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
+int set_process_name(const char* name, size_t name_length)
+{
+    int rc = syscall(SC_set_process_name, name, name_length);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -727,5 +716,10 @@ long sysconf(int name)
 {
     int rc = syscall(SC_sysconf, name);
     __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
+int getpagesize()
+{
+    return PAGE_SIZE;
 }
 }

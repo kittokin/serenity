@@ -35,7 +35,7 @@
 
 namespace AK {
 
-template<typename T>
+template<typename T, typename PtrTraits>
 class RefPtr;
 template<typename T>
 class NonnullRefPtr;
@@ -45,14 +45,16 @@ class WeakPtr;
 template<typename T>
 class NonnullOwnPtr {
 public:
-    typedef T ElementType;
+    using ElementType = T;
 
     enum AdoptTag { Adopt };
 
     NonnullOwnPtr(AdoptTag, T& ptr)
         : m_ptr(&ptr)
     {
-        static_assert(!is_ref_counted((const T*)nullptr), "Use RefPtr<> for RefCounted types");
+        static_assert(
+            requires { requires typename T::AllowOwnPtr()(); } || !requires(T obj) { requires !typename T::AllowOwnPtr()(); obj.ref(); obj.unref(); },
+            "Use NonnullRefPtr<> for RefCounted types");
     }
     NonnullOwnPtr(NonnullOwnPtr&& other)
         : m_ptr(other.leak_ptr())
@@ -83,14 +85,14 @@ public:
     template<typename U>
     NonnullOwnPtr& operator=(const NonnullOwnPtr<U>&) = delete;
 
-    template<typename U>
-    NonnullOwnPtr(const RefPtr<U>&) = delete;
+    template<typename U, typename PtrTraits = RefPtrTraits<U>>
+    NonnullOwnPtr(const RefPtr<U, PtrTraits>&) = delete;
     template<typename U>
     NonnullOwnPtr(const NonnullRefPtr<U>&) = delete;
     template<typename U>
     NonnullOwnPtr(const WeakPtr<U>&) = delete;
-    template<typename U>
-    NonnullOwnPtr& operator=(const RefPtr<U>&) = delete;
+    template<typename U, typename PtrTraits = RefPtrTraits<U>>
+    NonnullOwnPtr& operator=(const RefPtr<U, PtrTraits>&) = delete;
     template<typename U>
     NonnullOwnPtr& operator=(const NonnullRefPtr<U>&) = delete;
     template<typename U>
@@ -111,7 +113,7 @@ public:
         return *this;
     }
 
-    T* leak_ptr()
+    [[nodiscard]] T* leak_ptr()
     {
         return exchange(m_ptr, nullptr);
     }
@@ -192,6 +194,14 @@ inline void swap(NonnullOwnPtr<T>& a, NonnullOwnPtr<U>& b)
 {
     a.swap(b);
 }
+
+template<typename T>
+struct Formatter<NonnullOwnPtr<T>> : Formatter<const T*> {
+    void format(FormatBuilder& builder, const NonnullOwnPtr<T>& value)
+    {
+        Formatter<const T*>::format(builder, value.ptr());
+    }
+};
 
 }
 

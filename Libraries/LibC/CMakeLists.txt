@@ -1,7 +1,6 @@
 set(LIBC_SOURCES
     arpa/inet.cpp
     assert.cpp
-    crt0.cpp
     ctype.cpp
     cxxabi.cpp
     dirent.cpp
@@ -32,6 +31,7 @@ set(LIBC_SOURCES
     string.cpp
     strings.cpp
     syslog.cpp
+    sys/prctl.cpp
     sys/ptrace.cpp
     sys/select.cpp
     sys/socket.cpp
@@ -48,11 +48,11 @@ set(LIBC_SOURCES
     wchar.cpp
 )
 
-file(GLOB AK_SOURCES "../../AK/*.cpp")
-file(GLOB ELF_SOURCES "../LibELF/*.cpp")
+file(GLOB AK_SOURCES CONFIGURE_DEPENDS "../../AK/*.cpp")
+file(GLOB ELF_SOURCES CONFIGURE_DEPENDS "../LibELF/*.cpp")
 set(ELF_SOURCES ${ELF_SOURCES} ../LibELF/Arch/i386/plt_trampoline.S)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DSERENITY_LIBC_BUILD")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unknown-warning-option -DSERENITY_LIBC_BUILD")
 
 find_program(INSTALL_COMMAND ginstall)
 if(NOT INSTALL_COMMAND)
@@ -64,8 +64,19 @@ add_custom_command(
     TARGET crt0
     COMMAND ${INSTALL_COMMAND} -D $<TARGET_OBJECTS:crt0> ${CMAKE_INSTALL_PREFIX}/usr/lib/crt0.o
 )
+add_library(crt0_shared STATIC crt0_shared.cpp)
+add_custom_command(
+    TARGET crt0_shared
+    COMMAND ${INSTALL_COMMAND} -D $<TARGET_OBJECTS:crt0_shared> ${CMAKE_INSTALL_PREFIX}/usr/lib/crt0_shared.o
+)
 
 set(SOURCES ${LIBC_SOURCES} ${AK_SOURCES} ${ELF_SOURCES})
+
+serenity_libc_static(LibCStatic c)
+target_link_libraries(LibCStatic crt0)
+add_dependencies(LibCStatic LibM)
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++")
 serenity_libc(LibC c)
 target_link_libraries(LibC crt0)
 add_dependencies(LibC LibM)

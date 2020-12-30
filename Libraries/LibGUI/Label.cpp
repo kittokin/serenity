@@ -32,16 +32,32 @@
 
 namespace GUI {
 
-Label::Label(const StringView& text)
-    : m_text(text)
+Label::Label(String text)
+    : m_text(move(text))
 {
+    REGISTER_TEXT_ALIGNMENT_PROPERTY("text_alignment", text_alignment, set_text_alignment);
+
     set_frame_thickness(0);
     set_frame_shadow(Gfx::FrameShadow::Plain);
     set_frame_shape(Gfx::FrameShape::NoFrame);
+
+    set_foreground_role(Gfx::ColorRole::WindowText);
+
+    REGISTER_STRING_PROPERTY("text", text, set_text);
+    REGISTER_BOOL_PROPERTY("autosize", is_autosize, set_autosize);
 }
 
 Label::~Label()
 {
+}
+
+void Label::set_autosize(bool autosize)
+{
+    if (m_autosize == autosize)
+        return;
+    m_autosize = autosize;
+    if (m_autosize)
+        size_to_fit();
 }
 
 void Label::set_icon(const Gfx::Bitmap* icon)
@@ -52,12 +68,26 @@ void Label::set_icon(const Gfx::Bitmap* icon)
     update();
 }
 
-void Label::set_text(const StringView& text)
+void Label::set_text(String text)
 {
     if (text == m_text)
         return;
-    m_text = text;
+    m_text = move(text);
+    if (m_autosize)
+        size_to_fit();
     update();
+    did_change_text();
+}
+
+Gfx::IntRect Label::text_rect() const
+{
+    int indent = 0;
+    if (frame_thickness() > 0)
+        indent = font().glyph_width('x') / 2;
+    auto rect = frame_inner_rect();
+    rect.move_by(indent, 0);
+    rect.set_width(rect.width() - indent * 2);
+    return rect;
 }
 
 void Label::paint_event(PaintEvent& event)
@@ -77,15 +107,10 @@ void Label::paint_event(PaintEvent& event)
     }
     if (text().is_empty())
         return;
-    int indent = 0;
-    if (frame_thickness() > 0)
-        indent = font().glyph_width('x') / 2;
-    auto text_rect = frame_inner_rect();
-    text_rect.move_by(indent, 0);
-    text_rect.set_width(text_rect.width() - indent * 2);
+    auto text_rect = this->text_rect();
 
     if (is_enabled()) {
-        painter.draw_text(text_rect, text(), m_text_alignment, palette().window_text(), Gfx::TextElision::Right);
+        painter.draw_text(text_rect, text(), m_text_alignment, palette().color(foreground_role()), Gfx::TextElision::Right);
     } else {
         painter.draw_text(text_rect.translated(1, 1), text(), font(), text_alignment(), Color::White, Gfx::TextElision::Right);
         painter.draw_text(text_rect, text(), font(), text_alignment(), Color::from_rgb(0x808080), Gfx::TextElision::Right);
@@ -94,8 +119,7 @@ void Label::paint_event(PaintEvent& event)
 
 void Label::size_to_fit()
 {
-    set_size_policy(SizePolicy::Fixed, SizePolicy::Fill);
-    set_preferred_size(font().width(m_text), 0);
+    set_fixed_width(font().width(m_text));
 }
 
 }

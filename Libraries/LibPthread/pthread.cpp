@@ -44,9 +44,12 @@ namespace {
 using PthreadAttrImpl = Syscall::SC_create_thread_params;
 } // end anonymous namespace
 
-constexpr size_t required_stack_alignment = 4 * MB;
+constexpr size_t required_stack_alignment = 4 * MiB;
 constexpr size_t highest_reasonable_guard_size = 32 * PAGE_SIZE;
-constexpr size_t highest_reasonable_stack_size = 8 * MB; // That's the default in Ubuntu?
+constexpr size_t highest_reasonable_stack_size = 8 * MiB; // That's the default in Ubuntu?
+
+#define __RETURN_PTHREAD_ERROR(rc) \
+    return ((rc) < 0 ? -(rc) : 0)
 
 extern "C" {
 
@@ -57,7 +60,7 @@ static void* pthread_create_helper(void* (*routine)(void*), void* argument)
     return nullptr;
 }
 
-static int create_thread(void* (*entry)(void*), void* argument, PthreadAttrImpl* thread_params)
+static int create_thread(pthread_t* thread, void* (*entry)(void*), void* argument, PthreadAttrImpl* thread_params)
 {
     void** stack = (void**)((uintptr_t)thread_params->m_stack_location + thread_params->m_stack_size);
 
@@ -80,10 +83,13 @@ static int create_thread(void* (*entry)(void*), void* argument, PthreadAttrImpl*
     // Push a fake return address
     push_on_stack(nullptr);
 
-    return syscall(SC_create_thread, pthread_create_helper, thread_params);
+    int rc = syscall(SC_create_thread, pthread_create_helper, thread_params);
+    if (rc >= 0)
+        *thread = rc;
+    __RETURN_PTHREAD_ERROR(rc);
 }
 
-static void exit_thread(void* code)
+[[noreturn]] static void exit_thread(void* code)
 {
     syscall(SC_exit_thread, code);
     ASSERT_NOT_REACHED();
@@ -124,11 +130,7 @@ int pthread_create(pthread_t* thread, pthread_attr_t* attributes, void* (*start_
         used_attributes->m_stack_location);
 #endif
 
-    int rc = create_thread(start_routine, argument_to_start_routine, used_attributes);
-    if (rc < 0)
-        return rc;
-    *thread = rc;
-    return 0;
+    return create_thread(thread, start_routine, argument_to_start_routine, used_attributes);
 }
 
 void pthread_exit(void* value_ptr)
@@ -138,12 +140,14 @@ void pthread_exit(void* value_ptr)
 
 int pthread_join(pthread_t thread, void** exit_value_ptr)
 {
-    return syscall(SC_join_thread, thread, exit_value_ptr);
+    int rc = syscall(SC_join_thread, thread, exit_value_ptr);
+    __RETURN_PTHREAD_ERROR(rc);
 }
 
 int pthread_detach(pthread_t thread)
 {
-    return syscall(SC_detach_thread, thread);
+    int rc = syscall(SC_detach_thread, thread);
+    __RETURN_PTHREAD_ERROR(rc);
 }
 
 int pthread_sigmask(int how, const sigset_t* set, sigset_t* old_set)
@@ -278,7 +282,7 @@ int pthread_attr_setdetachstate(pthread_attr_t* attributes, int detach_state)
     if (!attributes_impl)
         return EINVAL;
 
-    if ((PTHREAD_CREATE_JOINABLE != detach_state) || PTHREAD_CREATE_DETACHED != detach_state)
+    if (detach_state != PTHREAD_CREATE_JOINABLE && detach_state != PTHREAD_CREATE_DETACHED)
         return EINVAL;
 
     attributes_impl->m_detach_state = detach_state;
@@ -456,19 +460,13 @@ int pthread_attr_setstacksize(pthread_attr_t* attributes, size_t stack_size)
     return 0;
 }
 
-int pthread_getschedparam(pthread_t thread, int* policy, struct sched_param* param)
+int pthread_getschedparam([[maybe_unused]] pthread_t thread, [[maybe_unused]] int* policy, [[maybe_unused]] struct sched_param* param)
 {
-    (void)thread;
-    (void)policy;
-    (void)param;
     return 0;
 }
 
-int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param* param)
+int pthread_setschedparam([[maybe_unused]] pthread_t thread, [[maybe_unused]] int policy, [[maybe_unused]] const struct sched_param* param)
 {
-    (void)thread;
-    (void)policy;
-    (void)param;
     return 0;
 }
 
@@ -476,7 +474,7 @@ int pthread_cond_init(pthread_cond_t* cond, const pthread_condattr_t* attr)
 {
     cond->value = 0;
     cond->previous = 0;
-    cond->clockid = attr ? attr->clockid : CLOCK_MONOTONIC;
+    cond->clockid = attr ? attr->clockid : CLOCK_MONOTONIC_COARSE;
     return 0;
 }
 
@@ -504,7 +502,7 @@ int pthread_cond_wait(pthread_cond_t* cond, pthread_mutex_t* mutex)
 
 int pthread_condattr_init(pthread_condattr_t* attr)
 {
-    attr->clockid = CLOCK_MONOTONIC;
+    attr->clockid = CLOCK_MONOTONIC_COARSE;
     return 0;
 }
 
@@ -599,12 +597,14 @@ int pthread_setname_np(pthread_t thread, const char* name)
 {
     if (!name)
         return EFAULT;
-    return syscall(SC_set_thread_name, thread, name, strlen(name));
+    int rc = syscall(SC_set_thread_name, thread, name, strlen(name));
+    __RETURN_PTHREAD_ERROR(rc);
 }
 
 int pthread_getname_np(pthread_t thread, char* buffer, size_t buffer_size)
 {
-    return syscall(SC_get_thread_name, thread, buffer, buffer_size);
+    int rc = syscall(SC_get_thread_name, thread, buffer, buffer_size);
+    __RETURN_PTHREAD_ERROR(rc);
 }
 
 } // extern "C"

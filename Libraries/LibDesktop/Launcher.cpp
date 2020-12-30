@@ -51,11 +51,6 @@ auto Launcher::Details::from_details_str(const String& details_str) -> NonnullRe
         else if (type_str == "userdefault")
             details->launcher_type = LauncherType::UserDefault;
     }
-    if (auto icons_value = obj.get_ptr("icons")) {
-        icons_value->as_object().for_each_member([&](auto& name, auto& value) {
-            details->icons.set(name, value.to_string());
-        });
-    }
     return details;
 }
 
@@ -74,7 +69,7 @@ private:
         : IPC::ServerConnection<LaunchClientEndpoint, LaunchServerEndpoint>(*this, "/tmp/portal/launch")
     {
     }
-    virtual void handle(const Messages::LaunchClient::Dummy&) override {}
+    virtual void handle(const Messages::LaunchClient::Dummy&) override { }
 };
 
 bool Launcher::open(const URL& url, const String& handler_name)

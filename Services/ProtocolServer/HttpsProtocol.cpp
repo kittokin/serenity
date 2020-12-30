@@ -40,14 +40,28 @@ HttpsProtocol::~HttpsProtocol()
 {
 }
 
-OwnPtr<Download> HttpsProtocol::start_download(ClientConnection& client, const URL& url, const HashMap<String, String>& headers)
+OwnPtr<Download> HttpsProtocol::start_download(ClientConnection& client, const String& method, const URL& url, const HashMap<String, String>& headers, ReadonlyBytes body)
 {
     HTTP::HttpRequest request;
-    request.set_method(HTTP::HttpRequest::Method::GET);
+    if (method.equals_ignoring_case("post"))
+        request.set_method(HTTP::HttpRequest::Method::POST);
+    else
+        request.set_method(HTTP::HttpRequest::Method::GET);
     request.set_url(url);
     request.set_headers(headers);
-    auto job = HTTP::HttpsJob::construct(request);
-    auto download = HttpsDownload::create_with_job({}, client, (HTTP::HttpsJob&)*job);
+    request.set_body(body);
+
+    int fd_pair[2] { 0 };
+    if (pipe(fd_pair) != 0) {
+        auto saved_errno = errno;
+        dbgln("Protocol: pipe() failed: {}", strerror(saved_errno));
+        return nullptr;
+    }
+    auto output_stream = make<OutputFileStream>(fd_pair[1]);
+    output_stream->make_unbuffered();
+    auto job = HTTP::HttpsJob::construct(request, *output_stream);
+    auto download = HttpsDownload::create_with_job({}, client, (HTTP::HttpsJob&)*job, move(output_stream));
+    download->set_download_fd(fd_pair[0]);
     job->start();
     return download;
 }

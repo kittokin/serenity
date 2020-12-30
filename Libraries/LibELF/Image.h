@@ -37,7 +37,7 @@ namespace ELF {
 
 class Image {
 public:
-    explicit Image(const u8*, size_t);
+    explicit Image(const u8*, size_t, bool verbose_logging = true);
     ~Image();
     void dump() const;
     bool is_valid() const { return m_valid; }
@@ -66,7 +66,7 @@ public:
         {
         }
 
-        ~Symbol() {}
+        ~Symbol() { }
 
         StringView name() const { return m_image.table_string(m_sym.st_name); }
         unsigned section_index() const { return m_sym.st_shndx; }
@@ -92,7 +92,7 @@ public:
             , m_program_header_index(program_header_index)
         {
         }
-        ~ProgramHeader() {}
+        ~ProgramHeader() { }
 
         unsigned index() const { return m_program_header_index; }
         u32 type() const { return m_program_header.p_type; }
@@ -122,7 +122,7 @@ public:
             , m_section_index(sectionIndex)
         {
         }
-        ~Section() {}
+        ~Section() { }
 
         StringView name() const { return m_image.section_header_table_string(m_section_header.sh_name); }
         unsigned type() const { return m_section_header.sh_type; }
@@ -132,7 +132,7 @@ public:
         unsigned entry_count() const { return !entry_size() ? 0 : size() / entry_size(); }
         u32 address() const { return m_section_header.sh_addr; }
         const char* raw_data() const { return m_image.raw_data(m_section_header.sh_offset); }
-        ByteBuffer wrapping_byte_buffer() { return ByteBuffer::wrap(reinterpret_cast<const u8*>(raw_data()), size()); }
+        ReadonlyBytes bytes() const { return { raw_data(), size() }; }
         bool is_undefined() const { return m_section_index == SHN_UNDEF; }
         const RelocationSection relocations() const;
         u32 flags() const { return m_section_header.sh_flags; }
@@ -166,7 +166,7 @@ public:
         {
         }
 
-        ~Relocation() {}
+        ~Relocation() { }
 
         unsigned offset() const { return m_rel.r_offset; }
         unsigned type() const { return ELF32_R_TYPE(m_rel.r_info); }
@@ -185,6 +185,7 @@ public:
     const Symbol symbol(unsigned) const;
     const Section section(unsigned) const;
     const ProgramHeader program_header(unsigned const) const;
+    FlatPtr program_header_table_offset() const;
 
     template<typename F>
     void for_each_section(F) const;
@@ -204,9 +205,16 @@ public:
     bool is_dynamic() const { return header().e_type == ET_DYN; }
 
     VirtualAddress entry() const { return VirtualAddress(header().e_entry); }
+    FlatPtr base_address() const { return (FlatPtr)m_buffer; }
+    size_t size() const { return m_size; }
+
+    Optional<Symbol> find_demangled_function(const String& name) const;
+
+    bool has_symbols() const { return symbol_count(); }
+    String symbolicate(u32 address, u32* offset = nullptr) const;
+    Optional<Image::Symbol> find_symbol(u32 address, u32* offset = nullptr) const;
 
 private:
-    bool parse_header();
     const char* raw_data(unsigned offset) const;
     const Elf32_Ehdr& header() const;
     const Elf32_Shdr& section_header(unsigned) const;
@@ -218,10 +226,20 @@ private:
 
     const u8* m_buffer { nullptr };
     size_t m_size { 0 };
+    bool m_verbose_logging { true };
     HashMap<String, unsigned> m_sections;
     bool m_valid { false };
     unsigned m_symbol_table_section_index { 0 };
     unsigned m_string_table_section_index { 0 };
+
+    struct SortedSymbol {
+        u32 address;
+        StringView name;
+        String demangled_name;
+        Optional<Image::Symbol> symbol;
+    };
+
+    mutable Vector<SortedSymbol> m_sorted_symbols;
 };
 
 template<typename F>
@@ -269,8 +287,10 @@ template<typename F>
 inline void Image::for_each_program_header(F func) const
 {
     auto program_header_count = this->program_header_count();
-    for (unsigned i = 0; i < program_header_count; ++i)
-        func(program_header(i));
+    for (unsigned i = 0; i < program_header_count; ++i) {
+        if (func(program_header(i)) == IterationDecision::Break)
+            return;
+    }
 }
 
 } // end namespace ELF

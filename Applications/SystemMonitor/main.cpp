@@ -26,14 +26,15 @@
 
 #include "DevicesModel.h"
 #include "GraphWidget.h"
+#include "InterruptsWidget.h"
 #include "MemoryStatsWidget.h"
 #include "NetworkStatisticsWidget.h"
 #include "ProcessFileDescriptorMapWidget.h"
 #include "ProcessMemoryMapWidget.h"
 #include "ProcessModel.h"
-#include "ProcessStacksWidget.h"
-#include "ProcessTableView.h"
 #include "ProcessUnveiledPathsWidget.h"
+#include "ThreadStackWidget.h"
+#include <AK/NumberFormat.h>
 #include <LibCore/Timer.h>
 #include <LibGUI/AboutDialog.h>
 #include <LibGUI/Action.h>
@@ -41,6 +42,7 @@
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/GroupBox.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/JsonArrayModel.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/LazyWidget.h>
@@ -50,31 +52,23 @@
 #include <LibGUI/SortingProxyModel.h>
 #include <LibGUI/Splitter.h>
 #include <LibGUI/TabWidget.h>
+#include <LibGUI/TableView.h>
 #include <LibGUI/ToolBar.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Palette.h>
 #include <LibPCIDB/Database.h>
+#include <serenity.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <unistd.h>
 
-static String human_readable_size(u32 size)
-{
-    if (size < (64 * KB))
-        return String::format("%u", size);
-    if (size < MB)
-        return String::format("%u KB", size / KB);
-    if (size < GB)
-        return String::format("%u MB", size / MB);
-    return String::format("%u GB", size / GB);
-}
-
 static NonnullRefPtr<GUI::Widget> build_file_systems_tab();
 static NonnullRefPtr<GUI::Widget> build_pci_devices_tab();
 static NonnullRefPtr<GUI::Widget> build_devices_tab();
 static NonnullRefPtr<GUI::Widget> build_graphs_tab();
+static NonnullRefPtr<GUI::Widget> build_processors_tab();
 
 class UnavailableProcessWidget final : public GUI::Frame {
     C_OBJECT(UnavailableProcessWidget)
@@ -103,10 +97,9 @@ private:
     String m_text;
 };
 
-static bool
-can_access_pid(pid_t pid)
+static bool can_access_pid(pid_t pid)
 {
-    auto path = String::format("/proc/%d", pid);
+    auto path = String::formatted("/proc/{}", pid);
     return access(path.characters(), X_OK) == 0;
 }
 
@@ -144,16 +137,28 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (unveil("/bin/Profiler", "x") < 0) {
+    if (unveil("/bin", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil("/bin/Profiler", "rx") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil("/bin/Inspector", "rx") < 0) {
         perror("unveil");
         return 1;
     }
 
     unveil(nullptr, nullptr);
 
+    auto app_icon = GUI::Icon::default_icon("app-system-monitor");
+
     auto window = GUI::Window::construct();
     window->set_title("System Monitor");
-    window->set_rect(20, 200, 680, 400);
+    window->resize(680, 400);
 
     auto& keeper = window->set_main_widget<GUI::Widget>();
     keeper.set_layout<GUI::VerticalBoxLayout>();
@@ -178,47 +183,83 @@ int main(int argc, char** argv)
     auto network_stats_widget = NetworkStatisticsWidget::construct();
     tabwidget.add_widget("Network", network_stats_widget);
 
+    tabwidget.add_widget("Processors", build_processors_tab());
+
+    auto interrupts_widget = InterruptsWidget::construct();
+    tabwidget.add_widget("Interrupts", interrupts_widget);
+
     process_table_container.set_layout<GUI::VerticalBoxLayout>();
     process_table_container.layout()->set_spacing(0);
 
-    auto& process_table_view = process_table_container.add<ProcessTableView>();
+    auto& process_table_view = process_table_container.add<GUI::TableView>();
+    process_table_view.set_column_headers_visible(true);
+    process_table_view.set_model(GUI::SortingProxyModel::create(ProcessModel::create()));
+    process_table_view.set_key_column_and_sort_order(ProcessModel::Column::CPU, GUI::SortOrder::Descending);
+    process_table_view.model()->update();
 
     auto& refresh_timer = window->add<Core::Timer>(
         3000, [&] {
-            process_table_view.refresh();
+            process_table_view.model()->update();
             if (auto* memory_stats_widget = MemoryStatsWidget::the())
                 memory_stats_widget->refresh();
         });
 
-    auto kill_action = GUI::Action::create("Kill process", { Mod_Ctrl, Key_K }, Gfx::Bitmap::load_from_file("/res/icons/kill16.png"), [&process_table_view](const GUI::Action&) {
-        pid_t pid = process_table_view.selected_pid();
+    auto selected_id = [&](ProcessModel::Column column) -> pid_t {
+        if (process_table_view.selection().is_empty())
+            return -1;
+        auto pid_index = process_table_view.model()->index(process_table_view.selection().first().row(), column);
+        return pid_index.data().to_i32();
+    };
+
+    auto kill_action = GUI::Action::create("Kill process", { Mod_Ctrl, Key_K }, Gfx::Bitmap::load_from_file("/res/icons/16x16/kill.png"), [&](const GUI::Action&) {
+        pid_t pid = selected_id(ProcessModel::Column::PID);
         if (pid != -1)
             kill(pid, SIGKILL);
     });
 
-    auto stop_action = GUI::Action::create("Stop process", { Mod_Ctrl, Key_S }, Gfx::Bitmap::load_from_file("/res/icons/stop16.png"), [&process_table_view](const GUI::Action&) {
-        pid_t pid = process_table_view.selected_pid();
+    auto stop_action = GUI::Action::create("Stop process", { Mod_Ctrl, Key_S }, Gfx::Bitmap::load_from_file("/res/icons/16x16/stop-hand.png"), [&](const GUI::Action&) {
+        pid_t pid = selected_id(ProcessModel::Column::PID);
         if (pid != -1)
             kill(pid, SIGSTOP);
     });
 
-    auto continue_action = GUI::Action::create("Continue process", { Mod_Ctrl, Key_C }, Gfx::Bitmap::load_from_file("/res/icons/continue16.png"), [&process_table_view](const GUI::Action&) {
-        pid_t pid = process_table_view.selected_pid();
+    auto continue_action = GUI::Action::create("Continue process", { Mod_Ctrl, Key_C }, Gfx::Bitmap::load_from_file("/res/icons/16x16/continue.png"), [&](const GUI::Action&) {
+        pid_t pid = selected_id(ProcessModel::Column::PID);
         if (pid != -1)
             kill(pid, SIGCONT);
     });
 
-    auto profile_action = GUI::Action::create("Profile process", { Mod_Ctrl, Key_P }, [&process_table_view](auto&) {
-        pid_t pid = process_table_view.selected_pid();
-        if (pid != -1) {
-            auto pid_string = String::format("%d", pid);
-            pid_t child;
-            const char* argv[] = { "/bin/Profiler", "--pid", pid_string.characters(), nullptr };
-            if ((errno = posix_spawn(&child, "/bin/Profiler", nullptr, nullptr, const_cast<char**>(argv), environ))) {
-                perror("posix_spawn");
+    auto profile_action = GUI::Action::create("Profile process", { Mod_Ctrl, Key_P },
+        Gfx::Bitmap::load_from_file("/res/icons/16x16/app-profiler.png"), [&](auto&) {
+            pid_t pid = selected_id(ProcessModel::Column::PID);
+            if (pid != -1) {
+                auto pid_string = String::format("%d", pid);
+                pid_t child;
+                const char* argv[] = { "/bin/Profiler", "--pid", pid_string.characters(), nullptr };
+                if ((errno = posix_spawn(&child, "/bin/Profiler", nullptr, nullptr, const_cast<char**>(argv), environ))) {
+                    perror("posix_spawn");
+                } else {
+                    if (disown(child) < 0)
+                        perror("disown");
+                }
             }
-        }
-    });
+        });
+
+    auto inspect_action = GUI::Action::create("Inspect process", { Mod_Ctrl, Key_I },
+        Gfx::Bitmap::load_from_file("/res/icons/16x16/app-inspector.png"), [&](auto&) {
+            pid_t pid = selected_id(ProcessModel::Column::PID);
+            if (pid != -1) {
+                auto pid_string = String::format("%d", pid);
+                pid_t child;
+                const char* argv[] = { "/bin/Inspector", pid_string.characters(), nullptr };
+                if ((errno = posix_spawn(&child, "/bin/Inspector", nullptr, nullptr, const_cast<char**>(argv), environ))) {
+                    perror("posix_spawn");
+                } else {
+                    if (disown(child) < 0)
+                        perror("disown");
+                }
+            }
+        });
 
     auto menubar = GUI::MenuBar::construct();
     auto& app_menu = menubar->add_menu("System Monitor");
@@ -233,6 +274,7 @@ int main(int argc, char** argv)
     process_menu.add_action(continue_action);
     process_menu.add_separator();
     process_menu.add_action(profile_action);
+    process_menu.add_action(inspect_action);
 
     auto process_context_menu = GUI::Menu::construct();
     process_context_menu->add_action(kill_action);
@@ -240,8 +282,8 @@ int main(int argc, char** argv)
     process_context_menu->add_action(continue_action);
     process_context_menu->add_separator();
     process_context_menu->add_action(profile_action);
-    process_table_view.on_context_menu_request = [&](const GUI::ModelIndex& index, const GUI::ContextMenuEvent& event) {
-        (void)index;
+    process_context_menu->add_action(inspect_action);
+    process_table_view.on_context_menu_request = [&]([[maybe_unused]] const GUI::ModelIndex& index, const GUI::ContextMenuEvent& event) {
         process_context_menu->popup(event.screen_position());
     };
 
@@ -264,7 +306,7 @@ int main(int argc, char** argv)
 
     auto& help_menu = menubar->add_menu("Help");
     help_menu.add_action(GUI::Action::create("About", [&](const GUI::Action&) {
-        GUI::AboutDialog::show("System Monitor", Gfx::Bitmap::load_from_file("/res/icons/32x32/app-system-monitor.png"), window);
+        GUI::AboutDialog::show("System Monitor", app_icon.bitmap_for_size(32), window);
     }));
 
     app->set_menubar(move(menubar));
@@ -273,14 +315,17 @@ int main(int argc, char** argv)
     process_tab_unused_widget.set_visible(true);
 
     auto& process_tab_widget = process_container_splitter.add<GUI::TabWidget>();
+    process_tab_widget.set_tab_position(GUI::TabWidget::TabPosition::Bottom);
     process_tab_widget.set_visible(false);
 
     auto& memory_map_widget = process_tab_widget.add_tab<ProcessMemoryMapWidget>("Memory map");
     auto& open_files_widget = process_tab_widget.add_tab<ProcessFileDescriptorMapWidget>("Open files");
     auto& unveiled_paths_widget = process_tab_widget.add_tab<ProcessUnveiledPathsWidget>("Unveiled paths");
-    auto& stacks_widget = process_tab_widget.add_tab<ProcessStacksWidget>("Stacks");
+    auto& stack_widget = process_tab_widget.add_tab<ThreadStackWidget>("Stack");
 
-    process_table_view.on_process_selected = [&](pid_t pid) {
+    process_table_view.on_selection = [&](auto&) {
+        auto pid = selected_id(ProcessModel::Column::PID);
+        auto tid = selected_id(ProcessModel::Column::TID);
         if (!can_access_pid(pid)) {
             process_tab_widget.set_visible(false);
             process_tab_unused_widget.set_text("Process cannot be accessed");
@@ -291,14 +336,14 @@ int main(int argc, char** argv)
         process_tab_widget.set_visible(true);
         process_tab_unused_widget.set_visible(false);
         open_files_widget.set_pid(pid);
-        stacks_widget.set_pid(pid);
+        stack_widget.set_ids(pid, tid);
         memory_map_widget.set_pid(pid);
         unveiled_paths_widget.set_pid(pid);
     };
 
     window->show();
 
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-system-monitor.png"));
+    window->set_icon(app_icon.bitmap_for_size(16));
 
     return app->exec();
 }
@@ -307,12 +352,12 @@ class ProgressBarPaintingDelegate final : public GUI::TableCellPaintingDelegate 
 public:
     virtual ~ProgressBarPaintingDelegate() override { }
 
-    virtual void paint(GUI::Painter& painter, const Gfx::IntRect& a_rect, const Palette& palette, const GUI::Model& model, const GUI::ModelIndex& index) override
+    virtual void paint(GUI::Painter& painter, const Gfx::IntRect& a_rect, const Palette& palette, const GUI::ModelIndex& index) override
     {
         auto rect = a_rect.shrunken(2, 2);
-        auto percentage = model.data(index, GUI::Model::Role::Custom).to_i32();
+        auto percentage = index.data(GUI::ModelRole::Custom).to_i32();
 
-        auto data = model.data(index, GUI::Model::Role::Display);
+        auto data = index.data();
         String text;
         if (data.is_string())
             text = data.as_string();
@@ -409,7 +454,7 @@ NonnullRefPtr<GUI::Widget> build_file_systems_tab()
         df_fields.empend("block_size", "Block size", Gfx::TextAlignment::CenterRight);
         fs_table_view.set_model(GUI::SortingProxyModel::create(GUI::JsonArrayModel::create("/proc/df", move(df_fields))));
 
-        fs_table_view.set_cell_painting_delegate(3, make<ProgressBarPaintingDelegate>());
+        fs_table_view.set_column_painting_delegate(3, make<ProgressBarPaintingDelegate>());
 
         fs_table_view.model()->update();
     };
@@ -435,21 +480,21 @@ NonnullRefPtr<GUI::Widget> build_pci_devices_tab()
                 auto bus = object.get("bus").to_u32();
                 auto slot = object.get("slot").to_u32();
                 auto function = object.get("function").to_u32();
-                return String::format("%04x:%02x:%02x.%d", seg, bus, slot, function);
+                return String::formatted("{:04x}:{:02x}:{:02x}.{}", seg, bus, slot, function);
             });
         pci_fields.empend(
             "Class", Gfx::TextAlignment::CenterLeft,
             [db](const JsonObject& object) {
                 auto class_id = object.get("class").to_u32();
                 String class_name = db->get_class(class_id);
-                return class_name == "" ? String::format("%04x", class_id) : class_name;
+                return class_name == "" ? String::formatted("{:04x}", class_id) : class_name;
             });
         pci_fields.empend(
             "Vendor", Gfx::TextAlignment::CenterLeft,
             [db](const JsonObject& object) {
                 auto vendor_id = object.get("vendor_id").to_u32();
                 String vendor_name = db->get_vendor(vendor_id);
-                return vendor_name == "" ? String::format("%02x", vendor_id) : vendor_name;
+                return vendor_name == "" ? String::formatted("{:02x}", vendor_id) : vendor_name;
             });
         pci_fields.empend(
             "Device", Gfx::TextAlignment::CenterLeft,
@@ -457,13 +502,13 @@ NonnullRefPtr<GUI::Widget> build_pci_devices_tab()
                 auto vendor_id = object.get("vendor_id").to_u32();
                 auto device_id = object.get("device_id").to_u32();
                 String device_name = db->get_device(vendor_id, device_id);
-                return device_name == "" ? String::format("%02x", device_id) : device_name;
+                return device_name == "" ? String::formatted("{:02x}", device_id) : device_name;
             });
         pci_fields.empend(
             "Revision", Gfx::TextAlignment::CenterRight,
             [](const JsonObject& object) {
                 auto revision_id = object.get("revision_id").to_u32();
-                return String::format("%02x", revision_id);
+                return String::formatted("{:02x}", revision_id);
             });
 
         pci_table_view.set_model(GUI::SortingProxyModel::create(GUI::JsonArrayModel::create("/proc/pci", move(pci_fields))));
@@ -502,8 +547,7 @@ NonnullRefPtr<GUI::Widget> build_graphs_tab()
         auto& cpu_graph_group_box = self.add<GUI::GroupBox>("CPU usage");
         cpu_graph_group_box.set_layout<GUI::HorizontalBoxLayout>();
         cpu_graph_group_box.layout()->set_margins({ 6, 16, 6, 6 });
-        cpu_graph_group_box.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-        cpu_graph_group_box.set_preferred_size(0, 120);
+        cpu_graph_group_box.set_fixed_height(120);
         Vector<GraphWidget*> cpu_graphs;
         for (size_t i = 0; i < ProcessModel::the().cpus().size(); i++) {
             auto& cpu_graph = cpu_graph_group_box.add<GraphWidget>();
@@ -511,7 +555,7 @@ NonnullRefPtr<GUI::Widget> build_graphs_tab()
             cpu_graph.set_text_color(Color::Green);
             cpu_graph.set_graph_color(Color::from_rgb(0x00bb00));
             cpu_graph.text_formatter = [](int value, int) {
-                return String::format("%d%%", value);
+                return String::formatted("{}%", value);
             };
             cpu_graphs.append(&cpu_graph);
         }
@@ -523,16 +567,49 @@ NonnullRefPtr<GUI::Widget> build_graphs_tab()
         auto& memory_graph_group_box = self.add<GUI::GroupBox>("Memory usage");
         memory_graph_group_box.set_layout<GUI::VerticalBoxLayout>();
         memory_graph_group_box.layout()->set_margins({ 6, 16, 6, 6 });
-        memory_graph_group_box.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-        memory_graph_group_box.set_preferred_size(0, 120);
+        memory_graph_group_box.set_fixed_height(120);
         auto& memory_graph = memory_graph_group_box.add<GraphWidget>();
         memory_graph.set_text_color(Color::Cyan);
         memory_graph.set_graph_color(Color::from_rgb(0x00bbbb));
         memory_graph.text_formatter = [](int value, int max) {
-            return String::format("%d / %d KB", value, max);
+            return String::formatted("{} / {} KiB", value, max);
         };
 
         self.add<MemoryStatsWidget>(memory_graph);
     };
     return graphs_container;
+}
+
+NonnullRefPtr<GUI::Widget> build_processors_tab()
+{
+    auto processors_widget = GUI::LazyWidget::construct();
+
+    processors_widget->on_first_show = [](GUI::LazyWidget& self) {
+        self.set_layout<GUI::VerticalBoxLayout>();
+        self.layout()->set_margins({ 4, 4, 4, 4 });
+
+        Vector<GUI::JsonArrayModel::FieldSpec> processors_field;
+        processors_field.empend("processor", "Processor", Gfx::TextAlignment::CenterRight);
+        processors_field.empend("cpuid", "CPUID", Gfx::TextAlignment::CenterLeft);
+        processors_field.empend("brandstr", "Brand", Gfx::TextAlignment::CenterLeft);
+        processors_field.empend("Features", Gfx::TextAlignment::CenterLeft, [](auto& object) {
+            StringBuilder builder;
+            auto features = object.get("features").as_array();
+            for (auto& feature : features.values()) {
+                builder.append(feature.to_string());
+                builder.append(' ');
+            }
+            return GUI::Variant(builder.to_string());
+        });
+        processors_field.empend("family", "Family", Gfx::TextAlignment::CenterRight);
+        processors_field.empend("model", "Model", Gfx::TextAlignment::CenterRight);
+        processors_field.empend("stepping", "Stepping", Gfx::TextAlignment::CenterRight);
+        processors_field.empend("type", "Type", Gfx::TextAlignment::CenterRight);
+
+        auto& processors_table_view = self.add<GUI::TableView>();
+        processors_table_view.set_model(GUI::JsonArrayModel::create("/proc/cpuinfo", move(processors_field)));
+        processors_table_view.model()->update();
+    };
+
+    return processors_widget;
 }

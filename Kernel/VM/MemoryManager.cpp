@@ -30,8 +30,10 @@
 #include <Kernel/Arch/i386/CPU.h>
 #include <Kernel/CMOS.h>
 #include <Kernel/FileSystem/Inode.h>
+#include <Kernel/Heap/kmalloc.h>
 #include <Kernel/Multiboot.h>
 #include <Kernel/Process.h>
+#include <Kernel/StdLib.h>
 #include <Kernel/VM/AnonymousVMObject.h>
 #include <Kernel/VM/ContiguousVMObject.h>
 #include <Kernel/VM/MemoryManager.h>
@@ -39,23 +41,33 @@
 #include <Kernel/VM/PhysicalRegion.h>
 #include <Kernel/VM/PurgeableVMObject.h>
 #include <Kernel/VM/SharedInodeVMObject.h>
-#include <Kernel/StdLib.h>
 
 //#define MM_DEBUG
 //#define PAGE_FAULT_DEBUG
 
+extern u8* start_of_kernel_image;
+extern u8* end_of_kernel_image;
 extern FlatPtr start_of_kernel_text;
 extern FlatPtr start_of_kernel_data;
 extern FlatPtr end_of_kernel_bss;
 
 namespace Kernel {
 
+// NOTE: We can NOT use AK::Singleton for this class, because
+// MemoryManager::initialize is called *before* global constructors are
+// run. If we do, then AK::Singleton would get re-initialized, causing
+// the memory manager to be initialized twice!
 static MemoryManager* s_the;
 RecursiveSpinLock s_mm_lock;
 
 MemoryManager& MM
 {
     return *s_the;
+}
+
+bool MemoryManager::is_initialized()
+{
+    return s_the != nullptr;
 }
 
 MemoryManager::MemoryManager()
@@ -75,16 +87,21 @@ MemoryManager::~MemoryManager()
 
 void MemoryManager::protect_kernel_image()
 {
+    ScopedSpinLock page_lock(kernel_page_directory().get_lock());
     // Disable writing to the kernel text and rodata segments.
     for (size_t i = (FlatPtr)&start_of_kernel_text; i < (FlatPtr)&start_of_kernel_data; i += PAGE_SIZE) {
-        auto& pte = ensure_pte(kernel_page_directory(), VirtualAddress(i));
+        auto& pte = *ensure_pte(kernel_page_directory(), VirtualAddress(i));
         pte.set_writable(false);
     }
 
     if (Processor::current().has_feature(CPUFeature::NX)) {
-        // Disable execution of the kernel data and bss segments.
+        // Disable execution of the kernel data and bss segments, as well as the kernel heap.
         for (size_t i = (FlatPtr)&start_of_kernel_data; i < (FlatPtr)&end_of_kernel_bss; i += PAGE_SIZE) {
-            auto& pte = ensure_pte(kernel_page_directory(), VirtualAddress(i));
+            auto& pte = *ensure_pte(kernel_page_directory(), VirtualAddress(i));
+            pte.set_execute_disabled(true);
+        }
+        for (size_t i = FlatPtr(kmalloc_start); i < FlatPtr(kmalloc_end); i += PAGE_SIZE) {
+            auto& pte = *ensure_pte(kernel_page_directory(), VirtualAddress(i));
             pte.set_execute_disabled(true);
         }
     }
@@ -95,14 +112,21 @@ void MemoryManager::parse_memory_map()
     RefPtr<PhysicalRegion> region;
     bool region_is_super = false;
 
+    // We need to make sure we exclude the kmalloc range as well as the kernel image.
+    // The kmalloc range directly follows the kernel image
+    const PhysicalAddress used_range_start(virtual_to_low_physical(FlatPtr(&start_of_kernel_image)));
+    const PhysicalAddress used_range_end(PAGE_ROUND_UP(virtual_to_low_physical(FlatPtr(kmalloc_end))));
+    klog() << "MM: kernel range: " << used_range_start << " - " << PhysicalAddress(PAGE_ROUND_UP(virtual_to_low_physical(FlatPtr(&end_of_kernel_image))));
+    klog() << "MM: kmalloc range: " << PhysicalAddress(virtual_to_low_physical(FlatPtr(kmalloc_start))) << " - " << used_range_end;
+
     auto* mmap = (multiboot_memory_map_t*)(low_physical_to_virtual(multiboot_info_ptr->mmap_addr));
     for (; (unsigned long)mmap < (low_physical_to_virtual(multiboot_info_ptr->mmap_addr)) + (multiboot_info_ptr->mmap_length); mmap = (multiboot_memory_map_t*)((unsigned long)mmap + mmap->size + sizeof(mmap->size))) {
         klog() << "MM: Multiboot mmap: base_addr = " << String::format("0x%08x", mmap->addr) << ", length = " << String::format("0x%08x", mmap->len) << ", type = 0x" << String::format("%x", mmap->type);
         if (mmap->type != MULTIBOOT_MEMORY_AVAILABLE)
             continue;
 
-        // FIXME: Maybe make use of stuff below the 1MB mark?
-        if (mmap->addr < (1 * MB))
+        // FIXME: Maybe make use of stuff below the 1MiB mark?
+        if (mmap->addr < (1 * MiB))
             continue;
 
         if ((mmap->addr + mmap->len) > 0xffffffff)
@@ -128,12 +152,15 @@ void MemoryManager::parse_memory_map()
         klog() << "MM: considering memory at " << String::format("%p", (FlatPtr)mmap->addr) << " - " << String::format("%p", (FlatPtr)(mmap->addr + mmap->len));
 #endif
 
-        for (size_t page_base = mmap->addr; page_base < (mmap->addr + mmap->len); page_base += PAGE_SIZE) {
+        for (size_t page_base = mmap->addr; page_base <= (mmap->addr + mmap->len); page_base += PAGE_SIZE) {
             auto addr = PhysicalAddress(page_base);
 
-            if (page_base < 7 * MB) {
+            if (addr.get() < used_range_end.get() && addr.get() >= used_range_start.get())
+                continue;
+
+            if (page_base < 7 * MiB) {
                 // nothing
-            } else if (page_base >= 7 * MB && page_base < 8 * MB) {
+            } else if (page_base >= 7 * MiB && page_base < 8 * MiB) {
                 if (region.is_null() || !region_is_super || region->upper().offset(PAGE_SIZE) != addr) {
                     m_super_physical_regions.append(PhysicalRegion::create(addr, addr));
                     region = m_super_physical_regions.last();
@@ -153,20 +180,25 @@ void MemoryManager::parse_memory_map()
         }
     }
 
-    for (auto& region : m_super_physical_regions)
+    for (auto& region : m_super_physical_regions) {
         m_super_physical_pages += region.finalize_capacity();
+        klog() << "Super physical region: " << region.lower() << " - " << region.upper();
+    }
 
-    for (auto& region : m_user_physical_regions)
+    for (auto& region : m_user_physical_regions) {
         m_user_physical_pages += region.finalize_capacity();
+        klog() << "User physical region: " << region.lower() << " - " << region.upper();
+    }
 
     ASSERT(m_super_physical_pages > 0);
     ASSERT(m_user_physical_pages > 0);
 }
 
-const PageTableEntry* MemoryManager::pte(const PageDirectory& page_directory, VirtualAddress vaddr)
+PageTableEntry* MemoryManager::pte(PageDirectory& page_directory, VirtualAddress vaddr)
 {
     ASSERT_INTERRUPTS_DISABLED();
     ASSERT(s_mm_lock.own_lock());
+    ASSERT(page_directory.get_lock().own_lock());
     u32 page_directory_table_index = (vaddr.get() >> 30) & 0x3;
     u32 page_directory_index = (vaddr.get() >> 21) & 0x1ff;
     u32 page_table_index = (vaddr.get() >> 12) & 0x1ff;
@@ -179,10 +211,11 @@ const PageTableEntry* MemoryManager::pte(const PageDirectory& page_directory, Vi
     return &quickmap_pt(PhysicalAddress((FlatPtr)pde.page_table_base()))[page_table_index];
 }
 
-PageTableEntry& MemoryManager::ensure_pte(PageDirectory& page_directory, VirtualAddress vaddr)
+PageTableEntry* MemoryManager::ensure_pte(PageDirectory& page_directory, VirtualAddress vaddr)
 {
     ASSERT_INTERRUPTS_DISABLED();
     ASSERT(s_mm_lock.own_lock());
+    ASSERT(page_directory.get_lock().own_lock());
     u32 page_directory_table_index = (vaddr.get() >> 30) & 0x3;
     u32 page_directory_index = (vaddr.get() >> 21) & 0x1ff;
     u32 page_table_index = (vaddr.get() >> 12) & 0x1ff;
@@ -193,7 +226,21 @@ PageTableEntry& MemoryManager::ensure_pte(PageDirectory& page_directory, Virtual
 #ifdef MM_DEBUG
         dbg() << "MM: PDE " << page_directory_index << " not present (requested for " << vaddr << "), allocating";
 #endif
-        auto page_table = allocate_user_physical_page(ShouldZeroFill::Yes);
+        bool did_purge = false;
+        auto page_table = allocate_user_physical_page(ShouldZeroFill::Yes, &did_purge);
+        if (!page_table) {
+            dbg() << "MM: Unable to allocate page table to map " << vaddr;
+            return nullptr;
+        }
+        if (did_purge) {
+            // If any memory had to be purged, ensure_pte may have been called as part
+            // of the purging process. So we need to re-map the pd in this case to ensure
+            // we're writing to the correct underlying physical page
+            pd = quickmap_pd(page_directory, page_directory_table_index);
+            ASSERT(&pde == &pd[page_directory_index]); // Sanity check
+
+            ASSERT(!pde.is_present()); // Should have not changed
+        }
 #ifdef MM_DEBUG
         dbg() << "MM: PD K" << &page_directory << " (" << (&page_directory == m_kernel_page_directory ? "Kernel" : "User") << ") at " << PhysicalAddress(page_directory.cr3()) << " allocated page table #" << page_directory_index << " (for " << vaddr << ") at " << page_table->paddr();
 #endif
@@ -202,10 +249,52 @@ PageTableEntry& MemoryManager::ensure_pte(PageDirectory& page_directory, Virtual
         pde.set_present(true);
         pde.set_writable(true);
         pde.set_global(&page_directory == m_kernel_page_directory.ptr());
-        page_directory.m_physical_pages.set(page_directory_index, move(page_table));
+        // Use page_directory_table_index and page_directory_index as key
+        // This allows us to release the page table entry when no longer needed
+        auto result = page_directory.m_page_tables.set(vaddr.get() & ~0x1fffff, move(page_table));
+        ASSERT(result == AK::HashSetResult::InsertedNewEntry);
     }
 
-    return quickmap_pt(PhysicalAddress((FlatPtr)pde.page_table_base()))[page_table_index];
+    return &quickmap_pt(PhysicalAddress((FlatPtr)pde.page_table_base()))[page_table_index];
+}
+
+void MemoryManager::release_pte(PageDirectory& page_directory, VirtualAddress vaddr, bool is_last_release)
+{
+    ASSERT_INTERRUPTS_DISABLED();
+    ASSERT(s_mm_lock.own_lock());
+    ASSERT(page_directory.get_lock().own_lock());
+    u32 page_directory_table_index = (vaddr.get() >> 30) & 0x3;
+    u32 page_directory_index = (vaddr.get() >> 21) & 0x1ff;
+    u32 page_table_index = (vaddr.get() >> 12) & 0x1ff;
+
+    auto* pd = quickmap_pd(page_directory, page_directory_table_index);
+    PageDirectoryEntry& pde = pd[page_directory_index];
+    if (pde.is_present()) {
+        auto* page_table = quickmap_pt(PhysicalAddress((FlatPtr)pde.page_table_base()));
+        auto& pte = page_table[page_table_index];
+        pte.clear();
+
+        if (is_last_release || page_table_index == 0x1ff) {
+            // If this is the last PTE in a region or the last PTE in a page table then
+            // check if we can also release the page table
+            bool all_clear = true;
+            for (u32 i = 0; i <= 0x1ff; i++) {
+                if (!page_table[i].is_null()) {
+                    all_clear = false;
+                    break;
+                }
+            }
+            if (all_clear) {
+                pde.clear();
+
+                auto result = page_directory.m_page_tables.remove(vaddr.get() & ~0x1fffff);
+                ASSERT(result);
+#ifdef MM_DEBUG
+                dbg() << "MM: Released page table for " << VirtualAddress(vaddr.get() & ~0x1fffff);
+#endif
+            }
+        }
+    }
 }
 
 void MemoryManager::initialize(u32 cpu)
@@ -216,8 +305,10 @@ void MemoryManager::initialize(u32 cpu)
 #endif
     Processor::current().set_mm_data(*mm_data);
 
-    if (cpu == 0)
+    if (cpu == 0) {
         s_the = new MemoryManager;
+        kmalloc_enable_expand();
+    }
 }
 
 Region* MemoryManager::kernel_region_from_vaddr(VirtualAddress vaddr)
@@ -244,7 +335,7 @@ Region* MemoryManager::user_region_from_vaddr(Process& process, VirtualAddress v
     return nullptr;
 }
 
-Region* MemoryManager::region_from_vaddr(Process& process, VirtualAddress vaddr)
+Region* MemoryManager::find_region_from_vaddr(Process& process, VirtualAddress vaddr)
 {
     ScopedSpinLock lock(s_mm_lock);
     if (auto* region = user_region_from_vaddr(process, vaddr))
@@ -252,7 +343,7 @@ Region* MemoryManager::region_from_vaddr(Process& process, VirtualAddress vaddr)
     return kernel_region_from_vaddr(vaddr);
 }
 
-const Region* MemoryManager::region_from_vaddr(const Process& process, VirtualAddress vaddr)
+const Region* MemoryManager::find_region_from_vaddr(const Process& process, VirtualAddress vaddr)
 {
     ScopedSpinLock lock(s_mm_lock);
     if (auto* region = user_region_from_vaddr(const_cast<Process&>(process), vaddr))
@@ -260,7 +351,7 @@ const Region* MemoryManager::region_from_vaddr(const Process& process, VirtualAd
     return kernel_region_from_vaddr(vaddr);
 }
 
-Region* MemoryManager::region_from_vaddr(VirtualAddress vaddr)
+Region* MemoryManager::find_region_from_vaddr(VirtualAddress vaddr)
 {
     ScopedSpinLock lock(s_mm_lock);
     if (auto* region = kernel_region_from_vaddr(vaddr))
@@ -283,9 +374,9 @@ PageFaultResponse MemoryManager::handle_page_fault(const PageFault& fault)
         return PageFaultResponse::ShouldCrash;
     }
 #ifdef PAGE_FAULT_DEBUG
-    dbg() << "MM: CPU[" << Processor::current().id() << "] handle_page_fault(" << String::format("%w", fault.code()) << ") at " << fault.vaddr();
+    dbgln("MM: CPU[{}] handle_page_fault({:#04x}) at {}", Processor::current().id(), fault.code(), fault.vaddr());
 #endif
-    auto* region = region_from_vaddr(fault.vaddr());
+    auto* region = find_region_from_vaddr(fault.vaddr());
     if (!region) {
         klog() << "CPU[" << Processor::current().id() << "] NP(error) fault at invalid address " << fault.vaddr();
         return PageFaultResponse::ShouldCrash;
@@ -378,7 +469,7 @@ OwnPtr<Region> MemoryManager::allocate_kernel_region_with_vmobject(VMObject& vmo
     return allocate_kernel_region_with_vmobject(range, vmobject, name, access, user_accessible, cacheable);
 }
 
-void MemoryManager::deallocate_user_physical_page(PhysicalPage&& page)
+void MemoryManager::deallocate_user_physical_page(const PhysicalPage& page)
 {
     ScopedSpinLock lock(s_mm_lock);
     for (auto& region : m_user_physical_regions) {
@@ -387,7 +478,7 @@ void MemoryManager::deallocate_user_physical_page(PhysicalPage&& page)
             continue;
         }
 
-        region.return_page(move(page));
+        region.return_page(page);
         --m_user_physical_pages_used;
 
         return;
@@ -409,10 +500,11 @@ RefPtr<PhysicalPage> MemoryManager::find_free_user_physical_page()
     return page;
 }
 
-RefPtr<PhysicalPage> MemoryManager::allocate_user_physical_page(ShouldZeroFill should_zero_fill)
+RefPtr<PhysicalPage> MemoryManager::allocate_user_physical_page(ShouldZeroFill should_zero_fill, bool* did_purge)
 {
     ScopedSpinLock lock(s_mm_lock);
     auto page = find_free_user_physical_page();
+    bool purged_pages = false;
 
     if (!page) {
         // We didn't have a single free physical page. Let's try to free something up!
@@ -422,6 +514,7 @@ RefPtr<PhysicalPage> MemoryManager::allocate_user_physical_page(ShouldZeroFill s
             if (purged_page_count) {
                 klog() << "MM: Purge saved the day! Purged " << purged_page_count << " pages from PurgeableVMObject{" << &vmobject << "}";
                 page = find_free_user_physical_page();
+                purged_pages = true;
                 ASSERT(page);
                 return IterationDecision::Break;
             }
@@ -444,20 +537,23 @@ RefPtr<PhysicalPage> MemoryManager::allocate_user_physical_page(ShouldZeroFill s
         unquickmap_page();
     }
 
+    if (did_purge)
+        *did_purge = purged_pages;
+
     ++m_user_physical_pages_used;
     return page;
 }
 
-void MemoryManager::deallocate_supervisor_physical_page(PhysicalPage&& page)
+void MemoryManager::deallocate_supervisor_physical_page(const PhysicalPage& page)
 {
-    ASSERT(s_mm_lock.is_locked());
+    ScopedSpinLock lock(s_mm_lock);
     for (auto& region : m_super_physical_regions) {
         if (!region.contains(page)) {
             klog() << "MM: deallocate_supervisor_physical_page: " << page.paddr() << " not in " << region.lower() << " -> " << region.upper();
             continue;
         }
 
-        region.return_page(move(page));
+        region.return_page(page);
         --m_super_physical_pages_used;
         return;
     }
@@ -475,8 +571,8 @@ NonnullRefPtrVector<PhysicalPage> MemoryManager::allocate_contiguous_supervisor_
 
     for (auto& region : m_super_physical_regions) {
         physical_pages = region.take_contiguous_free_pages((count), true);
-        if (physical_pages.is_empty())
-            continue;
+        if (!physical_pages.is_empty())
+            break;
     }
 
     if (physical_pages.is_empty()) {
@@ -502,8 +598,8 @@ RefPtr<PhysicalPage> MemoryManager::allocate_supervisor_physical_page()
 
     for (auto& region : m_super_physical_regions) {
         page = region.take_free_page(true);
-        if (page.is_null())
-            continue;
+        if (!page.is_null())
+            break;
     }
 
     if (!page) {
@@ -556,6 +652,7 @@ extern "C" PageTableEntry boot_pd3_pt1023[1024];
 PageDirectoryEntry* MemoryManager::quickmap_pd(PageDirectory& directory, size_t pdpt_index)
 {
     ASSERT(s_mm_lock.own_lock());
+    auto& mm_data = get_data();
     auto& pte = boot_pd3_pt1023[4];
     auto pd_paddr = directory.m_directory_pages[pdpt_index]->paddr();
     if (pte.physical_page_base() != pd_paddr.as_ptr()) {
@@ -570,13 +667,21 @@ PageDirectoryEntry* MemoryManager::quickmap_pd(PageDirectory& directory, size_t 
         // mapping, it is sufficient to only flush on the current CPU. Other
         // CPUs trying to use this API must wait on the MM lock anyway
         flush_tlb_local(VirtualAddress(0xffe04000));
+    } else {
+        // Even though we don't allow this to be called concurrently, it's
+        // possible that this PD was mapped on a different CPU and we don't
+        // broadcast the flush. If so, we still need to flush the TLB.
+        if (mm_data.m_last_quickmap_pd != pd_paddr)
+            flush_tlb_local(VirtualAddress(0xffe04000));
     }
+    mm_data.m_last_quickmap_pd = pd_paddr;
     return (PageDirectoryEntry*)0xffe04000;
 }
 
 PageTableEntry* MemoryManager::quickmap_pt(PhysicalAddress pt_paddr)
 {
     ASSERT(s_mm_lock.own_lock());
+    auto& mm_data = get_data();
     auto& pte = boot_pd3_pt1023[0];
     if (pte.physical_page_base() != pt_paddr.as_ptr()) {
 #ifdef MM_DEBUG
@@ -590,7 +695,14 @@ PageTableEntry* MemoryManager::quickmap_pt(PhysicalAddress pt_paddr)
         // mapping, it is sufficient to only flush on the current CPU. Other
         // CPUs trying to use this API must wait on the MM lock anyway
         flush_tlb_local(VirtualAddress(0xffe00000));
+    } else {
+        // Even though we don't allow this to be called concurrently, it's
+        // possible that this PT was mapped on a different CPU and we don't
+        // broadcast the flush. If so, we still need to flush the TLB.
+        if (mm_data.m_last_quickmap_pt != pt_paddr)
+            flush_tlb_local(VirtualAddress(0xffe00000));
     }
+    mm_data.m_last_quickmap_pt = pt_paddr;
     return (PageTableEntry*)0xffe00000;
 }
 
@@ -674,39 +786,6 @@ bool MemoryManager::validate_user_stack(const Process& process, VirtualAddress v
     ScopedSpinLock lock(s_mm_lock);
     auto* region = user_region_from_vaddr(const_cast<Process&>(process), vaddr);
     return region && region->is_user_accessible() && region->is_stack();
-}
-
-bool MemoryManager::validate_kernel_read(const Process& process, VirtualAddress vaddr, size_t size) const
-{
-    ScopedSpinLock lock(s_mm_lock);
-    return validate_range<AccessSpace::Kernel, AccessType::Read>(process, vaddr, size);
-}
-
-bool MemoryManager::can_read_without_faulting(const Process& process, VirtualAddress vaddr, size_t size) const
-{
-    // FIXME: Use the size argument!
-    UNUSED_PARAM(size);
-    ScopedSpinLock lock(s_mm_lock);
-    auto* pte = const_cast<MemoryManager*>(this)->pte(process.page_directory(), vaddr);
-    if (!pte)
-        return false;
-    return pte->is_present();
-}
-
-bool MemoryManager::validate_user_read(const Process& process, VirtualAddress vaddr, size_t size) const
-{
-    if (!is_user_address(vaddr))
-        return false;
-    ScopedSpinLock lock(s_mm_lock);
-    return validate_range<AccessSpace::User, AccessType::Read>(process, vaddr, size);
-}
-
-bool MemoryManager::validate_user_write(const Process& process, VirtualAddress vaddr, size_t size) const
-{
-    if (!is_user_address(vaddr))
-        return false;
-    ScopedSpinLock lock(s_mm_lock);
-    return validate_range<AccessSpace::User, AccessType::Write>(process, vaddr, size);
 }
 
 void MemoryManager::register_vmobject(VMObject& vmobject)

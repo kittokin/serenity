@@ -28,26 +28,45 @@
 #include <AK/Optional.h>
 #include <stdlib.h>
 
-DebugSession::DebugSession(int pid)
-    : m_debugee_pid(pid)
-    , m_executable(String::format("/proc/%d/exe", pid))
-    , m_elf(ELF::Loader::create(reinterpret_cast<u8*>(m_executable.data()), m_executable.size()))
-    , m_debug_info(m_elf)
+namespace Debug {
+
+DebugSession::DebugSession(pid_t pid)
+    : m_debuggee_pid(pid)
+    , m_executable(map_executable_for_process(pid))
+    , m_debug_info(make<ELF::Image>(reinterpret_cast<const u8*>(m_executable.data()), m_executable.size()))
 {
+}
+
+MappedFile DebugSession::map_executable_for_process(pid_t pid)
+{
+    MappedFile executable(String::formatted("/proc/{}/exe", pid));
+    ASSERT(executable.is_valid());
+    return executable;
 }
 
 DebugSession::~DebugSession()
 {
-    if (!m_is_debugee_dead) {
-        if (ptrace(PT_DETACH, m_debugee_pid, 0, 0) < 0) {
-            perror("PT_DETACH");
-        }
+    if (m_is_debuggee_dead)
+        return;
+
+    for (const auto& bp : m_breakpoints) {
+        disable_breakpoint(bp.key);
+    }
+    m_breakpoints.clear();
+
+    if (ptrace(PT_DETACH, m_debuggee_pid, 0, 0) < 0) {
+        perror("PT_DETACH");
     }
 }
 
 OwnPtr<DebugSession> DebugSession::exec_and_attach(const String& command)
 {
-    int pid = fork();
+    auto pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        exit(1);
+    }
 
     if (!pid) {
         if (ptrace(PT_TRACE_ME, 0, 0, 0) < 0) {
@@ -78,16 +97,6 @@ OwnPtr<DebugSession> DebugSession::exec_and_attach(const String& command)
         return nullptr;
     }
 
-    if (waitpid(pid, nullptr, WSTOPPED) != pid) {
-        perror("waitpid");
-        return nullptr;
-    }
-
-    if (ptrace(PT_CONTINUE, pid, 0, 0) < 0) {
-        perror("continue");
-        return nullptr;
-    }
-
     // We want to continue until the exit from the 'execve' sycsall.
     // This ensures that when we start debugging the process
     // it executes the target image, and not the forked image of the tracing process.
@@ -98,12 +107,12 @@ OwnPtr<DebugSession> DebugSession::exec_and_attach(const String& command)
         return nullptr;
     }
 
-    return make<DebugSession>(pid);
+    return adopt_own(*new DebugSession(pid));
 }
 
 bool DebugSession::poke(u32* address, u32 data)
 {
-    if (ptrace(PT_POKE, m_debugee_pid, (void*)address, data) < 0) {
+    if (ptrace(PT_POKE, m_debuggee_pid, (void*)address, data) < 0) {
         perror("PT_POKE");
         return false;
     }
@@ -113,7 +122,7 @@ bool DebugSession::poke(u32* address, u32 data)
 Optional<u32> DebugSession::peek(u32* address) const
 {
     Optional<u32> result;
-    int rc = ptrace(PT_PEEK, m_debugee_pid, (void*)address, 0);
+    int rc = ptrace(PT_PEEK, m_debuggee_pid, (void*)address, 0);
     if (errno == 0)
         result = static_cast<u32>(rc);
     return result;
@@ -162,6 +171,8 @@ bool DebugSession::enable_breakpoint(void* address)
     auto breakpoint = m_breakpoints.get(address);
     ASSERT(breakpoint.has_value());
 
+    ASSERT(breakpoint.value().state == BreakPointState::Disabled);
+
     if (!poke(reinterpret_cast<u32*>(breakpoint.value().address), (breakpoint.value().original_first_word & ~(uint32_t)0xff) | BREAKPOINT_INSTRUCTION))
         return false;
 
@@ -188,7 +199,7 @@ bool DebugSession::breakpoint_exists(void* address) const
 PtraceRegisters DebugSession::get_registers() const
 {
     PtraceRegisters regs;
-    if (ptrace(PT_GETREGS, m_debugee_pid, &regs, 0) < 0) {
+    if (ptrace(PT_GETREGS, m_debuggee_pid, &regs, 0) < 0) {
         perror("PT_GETREGS");
         ASSERT_NOT_REACHED();
     }
@@ -197,26 +208,26 @@ PtraceRegisters DebugSession::get_registers() const
 
 void DebugSession::set_registers(const PtraceRegisters& regs)
 {
-    if (ptrace(PT_SETREGS, m_debugee_pid, reinterpret_cast<void*>(&const_cast<PtraceRegisters&>(regs)), 0) < 0) {
+    if (ptrace(PT_SETREGS, m_debuggee_pid, reinterpret_cast<void*>(&const_cast<PtraceRegisters&>(regs)), 0) < 0) {
         perror("PT_SETREGS");
         ASSERT_NOT_REACHED();
     }
 }
 
-void DebugSession::continue_debugee(ContinueType type)
+void DebugSession::continue_debuggee(ContinueType type)
 {
     int command = (type == ContinueType::FreeRun) ? PT_CONTINUE : PT_SYSCALL;
-    if (ptrace(command, m_debugee_pid, 0, 0) < 0) {
+    if (ptrace(command, m_debuggee_pid, 0, 0) < 0) {
         perror("continue");
         ASSERT_NOT_REACHED();
     }
 }
 
-int DebugSession::continue_debugee_and_wait(ContinueType type)
+int DebugSession::continue_debuggee_and_wait(ContinueType type)
 {
-    continue_debugee(type);
+    continue_debuggee(type);
     int wstatus = 0;
-    if (waitpid(m_debugee_pid, &wstatus, WSTOPPED | WEXITED) != m_debugee_pid) {
+    if (waitpid(m_debuggee_pid, &wstatus, WSTOPPED | WEXITED) != m_debuggee_pid) {
         perror("waitpid");
         ASSERT_NOT_REACHED();
     }
@@ -227,18 +238,18 @@ void* DebugSession::single_step()
 {
     // Single stepping works by setting the x86 TRAP flag bit in the eflags register.
     // This flag causes the cpu to enter single-stepping mode, which causes
-    // Interupt 1 (debug interrupt) to be emitted after every instruction.
-    // To single step the program, we set the TRAP flag and continue the debugee.
-    // After the debugee has stopped, we clear the TRAP flag.
+    // Interrupt 1 (debug interrupt) to be emitted after every instruction.
+    // To single step the program, we set the TRAP flag and continue the debuggee.
+    // After the debuggee has stopped, we clear the TRAP flag.
 
     auto regs = get_registers();
     constexpr u32 TRAP_FLAG = 0x100;
     regs.eflags |= TRAP_FLAG;
     set_registers(regs);
 
-    continue_debugee();
+    continue_debuggee();
 
-    if (waitpid(m_debugee_pid, 0, WSTOPPED) != m_debugee_pid) {
+    if (waitpid(m_debuggee_pid, 0, WSTOPPED) != m_debuggee_pid) {
         perror("waitpid");
         ASSERT_NOT_REACHED();
     }
@@ -247,4 +258,14 @@ void* DebugSession::single_step()
     regs.eflags &= ~(TRAP_FLAG);
     set_registers(regs);
     return (void*)regs.eip;
+}
+
+void DebugSession::detach()
+{
+    for (auto& breakpoint : m_breakpoints.keys()) {
+        remove_breakpoint(breakpoint);
+    }
+    continue_debuggee();
+}
+
 }

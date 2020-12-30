@@ -29,8 +29,8 @@
 #include <AK/SharedBuffer.h>
 #include <LibGfx/Painter.h>
 #include <LibGfx/SystemTheme.h>
-#include <LibWeb/Frame/Frame.h>
-#include <LibWeb/Layout/LayoutDocument.h>
+#include <LibWeb/Layout/InitialContainingBlockBox.h>
+#include <LibWeb/Page/Frame.h>
 #include <WebContent/WebContentClientEndpoint.h>
 
 namespace WebContent {
@@ -50,7 +50,7 @@ void PageHost::setup_palette()
 {
     // FIXME: Get the proper palette from our peer somehow
     auto buffer = SharedBuffer::create_with_size(sizeof(Gfx::SystemTheme));
-    auto* theme = (Gfx::SystemTheme*)buffer->data();
+    auto* theme = buffer->data<Gfx::SystemTheme>();
     theme->color[(int)Gfx::ColorRole::Window] = Color::Magenta;
     theme->color[(int)Gfx::ColorRole::WindowText] = Color::Cyan;
     m_palette_impl = Gfx::PaletteImpl::create_with_shared_buffer(*buffer);
@@ -66,7 +66,7 @@ void PageHost::set_palette_impl(const Gfx::PaletteImpl& impl)
     m_palette_impl = impl;
 }
 
-Web::LayoutDocument* PageHost::layout_root()
+Web::Layout::InitialContainingBlockBox* PageHost::layout_root()
 {
     auto* document = page().main_frame().document();
     if (!document)
@@ -102,8 +102,8 @@ void PageHost::set_viewport_rect(const Gfx::IntRect& rect)
 {
     page().main_frame().set_size(rect.size());
     if (page().main_frame().document())
-        page().main_frame().document()->layout();
-    page().main_frame().set_viewport_rect(rect);
+        page().main_frame().document()->update_layout();
+    page().main_frame().set_viewport_scroll_offset(rect.location());
 }
 
 void PageHost::page_did_invalidate(const Gfx::IntRect& content_rect)
@@ -159,6 +159,11 @@ void PageHost::page_did_start_loading(const URL& url)
     m_client.post_message(Messages::WebContentClient::DidStartLoading(url));
 }
 
+void PageHost::page_did_finish_loading(const URL& url)
+{
+    m_client.post_message(Messages::WebContentClient::DidFinishLoading(url));
+}
+
 void PageHost::page_did_request_context_menu(const Gfx::IntPoint& content_position)
 {
     m_client.post_message(Messages::WebContentClient::DidRequestContextMenu(content_position));
@@ -167,6 +172,11 @@ void PageHost::page_did_request_context_menu(const Gfx::IntPoint& content_positi
 void PageHost::page_did_request_link_context_menu(const Gfx::IntPoint& content_position, const URL& url, const String& target, unsigned modifiers)
 {
     m_client.post_message(Messages::WebContentClient::DidRequestLinkContextMenu(content_position, url, target, modifiers));
+}
+
+void PageHost::page_did_request_alert(const String& message)
+{
+    m_client.send_sync<Messages::WebContentClient::DidRequestAlert>(message);
 }
 
 }

@@ -29,6 +29,7 @@
 #include <AK/String.h>
 #include <Kernel/API/KeyCode.h>
 #include <LibCore/Event.h>
+#include <LibCore/MimeData.h>
 #include <LibGfx/Rect.h>
 #include <WindowServer/Cursor.h>
 #include <WindowServer/WindowType.h>
@@ -56,12 +57,12 @@ public:
         WindowResized,
     };
 
-    Event() {}
+    Event() { }
     explicit Event(Type type)
         : Core::Event(type)
     {
     }
-    virtual ~Event() {}
+    virtual ~Event() { }
 
     bool is_mouse_event() const { return type() == MouseMove || type() == MouseDown || type() == MouseDoubleClick || type() == MouseUp || type() == MouseWheel; }
     bool is_key_event() const { return type() == KeyUp || type() == KeyDown; }
@@ -117,7 +118,7 @@ public:
     {
     }
 
-    Gfx::IntPoint position() const { return m_position; }
+    const Gfx::IntPoint& position() const { return m_position; }
     int x() const { return m_position.x(); }
     int y() const { return m_position.y(); }
     MouseButton button() const { return m_button; }
@@ -128,7 +129,7 @@ public:
     const String& drag_data_type() const { return m_drag_data_type; }
 
     void set_drag(bool b) { m_drag = b; }
-    void set_drag_data_type(const String& drag_data_type) { m_drag_data_type = drag_data_type; }
+    void set_mime_data(const Core::MimeData& mime_data) { m_mime_data = mime_data; }
 
     MouseEvent translated(const Gfx::IntPoint& delta) const { return MouseEvent((Type)type(), m_position.translated(delta), m_buttons, m_button, m_modifiers, m_wheel_delta); }
 
@@ -140,22 +141,20 @@ private:
     int m_wheel_delta { 0 };
     bool m_drag { false };
     String m_drag_data_type;
+    RefPtr<const Core::MimeData> m_mime_data;
 };
 
 class ResizeEvent final : public Event {
 public:
-    ResizeEvent(const Gfx::IntRect& old_rect, const Gfx::IntRect& rect)
+    ResizeEvent(const Gfx::IntRect& rect)
         : Event(Event::WindowResized)
-        , m_old_rect(old_rect)
         , m_rect(rect)
     {
     }
 
-    Gfx::IntRect old_rect() const { return m_old_rect; }
-    Gfx::IntRect rect() const { return m_rect; }
+    const Gfx::IntRect& rect() const { return m_rect; }
 
 private:
-    Gfx::IntRect m_old_rect;
     Gfx::IntRect m_rect;
 };
 

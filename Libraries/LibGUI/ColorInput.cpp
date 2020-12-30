@@ -35,11 +35,16 @@ namespace GUI {
 ColorInput::ColorInput()
     : TextEditor(TextEditor::SingleLine)
 {
+    set_min_width(32);
+    set_fixed_height(22);
     TextEditor::on_change = [this] {
         auto parsed_color = Color::from_string(text());
         if (parsed_color.has_value())
             set_color_without_changing_text(parsed_color.value());
     };
+
+    REGISTER_STRING_PROPERTY("color_picker_title", color_picker_title, set_color_picker_title);
+    REGISTER_BOOL_PROPERTY("has_alpha_channel", has_alpha_channel, set_color_has_alpha_channel);
 }
 
 ColorInput::~ColorInput()
@@ -100,11 +105,11 @@ void ColorInput::mouseup_event(MouseEvent& event)
 void ColorInput::mousemove_event(MouseEvent& event)
 {
     if (color_rect().contains(event.position())) {
-        window()->set_override_cursor(StandardCursor::Hand);
+        set_override_cursor(Gfx::StandardCursor::Hand);
         event.accept();
         return;
     } else {
-        window()->set_override_cursor(StandardCursor::IBeam);
+        set_override_cursor(Gfx::StandardCursor::IBeam);
     }
 
     TextEditor::mousemove_event(event);

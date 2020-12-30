@@ -26,18 +26,19 @@
 
 #pragma once
 
-#include <LibGfx/TextAlignment.h>
 #include <LibGUI/Frame.h>
+#include <LibGfx/TextAlignment.h>
 
 namespace GUI {
 
 class Label : public Frame {
-    C_OBJECT(Label)
+    C_OBJECT(Label);
+
 public:
     virtual ~Label() override;
 
     String text() const { return m_text; }
-    void set_text(const StringView&);
+    void set_text(String);
 
     void set_icon(const Gfx::Bitmap*);
     const Gfx::Bitmap* icon() const { return m_icon.ptr(); }
@@ -49,18 +50,25 @@ public:
     bool should_stretch_icon() const { return m_should_stretch_icon; }
     void set_should_stretch_icon(bool b) { m_should_stretch_icon = b; }
 
-    void size_to_fit();
+    bool is_autosize() const { return m_autosize; }
+    void set_autosize(bool);
+
+    Gfx::IntRect text_rect() const;
 
 protected:
-    explicit Label(const StringView& text = {});
+    explicit Label(String text = {});
 
     virtual void paint_event(PaintEvent&) override;
+    virtual void did_change_text() { }
 
 private:
+    void size_to_fit();
+
     String m_text;
     RefPtr<Gfx::Bitmap> m_icon;
     Gfx::TextAlignment m_text_alignment { Gfx::TextAlignment::Center };
     bool m_should_stretch_icon { false };
+    bool m_autosize { false };
 };
 
 }

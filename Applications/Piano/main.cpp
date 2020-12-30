@@ -27,6 +27,7 @@
 
 #include "MainWidget.h"
 #include "TrackManager.h"
+#include <AK/Array.h>
 #include <LibAudio/ClientConnection.h>
 #include <LibAudio/WavWriter.h>
 #include <LibCore/EventLoop.h>
@@ -44,18 +45,29 @@
 
 int main(int argc, char** argv)
 {
+    if (pledge("stdio thread rpath accept cpath wpath shared_buffer unix fattr", nullptr) < 0) {
+        perror("pledge");
+        return 1;
+    }
+
     auto app = GUI::Application::construct(argc, argv);
+
+    if (pledge("stdio thread rpath accept cpath wpath shared_buffer unix", nullptr) < 0) {
+        perror("pledge");
+        return 1;
+    }
 
     auto audio_client = Audio::ClientConnection::construct();
     audio_client->handshake();
 
     TrackManager track_manager;
 
+    auto app_icon = GUI::Icon::default_icon("app-piano");
     auto window = GUI::Window::construct();
     auto& main_widget = window->set_main_widget<MainWidget>(track_manager);
     window->set_title("Piano");
-    window->set_rect(90, 90, 840, 600);
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-piano.png"));
+    window->resize(840, 600);
+    window->set_icon(app_icon.bitmap_for_size(16));
     window->show();
 
     Audio::WavWriter wav_writer;
@@ -65,11 +77,11 @@ int main(int argc, char** argv)
     LibThread::Thread audio_thread([&] {
         auto audio = Core::File::construct("/dev/audio");
         if (!audio->open(Core::IODevice::WriteOnly)) {
-            dbgprintf("Can't open audio device: %s", audio->error_string());
+            dbgln("Can't open audio device: {}", audio->error_string());
             return 1;
         }
 
-        FixedArray<Sample> buffer(sample_count);
+        Array<Sample, sample_count> buffer;
         for (;;) {
             track_manager.fill_buffer(buffer);
             audio->write(reinterpret_cast<u8*>(buffer.data()), buffer_size);
@@ -101,7 +113,7 @@ int main(int argc, char** argv)
             return;
         wav_writer.set_file(save_path.value());
         if (wav_writer.has_error()) {
-            GUI::MessageBox::show(window, String::format("Failed to export WAV file: %s", wav_writer.error_string()), "Error", GUI::MessageBox::Type::Error);
+            GUI::MessageBox::show(window, String::formatted("Failed to export WAV file: {}", wav_writer.error_string()), "Error", GUI::MessageBox::Type::Error);
             wav_writer.clear_error();
             return;
         }
@@ -118,7 +130,7 @@ int main(int argc, char** argv)
 
     auto& help_menu = menubar->add_menu("Help");
     help_menu.add_action(GUI::Action::create("About", [&](const GUI::Action&) {
-        GUI::AboutDialog::show("Piano", Gfx::Bitmap::load_from_file("/res/icons/32x32/app-piano.png"), window);
+        GUI::AboutDialog::show("Piano", app_icon.bitmap_for_size(32), window);
     }));
 
     app->set_menubar(move(menubar));

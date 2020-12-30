@@ -98,4 +98,6 @@
 #define ENOTHREAD 70
 #define EPROTO 71
 #define ENOTSUP 72
-#define EMAXERRNO 73
+#define EPFNOSUPPORT 73
+#define EDIRINTOSELF 74
+#define EMAXERRNO 75

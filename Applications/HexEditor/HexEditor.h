@@ -74,8 +74,6 @@ protected:
     virtual void mouseup_event(GUI::MouseEvent&) override;
     virtual void mousemove_event(GUI::MouseEvent&) override;
     virtual void keydown_event(GUI::KeyEvent&) override;
-    virtual bool accepts_focus() const override { return true; }
-    virtual void leave_event(Core::Event&) override;
 
 private:
     bool m_readonly { false };
@@ -84,8 +82,8 @@ private:
     int m_bytes_per_row { 16 };
     ByteBuffer m_buffer;
     bool m_in_drag_select { false };
-    int m_selection_start { -1 };
-    int m_selection_end { -1 };
+    int m_selection_start { 0 };
+    int m_selection_end { 0 };
     HashMap<int, u8> m_tracked_changes;
     int m_position { 0 };
     int m_byte_position { 0 }; // 0 or 1

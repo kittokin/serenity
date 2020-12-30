@@ -30,6 +30,7 @@
 #include <AK/HashTable.h>
 #include <AK/URL.h>
 #include <LibCore/ConfigFile.h>
+#include <LibDesktop/AppFile.h>
 
 namespace LaunchServer {
 
@@ -45,7 +46,6 @@ struct Handler {
     String executable;
     HashTable<String> file_types {};
     HashTable<String> protocols {};
-    HashMap<String, String> icons {};
 
     static String name_from_executable(const StringView&);
     void from_executable(Type, const String&);
@@ -57,7 +57,7 @@ public:
     Launcher();
     static Launcher& the();
 
-    void load_handlers(const String& af_dir);
+    void load_handlers(const String& af_dir = Desktop::AppFile::APP_FILES_DIRECTORY);
     void load_config(const Core::ConfigFile&);
     bool open_url(const URL&, const String& handler_name);
     Vector<String> handlers_for_url(const URL&);
@@ -72,7 +72,7 @@ private:
     void for_each_handler(const String& key, HashMap<String, String>& user_preferences, Function<bool(const Handler&)> f);
     void for_each_handler_for_path(const String&, Function<bool(const Handler&)> f);
     bool open_file_url(const URL&);
-    bool open_with_user_preferences(const HashMap<String, String>& user_preferences, const String key, const String argument, const String default_program);
+    bool open_with_user_preferences(const HashMap<String, String>& user_preferences, const String key, const String argument, const String default_program = {});
     bool open_with_handler_name(const URL&, const String& handler_name);
 };
 }

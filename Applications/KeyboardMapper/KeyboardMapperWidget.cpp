@@ -32,9 +32,9 @@
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/RadioButton.h>
 #include <LibKeyboard/CharacterMapFile.h>
-#include <ctype.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <string.h>
 
 KeyboardMapperWidget::KeyboardMapperWidget()
 {
@@ -49,7 +49,6 @@ void KeyboardMapperWidget::create_frame()
 {
     set_fill_with_background_color(true);
     set_layout<GUI::VerticalBoxLayout>();
-    set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fill);
     layout()->set_margins({ 4, 4, 4, 4 });
 
     auto& main_widget = add<GUI::Widget>();
@@ -65,7 +64,7 @@ void KeyboardMapperWidget::create_frame()
         tmp_button.set_text(keys[i].name);
         tmp_button.set_enabled(keys[i].enabled);
 
-        tmp_button.on_click = [&]() {
+        tmp_button.on_click = [this, &tmp_button]() {
             String value;
             if (GUI::InputBox::show(value, window(), "New Character:", "Select Character") == GUI::InputBox::ExecOK) {
                 int i = m_keys.find_first_index(&tmp_button).value_or(0);
@@ -105,14 +104,12 @@ void KeyboardMapperWidget::create_frame()
     // Action Buttons
     auto& bottom_widget = add<GUI::Widget>();
     bottom_widget.set_layout<GUI::HorizontalBoxLayout>();
-    bottom_widget.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    bottom_widget.set_preferred_size(0, 40);
+    bottom_widget.set_fixed_height(40);
 
     // Map Selection
     m_map_group = bottom_widget.add<GUI::Widget>();
     m_map_group->set_layout<GUI::HorizontalBoxLayout>();
-    m_map_group->set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    m_map_group->set_preferred_size(250, 0);
+    m_map_group->set_fixed_width(250);
 
     auto& radio_map = m_map_group->add<GUI::RadioButton>("Default");
     radio_map.set_name("map");
@@ -121,17 +118,17 @@ void KeyboardMapperWidget::create_frame()
     };
     auto& radio_shift = m_map_group->add<GUI::RadioButton>("Shift");
     radio_shift.set_name("shift_map");
-    radio_shift.on_checked = [&](bool) {
+    radio_shift.on_checked = [this](bool) {
         set_current_map("shift_map");
     };
     auto& radio_altgr = m_map_group->add<GUI::RadioButton>("AltGr");
     radio_altgr.set_name("altgr_map");
-    radio_altgr.on_checked = [&](bool) {
+    radio_altgr.on_checked = [this](bool) {
         set_current_map("altgr_map");
     };
     auto& radio_alt = m_map_group->add<GUI::RadioButton>("Alt");
     radio_alt.set_name("alt_map");
-    radio_alt.on_checked = [&](bool) {
+    radio_alt.on_checked = [this](bool) {
         set_current_map("alt_map");
     };
 
@@ -139,8 +136,7 @@ void KeyboardMapperWidget::create_frame()
 
     auto& ok_button = bottom_widget.add<GUI::Button>();
     ok_button.set_text("Save");
-    ok_button.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fill);
-    ok_button.set_preferred_size(80, 0);
+    ok_button.set_fixed_width(80);
     ok_button.on_click = [this](auto) {
         save();
     };
@@ -267,7 +263,7 @@ void KeyboardMapperWidget::set_current_map(const String current_map)
             continue;
 
         AK::StringBuilder sb;
-        sb.append_codepoint(map[index]);
+        sb.append_code_point(map[index]);
 
         m_keys.at(k)->set_text(sb.to_string());
     }

@@ -58,21 +58,24 @@ void DoubleBuffer::flip()
     compute_lockfree_metadata();
 }
 
-ssize_t DoubleBuffer::write(const u8* data, ssize_t size)
+ssize_t DoubleBuffer::write(const UserOrKernelBuffer& data, size_t size)
 {
     if (!size)
         return 0;
     ASSERT(size > 0);
     LOCKER(m_lock);
-    ssize_t bytes_to_write = min(static_cast<size_t>(size), m_space_for_writing);
+    size_t bytes_to_write = min(size, m_space_for_writing);
     u8* write_ptr = m_write_buffer->data + m_write_buffer->size;
     m_write_buffer->size += bytes_to_write;
     compute_lockfree_metadata();
-    memcpy(write_ptr, data, bytes_to_write);
-    return bytes_to_write;
+    if (!data.read(write_ptr, bytes_to_write))
+        return -EFAULT;
+    if (m_unblock_callback && !m_empty)
+        m_unblock_callback();
+    return (ssize_t)bytes_to_write;
 }
 
-ssize_t DoubleBuffer::read(u8* data, ssize_t size)
+ssize_t DoubleBuffer::read(UserOrKernelBuffer& data, size_t size)
 {
     if (!size)
         return 0;
@@ -82,11 +85,14 @@ ssize_t DoubleBuffer::read(u8* data, ssize_t size)
         flip();
     if (m_read_buffer_index >= m_read_buffer->size)
         return 0;
-    ssize_t nread = min((ssize_t)m_read_buffer->size - (ssize_t)m_read_buffer_index, size);
-    memcpy(data, m_read_buffer->data + m_read_buffer_index, nread);
+    size_t nread = min(m_read_buffer->size - m_read_buffer_index, size);
+    if (!data.write(m_read_buffer->data + m_read_buffer_index, nread))
+        return -EFAULT;
     m_read_buffer_index += nread;
     compute_lockfree_metadata();
-    return nread;
+    if (m_unblock_callback && m_space_for_writing > 0)
+        m_unblock_callback();
+    return (ssize_t)nread;
 }
 
 }

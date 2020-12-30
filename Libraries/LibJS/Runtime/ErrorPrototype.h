@@ -35,7 +35,7 @@ class ErrorPrototype final : public Object {
 
 public:
     explicit ErrorPrototype(GlobalObject&);
-    virtual void initialize(Interpreter&, GlobalObject&) override;
+    virtual void initialize(GlobalObject&) override;
     virtual ~ErrorPrototype() override;
 
 private:
@@ -53,11 +53,11 @@ private:
                                                                                                 \
     public:                                                                                     \
         explicit PrototypeName(GlobalObject&);                                                  \
-        virtual void initialize(Interpreter&, GlobalObject&) override { }                       \
+        virtual void initialize(GlobalObject&) override { }                                     \
         virtual ~PrototypeName() override;                                                      \
     };
 
-#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName) \
+#define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \
     DECLARE_ERROR_SUBCLASS_PROTOTYPE(ClassName, snake_name, PrototypeName, ConstructorName)
 JS_ENUMERATE_ERROR_SUBCLASSES
 #undef __JS_ENUMERATE

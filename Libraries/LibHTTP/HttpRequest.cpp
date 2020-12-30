@@ -38,13 +38,6 @@ HttpRequest::~HttpRequest()
 {
 }
 
-RefPtr<Core::NetworkJob> HttpRequest::schedule()
-{
-    auto job = HttpJob::construct(*this);
-    job->start();
-    return job;
-}
-
 String HttpRequest::method_name() const
 {
     switch (m_method) {
@@ -78,11 +71,16 @@ ByteBuffer HttpRequest::to_raw_request() const
         builder.append(header.value);
         builder.append("\r\n");
     }
-    builder.append("Connection: close\r\n\r\n");
+    builder.append("Connection: close\r\n");
+    if (!m_body.is_empty()) {
+        builder.appendff("Content-Length: {}\r\n\r\n", m_body.size());
+        builder.append((const char*)m_body.data(), m_body.size());
+    }
+    builder.append("\r\n");
     return builder.to_byte_buffer();
 }
 
-Optional<HttpRequest> HttpRequest::from_raw_request(const ByteBuffer& raw_request)
+Optional<HttpRequest> HttpRequest::from_raw_request(ReadonlyBytes raw_request)
 {
     enum class State {
         InMethod,
@@ -188,7 +186,7 @@ Optional<HttpRequest> HttpRequest::from_raw_request(const ByteBuffer& raw_reques
     return request;
 }
 
-void HttpRequest::set_headers(const HashMap<String,String>& headers)
+void HttpRequest::set_headers(const HashMap<String, String>& headers)
 {
     for (auto& it : headers)
         m_headers.append({ it.key, it.value });

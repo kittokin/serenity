@@ -40,16 +40,23 @@ public:
     PTYMultiplexer();
     virtual ~PTYMultiplexer() override;
 
+    static void initialize()
+    {
+        the();
+    }
     static PTYMultiplexer& the();
 
     // ^CharacterDevice
     virtual KResultOr<NonnullRefPtr<FileDescription>> open(int options) override;
-    virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) override { return 0; }
-    virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) override { return 0; }
+    virtual KResultOr<size_t> read(FileDescription&, size_t, UserOrKernelBuffer&, size_t) override { return 0; }
+    virtual KResultOr<size_t> write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t) override { return 0; }
     virtual bool can_read(const FileDescription&, size_t) const override { return true; }
     virtual bool can_write(const FileDescription&, size_t) const override { return true; }
 
     void notify_master_destroyed(Badge<MasterPTY>, unsigned index);
+
+    // ^Device
+    virtual mode_t required_mode() const override { return 0666; }
 
 private:
     // ^CharacterDevice

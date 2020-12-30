@@ -33,9 +33,10 @@
 namespace Core {
 
 struct ThreadStatistics {
-    int tid;
+    pid_t tid;
     unsigned times_scheduled;
-    unsigned ticks;
+    unsigned ticks_user;
+    unsigned ticks_kernel;
     unsigned syscall_count;
     unsigned inode_faults;
     unsigned zero_faults;
@@ -57,14 +58,15 @@ struct ProcessStatistics {
     // Keep this in sync with /proc/all.
     // From the kernel side:
     pid_t pid;
-    unsigned pgid;
-    unsigned pgp;
-    unsigned sid;
+    pid_t pgid;
+    pid_t pgp;
+    pid_t sid;
     uid_t uid;
     gid_t gid;
     pid_t ppid;
     unsigned nfds;
     String name;
+    String executable;
     String tty;
     String pledge;
     String veil;
@@ -75,7 +77,6 @@ struct ProcessStatistics {
     size_t amount_clean_inode;
     size_t amount_purgeable_volatile;
     size_t amount_purgeable_nonvolatile;
-    int icon_id;
 
     Vector<Core::ThreadStatistics> threads;
 

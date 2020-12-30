@@ -31,20 +31,27 @@
 #        include <Kernel/kstdio.h>
 #    else
 #        include <AK/Types.h>
+#        include <stdarg.h>
 extern "C" {
-int dbgprintf(const char* fmt, ...);
-ssize_t dbgputstr(const char*, ssize_t);
-int sprintf(char* buf, const char* fmt, ...);
-}
-template<size_t N>
-inline int dbgputstr(const char (&array)[N])
-{
-    return ::dbgputstr(array, N);
+int vdbgprintf(const char* fmt, va_list) __attribute__((format(printf, 1, 0)));
+int dbgprintf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+int dbgputstr(const char*, ssize_t);
+int sprintf(char* buf, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+int snprintf(char* buffer, size_t, const char* fmt, ...) __attribute__((format(printf, 3, 4)));
 }
 #    endif
 #else
 #    include <stdio.h>
 #    define kprintf printf
 #    define dbgprintf(...) fprintf(stderr, __VA_ARGS__)
-#    define dbgputstr(characters, length) fwrite(characters, 1, length, stderr)
+inline int dbgputstr(const char* characters, ssize_t length)
+{
+    fwrite(characters, 1, length, stderr);
+    return 0;
+}
 #endif
+template<size_t N>
+inline int dbgputstr(const char (&array)[N])
+{
+    return ::dbgputstr(array, N);
+}

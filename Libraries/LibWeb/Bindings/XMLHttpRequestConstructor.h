@@ -28,22 +28,20 @@
 
 #include <LibJS/Runtime/NativeFunction.h>
 
-namespace Web {
-namespace Bindings {
+namespace Web::Bindings {
 
 class XMLHttpRequestConstructor final : public JS::NativeFunction {
 public:
     explicit XMLHttpRequestConstructor(JS::GlobalObject&);
-    virtual void initialize(JS::Interpreter&, JS::GlobalObject&) override;
+    virtual void initialize(JS::GlobalObject&) override;
     virtual ~XMLHttpRequestConstructor() override;
 
-    virtual JS::Value call(JS::Interpreter&) override;
-    virtual JS::Value construct(JS::Interpreter& interpreter, Function& new_target) override;
+    virtual JS::Value call() override;
+    virtual JS::Value construct(JS::Function& new_target) override;
 
 private:
     virtual bool has_constructor() const override { return true; }
     virtual const char* class_name() const override { return "XMLHttpRequestConstructor"; }
 };
 
-}
 }

@@ -469,6 +469,7 @@ typedef struct {
 
 #define PT_GNU_EH_FRAME 0x6474e550 /* Exception handling info */
 #define PT_GNU_RELRO 0x6474e552    /* Read-only after relocation */
+#define PT_GNU_STACK 0x6474e551    /* Stack permissions info */
 
 #define PT_OPENBSD_RANDOMIZE 0x65a3dbe6 /* fill with random data */
 #define PT_OPENBSD_WXNEEDED 0x65a3dbe7  /* program performs W^X violations */
@@ -617,7 +618,7 @@ typedef struct {
  *	NT_OPENBSD_PROCINFO
  *		Note is a "elfcore_procinfo" structure.
  *	NT_OPENBSD_AUXV
- *		Note is a a bunch of Auxilliary Vectors, terminated by
+ *		Note is a a bunch of Auxiliary Vectors, terminated by
  *		an AT_NULL entry.
  *	NT_OPENBSD_REGS
  *		Note is a "reg" structure.
@@ -777,15 +778,15 @@ struct elf_args {
 
 /* Relocation types */
 #define R_386_NONE 0
-#define R_386_32 1       /* Symbol + Addend */
-#define R_386_PC32 2     /* Symbol + Addend - Section offset */
-#define R_386_GOT32 3    /* Used by build-time linker to create GOT entry */
-#define R_386_PLT32 4    /* Used by build-time linker to create PLT entry */
-#define R_386_COPY 5     /* https://docs.oracle.com/cd/E23824_01/html/819-0690/chapter4-10454.html#chapter4-84604 */
-#define R_386_GLOB_DAT 6 /* Relation b/w GOT entry and symbol */
-#define R_386_JMP_SLOT 7 /* Fixed up by dynamic loader */
-#define R_386_RELATIVE 8 /* Base address + Addned */
+#define R_386_32 1         /* Symbol + Addend */
+#define R_386_PC32 2       /* Symbol + Addend - Section offset */
+#define R_386_GOT32 3      /* Used by build-time linker to create GOT entry */
+#define R_386_PLT32 4      /* Used by build-time linker to create PLT entry */
+#define R_386_COPY 5       /* https://docs.oracle.com/cd/E23824_01/html/819-0690/chapter4-10454.html#chapter4-84604 */
+#define R_386_GLOB_DAT 6   /* Relation b/w GOT entry and symbol */
+#define R_386_JMP_SLOT 7   /* Fixed up by dynamic loader */
+#define R_386_RELATIVE 8   /* Base address + Addned */
 #define R_386_TLS_TPOFF 14 /* Negative offset into the static TLS storage */
-
+#define R_386_TLS_TPOFF32 37
 
 #endif /* _SYS_EXEC_ELF_H_ */

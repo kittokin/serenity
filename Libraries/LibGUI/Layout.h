@@ -53,13 +53,11 @@ public:
     void notify_adopted(Badge<Widget>, Widget&);
     void notify_disowned(Badge<Widget>, Widget&);
 
-    Margins margins() const { return m_margins; }
+    const Margins& margins() const { return m_margins; }
     void set_margins(const Margins&);
 
     int spacing() const { return m_spacing; }
     void set_spacing(int);
-
-    virtual void save_to(JsonObject&) override;
 
 protected:
     Layout();

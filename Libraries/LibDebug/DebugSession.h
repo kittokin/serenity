@@ -35,22 +35,21 @@
 #include <AK/String.h>
 #include <LibC/sys/arch/i386/regs.h>
 #include <LibDebug/DebugInfo.h>
-#include <LibELF/Loader.h>
 #include <signal.h>
 #include <stdio.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+namespace Debug {
+
 class DebugSession {
 public:
     static OwnPtr<DebugSession> exec_and_attach(const String& command);
 
-    // Has to be public for OwnPtr::make
-    DebugSession(int pid);
     ~DebugSession();
 
-    int pid() const { return m_debugee_pid; }
+    int pid() const { return m_debuggee_pid; }
 
     bool poke(u32* address, u32 data);
     Optional<u32> peek(u32* address) const;
@@ -86,18 +85,20 @@ public:
         FreeRun,
         Syscall,
     };
-    void continue_debugee(ContinueType type = ContinueType::FreeRun);
+    void continue_debuggee(ContinueType type = ContinueType::FreeRun);
 
-    //returns the wstatus result of waitpid()
-    int continue_debugee_and_wait(ContinueType type = ContinueType::FreeRun);
+    // Returns the wstatus result of waitpid()
+    int continue_debuggee_and_wait(ContinueType type = ContinueType::FreeRun);
 
+    // Returns the new eip
     void* single_step();
+
+    void detach();
 
     template<typename Callback>
     void run(Callback callback);
 
-    const ELF::Loader& elf() const { return *m_elf; }
-    NonnullRefPtr<const ELF::Loader> elf_ref() const { return m_elf; }
+    const ELF::Image& elf() const { return m_debug_info.elf(); }
     const MappedFile& executable() const { return m_executable; }
     const DebugInfo& debug_info() const { return m_debug_info; }
 
@@ -116,14 +117,17 @@ public:
     };
 
 private:
+    explicit DebugSession(pid_t);
+
     // x86 breakpoint instruction "int3"
     static constexpr u8 BREAKPOINT_INSTRUCTION = 0xcc;
 
-    int m_debugee_pid { -1 };
-    bool m_is_debugee_dead { false };
+    static MappedFile map_executable_for_process(pid_t);
+
+    int m_debuggee_pid { -1 };
+    bool m_is_debuggee_dead { false };
 
     MappedFile m_executable;
-    NonnullRefPtr<const ELF::Loader> m_elf;
     DebugInfo m_debug_info;
 
     HashMap<void*, BreakPoint> m_breakpoints;
@@ -143,13 +147,13 @@ void DebugSession::run(Callback callback)
     State state { State::FreeRun };
 
     auto do_continue_and_wait = [&]() {
-        int wstatus = continue_debugee_and_wait((state == State::FreeRun) ? ContinueType::FreeRun : ContinueType::Syscall);
+        int wstatus = continue_debuggee_and_wait((state == State::FreeRun) ? ContinueType::FreeRun : ContinueType::Syscall);
 
-        // FIXME: This check actually only checks whether the debugee
+        // FIXME: This check actually only checks whether the debuggee
         // stopped because it hit a breakpoint/syscall/is in single stepping mode or not
         if (WSTOPSIG(wstatus) != SIGTRAP) {
             callback(DebugBreakReason::Exited, Optional<PtraceRegisters>());
-            m_is_debugee_dead = true;
+            m_is_debuggee_dead = true;
             return true;
         }
         return false;
@@ -173,7 +177,7 @@ void DebugSession::run(Callback callback)
         }
 
         if (current_breakpoint.has_value()) {
-            // We want to make the breakpoint transparrent to the user of the debugger.
+            // We want to make the breakpoint transparent to the user of the debugger.
             // To achieive this, we perform two rollbacks:
             // 1. Set regs.eip to point at the actual address of the instruction we breaked on.
             //    regs.eip currently points to one byte after the address of the original instruction,
@@ -205,10 +209,17 @@ void DebugSession::run(Callback callback)
 
         // Re-enable the breakpoint if it wasn't removed by the user
         if (current_breakpoint.has_value() && m_breakpoints.contains(current_breakpoint.value().address)) {
-            // The current breakpoint was removed in order to make it transparrent to the user.
+            // The current breakpoint was removed to make it transparent to the user.
             // We now want to re-enable it - the code execution flow could hit it again.
             // To re-enable the breakpoint, we first perform a single step and execute the
             // instruction of the breakpoint, and then redo the INT3 patch in its first byte.
+
+            // If the user manually inserted a breakpoint at were we breaked at originally,
+            // we need to disable that breakpoint because we want to singlestep over it to execute the
+            // instruction we breaked on (we re-enable it again later anyways).
+            if (m_breakpoints.contains(current_breakpoint.value().address) && m_breakpoints.get(current_breakpoint.value().address).value().state == BreakPointState::Enabled) {
+                disable_breakpoint(current_breakpoint.value().address);
+            }
             auto stopped_address = single_step();
             enable_breakpoint(current_breakpoint.value().address);
             did_single_step = true;
@@ -225,7 +236,11 @@ void DebugSession::run(Callback callback)
             state = State::SingleStep;
         }
 
-        if (decision == DebugDecision::Kill || decision == DebugDecision::Detach) {
+        if (decision == DebugDecision::Detach) {
+            detach();
+            break;
+        }
+        if (decision == DebugDecision::Kill) {
             ASSERT_NOT_REACHED(); // TODO: implement
         }
 
@@ -233,4 +248,6 @@ void DebugSession::run(Callback callback)
             single_step();
         }
     }
+}
+
 }

@@ -29,8 +29,9 @@
 #include <AK/StringBuilder.h>
 #include <AK/Types.h>
 #include <Kernel/Arch/i386/CPU.h>
-#include <Kernel/Arch/i386/ProcessorInfo.h>
 #include <Kernel/Arch/i386/ISRStubs.h>
+#include <Kernel/Arch/i386/ProcessorInfo.h>
+#include <Kernel/IO.h>
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/Interrupts/GenericInterruptHandler.h>
 #include <Kernel/Interrupts/IRQHandler.h>
@@ -44,7 +45,7 @@
 #include <Kernel/Thread.h>
 #include <Kernel/VM/MemoryManager.h>
 #include <Kernel/VM/PageDirectory.h>
-#include <Kernel/IO.h>
+#include <Kernel/VM/ProcessPagingScope.h>
 #include <LibC/mallocdefs.h>
 
 //#define PAGE_FAULT_DEBUG
@@ -58,6 +59,14 @@ static Descriptor s_idt[256];
 
 static GenericInterruptHandler* s_interrupt_handler[GENERIC_INTERRUPT_HANDLERS_COUNT];
 
+// The compiler can't see the calls to these functions inside assembly.
+// Declare them, to avoid dead code warnings.
+extern "C" void enter_thread_context(Thread* from_thread, Thread* to_thread);
+extern "C" void context_first_init(Thread* from_thread, Thread* to_thread, TrapFrame* trap);
+extern "C" u32 do_init_context(Thread* thread, u32 flags);
+extern "C" void exit_kernel_thread(void);
+extern "C" void pre_init_finished(void);
+extern "C" void post_init_finished(void);
 extern "C" void handle_interrupt(TrapFrame*);
 
 #define EH_ENTRY(ec, title)                         \
@@ -115,8 +124,8 @@ static void dump(const RegisterState& regs)
 {
     u16 ss;
     u32 esp;
-    auto process = Process::current();
-    if (!process || process->is_ring0()) {
+
+    if (!(regs.cs & 3)) {
         ss = regs.ss;
         esp = regs.esp;
     } else {
@@ -142,10 +151,12 @@ static void dump(const RegisterState& regs)
         : "=a"(cr4));
     klog() << "cr0=" << String::format("%08x", cr0) << " cr2=" << String::format("%08x", cr2) << " cr3=" << String::format("%08x", cr3) << " cr4=" << String::format("%08x", cr4);
 
-    if (process && process->validate_read((void*)regs.eip, 8)) {
+    auto process = Process::current();
+    u8 code[8];
+    void* fault_at;
+    if (process && safe_memcpy(code, (void*)regs.eip, 8, fault_at)) {
         SmapDisabler disabler;
-        u8* codeptr = (u8*)regs.eip;
-        klog() << "code: " << String::format("%02x", codeptr[0]) << " " << String::format("%02x", codeptr[1]) << " " << String::format("%02x", codeptr[2]) << " " << String::format("%02x", codeptr[3]) << " " << String::format("%02x", codeptr[4]) << " " << String::format("%02x", codeptr[5]) << " " << String::format("%02x", codeptr[6]) << " " << String::format("%02x", codeptr[7]);
+        klog() << "code: " << String::format("%02x", code[0]) << " " << String::format("%02x", code[1]) << " " << String::format("%02x", code[2]) << " " << String::format("%02x", code[3]) << " " << String::format("%02x", code[4]) << " " << String::format("%02x", code[5]) << " " << String::format("%02x", code[6]) << " " << String::format("%02x", code[7]);
     }
 }
 
@@ -161,10 +172,10 @@ void handle_crash(RegisterState& regs, const char* description, int signal, bool
     // make sure we switch back to the right page tables.
     MM.enter_process_paging_scope(*process);
 
-    klog() << "CRASH: CPU #" << Processor::current().id() << " " << description << ". Ring " << (process->is_ring0() ? 0 : 3) << ".";
+    klog() << "CRASH: CPU #" << Processor::current().id() << " " << description << ". Ring " << (regs.cs & 3) << ".";
     dump(regs);
 
-    if (process->is_ring0()) {
+    if (!(regs.cs & 3)) {
         klog() << "Crash in ring 0 :(";
         dump_backtrace();
         Processor::halt();
@@ -204,6 +215,169 @@ void fpu_exception_handler(TrapFrame*)
     asm volatile("clts");
 }
 
+extern "C" u8* safe_memcpy_ins_1;
+extern "C" u8* safe_memcpy_1_faulted;
+extern "C" u8* safe_memcpy_ins_2;
+extern "C" u8* safe_memcpy_2_faulted;
+extern "C" u8* safe_strnlen_ins;
+extern "C" u8* safe_strnlen_faulted;
+extern "C" u8* safe_memset_ins_1;
+extern "C" u8* safe_memset_1_faulted;
+extern "C" u8* safe_memset_ins_2;
+extern "C" u8* safe_memset_2_faulted;
+
+bool safe_memcpy(void* dest_ptr, const void* src_ptr, size_t n, void*& fault_at)
+{
+    fault_at = nullptr;
+    size_t dest = (size_t)dest_ptr;
+    size_t src = (size_t)src_ptr;
+    size_t remainder;
+    // FIXME: Support starting at an unaligned address.
+    if (!(dest & 0x3) && !(src & 0x3) && n >= 12) {
+        size_t size_ts = n / sizeof(size_t);
+        asm volatile(
+            ".global safe_memcpy_ins_1 \n"
+            "safe_memcpy_ins_1: \n"
+            "rep movsl \n"
+            ".global safe_memcpy_1_faulted \n"
+            "safe_memcpy_1_faulted: \n" // handle_safe_access_fault() set edx to the fault address!
+            : "=S" (src),
+              "=D" (dest),
+              "=c" (remainder),
+              [fault_at] "=d" (fault_at)
+            : "S" (src),
+              "D" (dest),
+              "c" (size_ts)
+            : "memory");
+        if (remainder != 0)
+            return false; // fault_at is already set!
+        n -= size_ts * sizeof(size_t);
+        if (n == 0) {
+            fault_at = nullptr;
+            return true;
+        }
+    }
+    asm volatile(
+        ".global safe_memcpy_ins_2 \n"
+        "safe_memcpy_ins_2: \n"
+        "rep movsb \n"
+        ".global safe_memcpy_2_faulted \n"
+        "safe_memcpy_2_faulted: \n" // handle_safe_access_fault() set edx to the fault address!
+        : "=c" (remainder),
+          [fault_at] "=d" (fault_at)
+        : "S" (src),
+          "D" (dest),
+          "c" (n)
+        : "memory");
+    if (remainder != 0)
+        return false; // fault_at is already set!
+    fault_at = nullptr;
+    return true;
+}
+
+ssize_t safe_strnlen(const char* str, size_t max_n, void*& fault_at)
+{
+    ssize_t count = 0;
+    fault_at = nullptr;
+    asm volatile(
+        "1: \n"
+        "test %[max_n], %[max_n] \n"
+        "je 2f \n"
+        "dec %[max_n] \n"
+        ".global safe_strnlen_ins \n"
+        "safe_strnlen_ins: \n"
+        "cmpb $0,(%[str], %[count], 1) \n"
+        "je 2f \n"
+        "inc %[count] \n"
+        "jmp 1b \n"
+        ".global safe_strnlen_faulted \n"
+        "safe_strnlen_faulted: \n" // handle_safe_access_fault() set edx to the fault address!
+        "xor %[count_on_error], %[count_on_error] \n"
+        "dec %[count_on_error] \n" // return -1 on fault
+        "2:"
+        : [count_on_error] "=c" (count),
+          [fault_at] "=d" (fault_at)
+        : [str] "b" (str),
+          [count] "c" (count),
+          [max_n] "d" (max_n)
+    );
+    if (count >= 0)
+        fault_at = nullptr;
+    return count;
+}
+
+bool safe_memset(void* dest_ptr, int c, size_t n, void*& fault_at)
+{
+    fault_at = nullptr;
+    size_t dest = (size_t)dest_ptr;
+    size_t remainder;
+    // FIXME: Support starting at an unaligned address.
+    if (!(dest & 0x3) && n >= 12) {
+        size_t size_ts = n / sizeof(size_t);
+        size_t expanded_c = (u8)c;
+        expanded_c |= expanded_c << 8;
+        expanded_c |= expanded_c << 16;
+        asm volatile(
+            ".global safe_memset_ins_1 \n"
+            "safe_memset_ins_1: \n"
+            "rep stosl \n"
+            ".global safe_memset_1_faulted \n"
+            "safe_memset_1_faulted: \n" // handle_safe_access_fault() set edx to the fault address!
+            : "=D" (dest),
+              "=c" (remainder),
+              [fault_at] "=d" (fault_at)
+            : "D" (dest),
+              "a" (expanded_c),
+              "c" (size_ts)
+            : "memory");
+        if (remainder != 0)
+            return false; // fault_at is already set!
+        n -= size_ts * sizeof(size_t);
+        if (remainder == 0) {
+            fault_at = nullptr;
+            return true;
+        }
+    }
+    asm volatile(
+        ".global safe_memset_ins_2 \n"
+        "safe_memset_ins_2: \n"
+        "rep stosb \n"
+        ".global safe_memset_2_faulted \n"
+        "safe_memset_2_faulted: \n" // handle_safe_access_fault() set edx to the fault address!
+        : "=D" (dest),
+          "=c" (remainder),
+          [fault_at] "=d" (fault_at)
+        : "D" (dest),
+          "c" (n),
+          "a" (c)
+        : "memory");
+    if (remainder != 0)
+        return false; // fault_at is already set!
+    fault_at = nullptr;
+    return true;
+}
+
+static bool handle_safe_access_fault(RegisterState& regs, u32 fault_address)
+{
+    // If we detect that the fault happened in safe_memcpy() safe_strnlen(),
+    // or safe_memset() then resume at the appropriate _faulted label
+    if (regs.eip == (FlatPtr)&safe_memcpy_ins_1)
+        regs.eip = (FlatPtr)&safe_memcpy_1_faulted;
+    else if (regs.eip == (FlatPtr)&safe_memcpy_ins_2)
+        regs.eip = (FlatPtr)&safe_memcpy_2_faulted;
+    else if (regs.eip == (FlatPtr)&safe_strnlen_ins)
+        regs.eip = (FlatPtr)&safe_strnlen_faulted;
+    else if (regs.eip == (FlatPtr)&safe_memset_ins_1)
+        regs.eip = (FlatPtr)&safe_memset_1_faulted;
+    else if (regs.eip == (FlatPtr)&safe_memset_ins_2)
+        regs.eip = (FlatPtr)&safe_memset_2_faulted;
+    else
+        return false;
+
+    regs.edx = fault_address;
+    return true;
+}
+
 // 14: Page Fault
 EH_ENTRY(14, page_fault);
 void page_fault_handler(TrapFrame* trap)
@@ -229,9 +403,22 @@ void page_fault_handler(TrapFrame* trap)
     dump(regs);
 #endif
 
-    bool faulted_in_userspace = (regs.cs & 3) == 3;
+    bool faulted_in_kernel = !(regs.cs & 3);
+
+    if (faulted_in_kernel && Processor::current().in_irq()) {
+        // If we're faulting in an IRQ handler, first check if we failed
+        // due to safe_memcpy, safe_strnlen, or safe_memset. If we did,
+        // gracefully continue immediately. Because we're in an IRQ handler
+        // we can't really try to resolve the page fault in a meaningful
+        // way, so we need to do this before calling into
+        // MemoryManager::handle_page_fault, which would just bail and
+        // request a crash
+        if (handle_safe_access_fault(regs, fault_address))
+            return;
+    }
+
     auto current_thread = Thread::current();
-    if (faulted_in_userspace && !MM.validate_user_stack(current_thread->process(), VirtualAddress(regs.userspace_esp))) {
+    if (!faulted_in_kernel && !MM.validate_user_stack(current_thread->process(), VirtualAddress(regs.userspace_esp))) {
         dbg() << "Invalid stack pointer: " << VirtualAddress(regs.userspace_esp);
         handle_crash(regs, "Bad stack on page fault", SIGSTKFLT);
         ASSERT_NOT_REACHED();
@@ -240,6 +427,13 @@ void page_fault_handler(TrapFrame* trap)
     auto response = MM.handle_page_fault(PageFault(regs.exception_code, VirtualAddress(fault_address)));
 
     if (response == PageFaultResponse::ShouldCrash || response == PageFaultResponse::OutOfMemory) {
+        if (faulted_in_kernel && handle_safe_access_fault(regs, fault_address)) {
+            // If this would be a ring0 (kernel) fault and the fault was triggered by
+            // safe_memcpy, safe_strnlen, or safe_memset then we resume execution at
+            // the appropriate _fault label rather than crashing
+            return;
+        }
+
         if (response != PageFaultResponse::OutOfMemory) {
             if (current_thread->has_signal_handler(SIGSEGV)) {
                 current_thread->send_urgent_signal_to_self(SIGSEGV);
@@ -290,7 +484,8 @@ void debug_handler(TrapFrame* trap)
     clac();
     auto& regs = *trap->regs;
     auto current_thread = Thread::current();
-    if (&current_thread->process() == nullptr || (regs.cs & 3) == 0) {
+    auto& process = current_thread->process();
+    if ((regs.cs & 3) == 0) {
         klog() << "Debug Exception in Ring0";
         Processor::halt();
         return;
@@ -300,8 +495,8 @@ void debug_handler(TrapFrame* trap)
     if (!is_reason_singlestep)
         return;
 
-    if (current_thread->tracer()) {
-        current_thread->tracer()->set_regs(regs);
+    if (auto tracer = process.tracer()) {
+        tracer->set_regs(regs);
     }
     current_thread->send_urgent_signal_to_self(SIGTRAP);
 }
@@ -312,13 +507,14 @@ void breakpoint_handler(TrapFrame* trap)
     clac();
     auto& regs = *trap->regs;
     auto current_thread = Thread::current();
-    if (&current_thread->process() == nullptr || (regs.cs & 3) == 0) {
+    auto& process = current_thread->process();
+    if ((regs.cs & 3) == 0) {
         klog() << "Breakpoint Trap in Ring0";
         Processor::halt();
         return;
     }
-    if (current_thread->tracer()) {
-        current_thread->tracer()->set_regs(regs);
+    if (auto tracer = process.tracer()) {
+        tracer->set_regs(regs);
     }
     current_thread->send_urgent_signal_to_self(SIGTRAP);
 }
@@ -337,7 +533,7 @@ void breakpoint_handler(TrapFrame* trap)
         asm("movl %%cr4, %%eax"                                                                                                                                                \
             : "=a"(cr4));                                                                                                                                                      \
         klog() << "CR0=" << String::format("%x", cr0) << " CR2=" << String::format("%x", cr2) << " CR3=" << String::format("%x", cr3) << " CR4=" << String::format("%x", cr4); \
-        Processor::halt();                                                                                                                                                                \
+        Processor::halt();                                                                                                                                                     \
     }
 
 EH(2, "Unknown error")
@@ -387,6 +583,10 @@ void register_generic_interrupt_handler(u8 interrupt_number, GenericInterruptHan
             return;
         }
         if (!s_interrupt_handler[interrupt_number]->is_shared_handler()) {
+            if (s_interrupt_handler[interrupt_number]->type() == HandlerType::SpuriousInterruptHandler) {
+                static_cast<SpuriousInterruptHandler*>(s_interrupt_handler[interrupt_number])->register_handler(handler);
+                return;
+            }
             ASSERT(s_interrupt_handler[interrupt_number]->type() == HandlerType::IRQHandler);
             auto& previous_handler = *s_interrupt_handler[interrupt_number];
             s_interrupt_handler[interrupt_number] = nullptr;
@@ -664,9 +864,11 @@ void handle_interrupt(TrapFrame* trap)
     auto& regs = *trap->regs;
     ASSERT(regs.isr_number >= IRQ_VECTOR_BASE && regs.isr_number <= (IRQ_VECTOR_BASE + GENERIC_INTERRUPT_HANDLERS_COUNT));
     u8 irq = (u8)(regs.isr_number - 0x50);
-    ASSERT(s_interrupt_handler[irq]);
-    s_interrupt_handler[irq]->handle_interrupt(regs);
-    s_interrupt_handler[irq]->eoi();
+    auto* handler = s_interrupt_handler[irq];
+    ASSERT(handler);
+    handler->increment_invoking_counter();
+    handler->handle_interrupt(regs);
+    handler->eoi();
 }
 
 void enter_trap_no_irq(TrapFrame* trap)
@@ -714,6 +916,7 @@ u32 read_cr3()
 
 void write_cr3(u32 cr3)
 {
+    // NOTE: If you're here from a GPF crash, it's very likely that a PDPT entry is incorrect, not this!
     asm volatile("movl %%eax, %%cr3" ::"a"(cr3)
                  : "memory");
 }
@@ -778,14 +981,26 @@ void Processor::cpu_detect()
     m_features = static_cast<CPUFeature>(0);
 
     CPUID processor_info(0x1);
+    if (processor_info.edx() & (1 << 4))
+        set_feature(CPUFeature::TSC);
     if (processor_info.edx() & (1 << 6))
         set_feature(CPUFeature::PAE);
     if (processor_info.edx() & (1 << 13))
         set_feature(CPUFeature::PGE);
+    if (processor_info.edx() & (1 << 23))
+        set_feature(CPUFeature::MMX);
     if (processor_info.edx() & (1 << 25))
         set_feature(CPUFeature::SSE);
-    if (processor_info.edx() & (1 << 4))
-        set_feature(CPUFeature::TSC);
+    if (processor_info.edx() & (1 << 26))
+        set_feature(CPUFeature::SSE2);
+    if (processor_info.ecx() & (1 << 0))
+        set_feature(CPUFeature::SSE3);
+    if (processor_info.ecx() & (1 << 9))
+        set_feature(CPUFeature::SSSE3);
+    if (processor_info.ecx() & (1 << 19))
+        set_feature(CPUFeature::SSE4_1);
+    if (processor_info.ecx() & (1 << 20))
+        set_feature(CPUFeature::SSE4_2);
     if (processor_info.ecx() & (1 << 30))
         set_feature(CPUFeature::RDRAND);
     if (processor_info.edx() & (1 << 11)) {
@@ -794,13 +1009,38 @@ void Processor::cpu_detect()
         u32 family = (processor_info.eax() >> 8) & 0xf;
         if (!(family == 6 && model < 3 && stepping < 3))
             set_feature(CPUFeature::SEP);
+        if ((family == 6 && model >= 3) || (family == 0xf && model >= 0xe))
+            set_feature(CPUFeature::CONSTANT_TSC);
     }
+
+    u32 max_extended_leaf = CPUID(0x80000000).eax();
+
+    ASSERT(max_extended_leaf >= 0x80000001);
     CPUID extended_processor_info(0x80000001);
     if (extended_processor_info.edx() & (1 << 20))
         set_feature(CPUFeature::NX);
+    if (extended_processor_info.edx() & (1 << 27))
+        set_feature(CPUFeature::RDTSCP);
     if (extended_processor_info.edx() & (1 << 11)) {
         // Only available in 64 bit mode
         set_feature(CPUFeature::SYSCALL);
+    }
+
+    if (max_extended_leaf >= 0x80000007) {
+        CPUID cpuid(0x80000007);
+        if (cpuid.edx() & (1 << 8)) {
+            set_feature(CPUFeature::CONSTANT_TSC);
+            set_feature(CPUFeature::NONSTOP_TSC);
+        }
+    }
+
+    if (max_extended_leaf >= 0x80000008) {
+        // CPUID.80000008H:EAX[7:0] reports the physical-address width supported by the processor.
+        CPUID cpuid(0x80000008);
+        m_physical_address_bit_width = cpuid.eax() & 0xff;
+    } else {
+        // For processors that do not support CPUID function 80000008H, the width is generally 36 if CPUID.01H:EDX.PAE [bit 6] = 1 and 32 otherwise.
+        m_physical_address_bit_width = has_feature(CPUFeature::PAE) ? 36 : 32;
     }
 
     CPUID extended_features(0x7);
@@ -903,12 +1143,30 @@ String Processor::features_string() const
                     return "sse";
                 case CPUFeature::TSC:
                     return "tsc";
+                case CPUFeature::RDTSCP:
+                    return "rdtscp";
+                case CPUFeature::CONSTANT_TSC:
+                    return "constant_tsc";
+                case CPUFeature::NONSTOP_TSC:
+                    return "nonstop_tsc";
                 case CPUFeature::UMIP:
                     return "umip";
                 case CPUFeature::SEP:
                     return "sep";
                 case CPUFeature::SYSCALL:
                     return "syscall";
+                case CPUFeature::MMX:
+                    return "mmx";
+                case CPUFeature::SSE2:
+                    return "sse2";
+                case CPUFeature::SSE3:
+                    return "sse3";
+                case CPUFeature::SSSE3:
+                    return "ssse3";
+                case CPUFeature::SSE4_1:
+                    return "sse4.1";
+                case CPUFeature::SSE4_2:
+                    return "sse4.2";
                 // no default statement here intentionally so that we get
                 // a warning if a new feature is forgotten to be added here
             }
@@ -916,15 +1174,15 @@ String Processor::features_string() const
             return "???";
         };
     bool first = true;
-    for (u32 flag = 1; flag < sizeof(m_features) * 8; flag <<= 1) {
-       if ((static_cast<u32>(m_features) & flag) != 0) {
-           if (first)
-               first = false;
-           else
-               builder.append(' ');
-           auto str = feature_to_str(static_cast<CPUFeature>(flag));
-           builder.append(str, strlen(str));
-       }
+    for (u32 flag = 1; flag != 0; flag <<= 1) {
+        if ((static_cast<u32>(m_features) & flag) != 0) {
+            if (first)
+                first = false;
+            else
+                builder.append(' ');
+            auto str = feature_to_str(static_cast<CPUFeature>(flag));
+            builder.append(str, strlen(str));
+        }
     }
     return builder.build();
 }
@@ -943,6 +1201,7 @@ void Processor::early_initialize(u32 cpu)
     m_message_queue = nullptr;
     m_idle_thread = nullptr;
     m_current_thread = nullptr;
+    m_scheduler_data = nullptr;
     m_mm_data = nullptr;
     m_info = nullptr;
 
@@ -953,6 +1212,8 @@ void Processor::early_initialize(u32 cpu)
     } else {
         atomic_fetch_add(&g_total_processors, 1u, AK::MemoryOrder::memory_order_acq_rel);
     }
+
+    deferred_call_pool_init();
 
     cpu_setup();
     gdt_init();
@@ -967,6 +1228,7 @@ void Processor::initialize(u32 cpu)
     klog() << "CPU[" << id() << "]: Supported features: " << features_string();
     if (!has_feature(CPUFeature::RDRAND))
         klog() << "CPU[" << id() << "]: No RDRAND support detected, randomness will be poor";
+    klog() << "CPU[" << id() << "]: Physical address bit width: " << m_physical_address_bit_width;
 
     if (cpu == 0)
         idt_init();
@@ -997,7 +1259,7 @@ void Processor::write_raw_gdt_entry(u16 selector, u32 low, u32 high)
 {
     u16 i = (selector & 0xfffc) >> 3;
     u32 prev_gdt_length = m_gdt_length;
-    
+
     if (i > m_gdt_length) {
         m_gdt_length = i + 1;
         ASSERT(m_gdt_length <= sizeof(m_gdt) / sizeof(m_gdt[0]));
@@ -1038,43 +1300,120 @@ const DescriptorTablePointer& Processor::get_gdtr()
     return m_gdtr;
 }
 
-bool Processor::get_context_frame_ptr(Thread& thread, u32& frame_ptr, u32& eip)
+Vector<FlatPtr> Processor::capture_stack_trace(Thread& thread, size_t max_frames)
 {
-    ScopedCritical critical;
+    FlatPtr frame_ptr = 0, eip = 0;
+    Vector<FlatPtr, 32> stack_trace;
+
+    auto walk_stack = [&](FlatPtr stack_ptr)
+    {
+        stack_trace.append(eip);
+        size_t count = 1;
+        while (stack_ptr) {
+            FlatPtr retaddr;
+
+            count++;
+            if (max_frames != 0 && count > max_frames)
+                break;
+
+            if (is_user_range(VirtualAddress(stack_ptr), sizeof(FlatPtr) * 2)) {
+                if (!copy_from_user(&retaddr, &((FlatPtr*)stack_ptr)[1]) || !retaddr)
+                    break;
+                stack_trace.append(retaddr);
+                if (!copy_from_user(&stack_ptr, (FlatPtr*)stack_ptr))
+                    break;
+            } else {
+                void* fault_at;
+                if (!safe_memcpy(&retaddr, &((FlatPtr*)stack_ptr)[1], sizeof(FlatPtr), fault_at) || !retaddr)
+                    break;
+                stack_trace.append(retaddr);
+                if (!safe_memcpy(&stack_ptr, (FlatPtr*)stack_ptr, sizeof(FlatPtr), fault_at))
+                    break;
+            }
+        }
+    };
+    auto capture_current_thread = [&]()
+    {
+        frame_ptr = (FlatPtr)__builtin_frame_address(0);
+        eip = (FlatPtr)__builtin_return_address(0);
+
+        walk_stack(frame_ptr);
+    };
+
+    // Since the thread may be running on another processor, there
+    // is a chance a context switch may happen while we're trying
+    // to get it. It also won't be entirely accurate and merely
+    // reflect the status at the last context switch.
+    ScopedSpinLock lock(g_scheduler_lock);
     auto& proc = Processor::current();
     if (&thread == proc.current_thread()) {
         ASSERT(thread.state() == Thread::Running);
-        asm volatile("movl %%ebp, %%eax"
-                     : "=g"(frame_ptr));
+        // Leave the scheduler lock. If we trigger page faults we may
+        // need to be preempted. Since this is our own thread it won't
+        // cause any problems as the stack won't change below this frame.
+        lock.unlock();
+        capture_current_thread();
+    } else if (thread.is_active()) {
+        ASSERT(thread.cpu() != proc.id());
+        // If this is the case, the thread is currently running
+        // on another processor. We can't trust the kernel stack as
+        // it may be changing at any time. We need to probably send
+        // an IPI to that processor, have it walk the stack and wait
+        // until it returns the data back to us
+        smp_unicast(thread.cpu(),
+            [&]() {
+                dbg() << "CPU[" << Processor::current().id() << "] getting stack for cpu #" << proc.id();
+                ProcessPagingScope paging_scope(thread.process());
+                auto& target_proc = Processor::current();
+                ASSERT(&target_proc != &proc);
+                ASSERT(&thread == target_proc.current_thread());
+                // NOTE: Because the other processor is still holding the
+                // scheduler lock while waiting for this callback to finish,
+                // the current thread on the target processor cannot change
+
+                // TODO: What to do about page faults here? We might deadlock
+                //       because the other processor is still holding the
+                //       scheduler lock...
+                capture_current_thread();
+            }, false);
     } else {
-        // Since the thread may be running on another processor, there
-        // is a chance a context switch may happen while we're trying
-        // to get it. It also won't be entirely accurate and merely
-        // reflect the status at the last context switch.
-        ScopedSpinLock lock(g_scheduler_lock);
-        if (thread.state() == Thread::Running) {
-            ASSERT(thread.cpu() != proc.id());
-            // TODO: If this is the case, the thread is currently running
-            // on another processor. We can't trust the kernel stack as
-            // it may be changing at any time. We need to probably send
-            // an IPI to that processor, have it walk the stack and wait
-            // until it returns the data back to us
-            dbg() << "CPU[" << proc.id() << "] getting stack for "
-                << thread << " on other CPU# " << thread.cpu() << " not yet implemented!";
-            frame_ptr = eip = 0; // TODO
-            return false;
-        } else {
+        switch (thread.state()) {
+        case Thread::Running:
+            ASSERT_NOT_REACHED(); // should have been handled above
+        case Thread::Runnable:
+        case Thread::Stopped:
+        case Thread::Blocked:
+        case Thread::Dying:
+        case Thread::Dead: {
             // We need to retrieve ebp from what was last pushed to the kernel
             // stack. Before switching out of that thread, it switch_context
             // pushed the callee-saved registers, and the last of them happens
             // to be ebp.
+            ProcessPagingScope paging_scope(thread.process());
             auto& tss = thread.tss();
             u32* stack_top = reinterpret_cast<u32*>(tss.esp);
-            frame_ptr = stack_top[0];
+            if (is_user_range(VirtualAddress(stack_top), sizeof(FlatPtr))) {
+                if (!copy_from_user(&frame_ptr, &((FlatPtr*)stack_top)[0]))
+                    frame_ptr = 0;
+            } else {
+                void* fault_at;
+                if (!safe_memcpy(&frame_ptr, &((FlatPtr*)stack_top)[0], sizeof(FlatPtr), fault_at))
+                    frame_ptr = 0;
+            }
             eip = tss.eip;
+            // TODO: We need to leave the scheduler lock here, but we also
+            //       need to prevent the target thread from being run while
+            //       we walk the stack
+            lock.unlock();
+            walk_stack(frame_ptr);
+            break;
+        }
+        default:
+            dbg() << "Cannot capture stack trace for thread " << thread << " in state " << thread.state_string();
+            break;
         }
     }
-    return true;
+    return stack_trace;
 }
 
 extern "C" void enter_thread_context(Thread* from_thread, Thread* to_thread)
@@ -1166,31 +1505,24 @@ void Processor::switch_context(Thread*& from_thread, Thread*& to_thread)
 #endif
 }
 
-extern "C" void context_first_init(Thread* from_thread, Thread* to_thread, TrapFrame* trap)
+extern "C" void context_first_init([[maybe_unused]] Thread* from_thread, [[maybe_unused]] Thread* to_thread, [[maybe_unused]] TrapFrame* trap)
 {
     ASSERT(!are_interrupts_enabled());
     ASSERT(is_kernel_mode());
-    (void)from_thread;
-    (void)to_thread;
-    (void)trap;
-    
+
 #ifdef CONTEXT_SWITCH_DEBUG
-        dbg() << "switch_context <-- from " << VirtualAddress(from_thread) << " " << *from_thread << " to " << VirtualAddress(to_thread) << " " << *to_thread << " (context_first_init)";
+    dbg() << "switch_context <-- from " << VirtualAddress(from_thread) << " " << *from_thread << " to " << VirtualAddress(to_thread) << " " << *to_thread << " (context_first_init)";
 #endif
-    
+
     ASSERT(to_thread == Thread::current());
 
-    Scheduler::enter_current(*from_thread);
-
-    if (to_thread->process().wait_for_tracer_at_next_execve()) {
-        to_thread->send_urgent_signal_to_self(SIGSTOP);
-    }
+    Scheduler::enter_current(*from_thread, true);
 
     // Since we got here and don't have Scheduler::context_switch in the
     // call stack (because this is the first time we switched into this
-    // context), we need to unlock the scheduler lock manually. We're
-    // using the flags initially set up by init_context
-    g_scheduler_lock.unlock(trap->regs->eflags);
+    // context), we need to notify the scheduler so that it can release
+    // the scheduler lock.
+    Scheduler::leave_on_first_switch(trap->regs->eflags);
 }
 
 extern "C" void thread_context_first_enter(void);
@@ -1209,6 +1541,11 @@ asm(
 "    jmp common_trap_exit \n"
 );
 
+void exit_kernel_thread(void)
+{
+    Thread::current()->exit();
+}
+
 u32 Processor::init_context(Thread& thread, bool leave_crit)
 {
     ASSERT(is_kernel_mode());
@@ -1220,7 +1557,7 @@ u32 Processor::init_context(Thread& thread, bool leave_crit)
         ASSERT(in_critical() == 1);
     }
 
-    const u32 kernel_stack_top = thread.kernel_stack_top();
+    u32 kernel_stack_top = thread.kernel_stack_top();
     u32 stack_top = kernel_stack_top;
 
     // TODO: handle NT?
@@ -1228,19 +1565,26 @@ u32 Processor::init_context(Thread& thread, bool leave_crit)
 
     auto& tss = thread.tss();
     bool return_to_user = (tss.cs & 3) != 0;
-    
+
     // make room for an interrupt frame
     if (!return_to_user) {
         // userspace_esp and userspace_ss are not popped off by iret
         // unless we're switching back to user mode
         stack_top -= sizeof(RegisterState) - 2 * sizeof(u32);
+
+        // For kernel threads we'll push the thread function argument
+        // which should be in tss.esp and exit_kernel_thread as return
+        // address.
+        stack_top -= 2 * sizeof(u32);
+        *reinterpret_cast<u32*>(kernel_stack_top - 2 * sizeof(u32)) = tss.esp;
+        *reinterpret_cast<u32*>(kernel_stack_top - 3 * sizeof(u32)) = FlatPtr(&exit_kernel_thread);
     } else {
         stack_top -= sizeof(RegisterState);
     }
 
     // we want to end up 16-byte aligned, %esp + 4 should be aligned
     stack_top -= sizeof(u32);
-    *reinterpret_cast<u32*>(kernel_stack_top - 4) = 0;
+    *reinterpret_cast<u32*>(kernel_stack_top - sizeof(u32)) = 0;
 
     // set up the stack so that after returning from thread_context_first_enter()
     // we will end up either in kernel mode or user mode, depending on how the thread is set up
@@ -1299,7 +1643,6 @@ u32 Processor::init_context(Thread& thread, bool leave_crit)
     return stack_top;
 }
 
-
 extern "C" u32 do_init_context(Thread* thread, u32 flags)
 {
     ASSERT_INTERRUPTS_DISABLED();
@@ -1335,6 +1678,7 @@ void Processor::assume_context(Thread& thread, u32 flags)
     dbg() << "Assume context for thread " << VirtualAddress(&thread) << " " << thread;
 #endif
     ASSERT_INTERRUPTS_DISABLED();
+    Scheduler::prepare_after_exec();
     // in_critical() should be 2 here. The critical section in Process::exec
     // and then the scheduler lock
     ASSERT(Processor::current().in_critical() == 2);
@@ -1346,27 +1690,26 @@ extern "C" void pre_init_finished(void)
 {
     ASSERT(g_scheduler_lock.own_lock());
 
-    // The target flags will get restored upon leaving the trap
-    u32 prev_flags = cpu_flags();
-    g_scheduler_lock.unlock(prev_flags);
-
-    // We because init_finished() will wait on the other APs, we need
+    // Because init_finished() will wait on the other APs, we need
     // to release the scheduler lock so that the other APs can also get
     // to this point
+
+    // The target flags will get restored upon leaving the trap
+    u32 prev_flags = cpu_flags();
+    Scheduler::leave_on_first_switch(prev_flags);
 }
 
 extern "C" void post_init_finished(void)
 {
     // We need to re-acquire the scheduler lock before a context switch
     // transfers control into the idle loop, which needs the lock held
-    ASSERT(!g_scheduler_lock.own_lock());
-    g_scheduler_lock.lock();
+    Scheduler::prepare_for_idle_loop();
 }
 
 void Processor::initialize_context_switching(Thread& initial_thread)
 {
-    ASSERT(initial_thread.process().is_ring0());
-    
+    ASSERT(initial_thread.process().is_kernel_process());
+
     auto& tss = initial_thread.tss();
     m_tss = tss;
     m_tss.esp0 = tss.esp0;
@@ -1374,11 +1717,11 @@ void Processor::initialize_context_switching(Thread& initial_thread)
     // user mode needs to be able to switch to kernel mode:
     m_tss.cs = m_tss.ds = m_tss.es = m_tss.gs = m_tss.ss = GDT_SELECTOR_CODE0 | 3;
     m_tss.fs = GDT_SELECTOR_PROC | 3;
-    
+
     m_scheduler_initialized = true;
-    
+
     asm volatile(
-        "movl %[new_esp], %%esp \n" // swich to new stack
+        "movl %[new_esp], %%esp \n" // switch to new stack
         "pushl %[from_to_thread] \n" // to_thread
         "pushl %[from_to_thread] \n" // from_thread
         "pushl $" __STRINGIFY(GDT_SELECTOR_CODE0) " \n"
@@ -1400,7 +1743,7 @@ void Processor::initialize_context_switching(Thread& initial_thread)
            [from_to_thread] "b" (&initial_thread),
            [cpu] "c" (id())
     );
-    
+
     ASSERT_NOT_REACHED();
 }
 
@@ -1449,9 +1792,10 @@ void Processor::flush_tlb_local(VirtualAddress vaddr, size_t page_count)
 
 void Processor::flush_tlb(VirtualAddress vaddr, size_t page_count)
 {
-    flush_tlb_local(vaddr, page_count);
     if (s_smp_enabled)
         smp_broadcast_flush_tlb(vaddr, page_count);
+    else
+        flush_tlb_local(vaddr, page_count);
 }
 
 static volatile ProcessorMessage* s_message_pool;
@@ -1507,7 +1851,7 @@ void Processor::smp_enable()
         for (size_t k = 0; k < msg_entries_cnt; k++)
             msg_entries[msg_entry_i + k].msg = &msg;
     }
-    
+
     atomic_store(&s_message_pool, &msgs[0], AK::MemoryOrder::memory_order_release);
 
     // Start sending IPI messages
@@ -1517,12 +1861,12 @@ void Processor::smp_enable()
 void Processor::smp_cleanup_message(ProcessorMessage& msg)
 {
     switch (msg.type) {
-        case ProcessorMessage::CallbackWithData:
-            if (msg.callback_with_data.free)
-                msg.callback_with_data.free(msg.callback_with_data.data);
-            break;
-        default:
-            break;
+    case ProcessorMessage::CallbackWithData:
+        if (msg.callback_with_data.free)
+            msg.callback_with_data.free(msg.callback_with_data.data);
+        break;
+    default:
+        break;
     }
 }
 
@@ -1532,8 +1876,7 @@ bool Processor::smp_process_pending_messages()
     u32 prev_flags;
     enter_critical(prev_flags);
 
-    if (auto pending_msgs = atomic_exchange(&m_message_queue, nullptr, AK::MemoryOrder::memory_order_acq_rel))
-    {
+    if (auto pending_msgs = atomic_exchange(&m_message_queue, nullptr, AK::MemoryOrder::memory_order_acq_rel)) {
         // We pulled the stack of pending messages in LIFO order, so we need to reverse the list first
         auto reverse_list =
             [](ProcessorMessageEntry* list) -> ProcessorMessageEntry*
@@ -1555,21 +1898,21 @@ bool Processor::smp_process_pending_messages()
         for (auto cur_msg = pending_msgs; cur_msg; cur_msg = next_msg) {
             next_msg = cur_msg->next;
             auto msg = cur_msg->msg;
-            
+
 #ifdef SMP_DEBUG
             dbg() << "SMP[" << id() << "]: Processing message " << VirtualAddress(msg);
 #endif
 
             switch (msg->type) {
-                case ProcessorMessage::Callback:
-                    msg->callback.handler();
-                    break;
-                case ProcessorMessage::CallbackWithData:
-                    msg->callback_with_data.handler(msg->callback_with_data.data);
-                    break;
-                case ProcessorMessage::FlushTlb:
-                    flush_tlb_local(VirtualAddress(msg->flush_tlb.ptr), msg->flush_tlb.page_count);
-                    break;
+            case ProcessorMessage::Callback:
+                msg->callback.handler();
+                break;
+            case ProcessorMessage::CallbackWithData:
+                msg->callback_with_data.handler(msg->callback_with_data.data);
+                break;
+            case ProcessorMessage::FlushTlb:
+                flush_tlb_local(VirtualAddress(msg->flush_tlb.ptr), msg->flush_tlb.page_count);
+                break;
             }
 
             bool is_async = msg->async; // Need to cache this value *before* dropping the ref count!
@@ -1584,11 +1927,11 @@ bool Processor::smp_process_pending_messages()
                 }
             }
 
-            if (m_halt_requested)
+            if (m_halt_requested.load(AK::MemoryOrder::memory_order_relaxed))
                 halt_this();
         }
         did_process = true;
-    } else if (m_halt_requested) {
+    } else if (m_halt_requested.load(AK::MemoryOrder::memory_order_relaxed)) {
         halt_this();
     }
 
@@ -1610,34 +1953,96 @@ bool Processor::smp_queue_message(ProcessorMessage& msg)
     return next == nullptr;
 }
 
-void Processor::smp_broadcast_message(ProcessorMessage& msg, bool async)
+void Processor::smp_broadcast_message(ProcessorMessage& msg)
 {
     auto& cur_proc = Processor::current();
-    msg.async = async;
 #ifdef SMP_DEBUG
     dbg() << "SMP[" << cur_proc.id() << "]: Broadcast message " << VirtualAddress(&msg) << " to cpus: " << (count()) << " proc: " << VirtualAddress(&cur_proc);
 #endif
     atomic_store(&msg.refs, count() - 1, AK::MemoryOrder::memory_order_release);
     ASSERT(msg.refs > 0);
+    bool need_broadcast = false;
     for_each(
-        [&](Processor& proc) -> IterationDecision
-        {
+        [&](Processor& proc) -> IterationDecision {
             if (&proc != &cur_proc) {
-                if (proc.smp_queue_message(msg)) {
-                    // TODO: only send IPI to that CPU if we queued the first
-                }
+                if (proc.smp_queue_message(msg))
+                    need_broadcast = true;
             }
             return IterationDecision::Continue;
         });
 
-    // Now trigger an IPI on all other APs
-    APIC::the().broadcast_ipi();
+    // Now trigger an IPI on all other APs (unless all targets already had messages queued)
+    if (need_broadcast)
+        APIC::the().broadcast_ipi();
+}
+
+void Processor::smp_broadcast_wait_sync(ProcessorMessage& msg)
+{
+    auto& cur_proc = Processor::current();
+    ASSERT(!msg.async);
+    // If synchronous then we must cleanup and return the message back
+    // to the pool. Otherwise, the last processor to complete it will return it
+    while (atomic_load(&msg.refs, AK::MemoryOrder::memory_order_consume) != 0) {
+        // TODO: pause for a bit?
+
+        // We need to process any messages that may have been sent to
+        // us while we're waiting. This also checks if another processor
+        // may have requested us to halt.
+        cur_proc.smp_process_pending_messages();
+    }
+
+    smp_cleanup_message(msg);
+    smp_return_to_pool(msg);
+}
+
+void Processor::smp_broadcast(void (*callback)(void*), void* data, void (*free_data)(void*), bool async)
+{
+    auto& msg = smp_get_from_pool();
+    msg.async = async;
+    msg.type = ProcessorMessage::CallbackWithData;
+    msg.callback_with_data.handler = callback;
+    msg.callback_with_data.data = data;
+    msg.callback_with_data.free = free_data;
+    smp_broadcast_message(msg);
+    if (!async)
+        smp_broadcast_wait_sync(msg);
+}
+
+void Processor::smp_broadcast(void (*callback)(), bool async)
+{
+    auto& msg = smp_get_from_pool();
+    msg.async = async;
+    msg.type = ProcessorMessage::CallbackWithData;
+    msg.callback.handler = callback;
+    smp_broadcast_message(msg);
+    if (!async)
+        smp_broadcast_wait_sync(msg);
+}
+
+void Processor::smp_unicast_message(u32 cpu, ProcessorMessage& msg, bool async)
+{
+    auto& cur_proc = Processor::current();
+    ASSERT(cpu != cur_proc.id());
+    auto& target_proc = processors()[cpu];
+    msg.async = async;
+#ifdef SMP_DEBUG
+    dbg() << "SMP[" << cur_proc.id() << "]: Send message " << VirtualAddress(&msg) << " to cpu #" << cpu << " proc: " << VirtualAddress(&target_proc);
+#endif
+    atomic_store(&msg.refs, 1u, AK::MemoryOrder::memory_order_release);
+    if (target_proc->smp_queue_message(msg)) {
+        APIC::the().send_ipi(cpu);
+    }
 
     if (!async) {
         // If synchronous then we must cleanup and return the message back
         // to the pool. Otherwise, the last processor to complete it will return it
         while (atomic_load(&msg.refs, AK::MemoryOrder::memory_order_consume) != 0) {
             // TODO: pause for a bit?
+
+            // We need to process any messages that may have been sent to
+            // us while we're waiting. This also checks if another processor
+            // may have requested us to halt.
+            cur_proc.smp_process_pending_messages();
         }
 
         smp_cleanup_message(msg);
@@ -1645,31 +2050,36 @@ void Processor::smp_broadcast_message(ProcessorMessage& msg, bool async)
     }
 }
 
-void Processor::smp_broadcast(void(*callback)(void*), void* data, void(*free_data)(void*), bool async)
+void Processor::smp_unicast(u32 cpu, void (*callback)(void*), void* data, void (*free_data)(void*), bool async)
 {
     auto& msg = smp_get_from_pool();
     msg.type = ProcessorMessage::CallbackWithData;
     msg.callback_with_data.handler = callback;
     msg.callback_with_data.data = data;
     msg.callback_with_data.free = free_data;
-    smp_broadcast_message(msg, async);
+    smp_unicast_message(cpu, msg, async);
 }
 
-void Processor::smp_broadcast(void(*callback)(), bool async)
+void Processor::smp_unicast(u32 cpu, void (*callback)(), bool async)
 {
     auto& msg = smp_get_from_pool();
     msg.type = ProcessorMessage::CallbackWithData;
     msg.callback.handler = callback;
-    smp_broadcast_message(msg, async);
+    smp_unicast_message(cpu, msg, async);
 }
 
 void Processor::smp_broadcast_flush_tlb(VirtualAddress vaddr, size_t page_count)
 {
     auto& msg = smp_get_from_pool();
+    msg.async = false;
     msg.type = ProcessorMessage::FlushTlb;
     msg.flush_tlb.ptr = vaddr.as_ptr();
     msg.flush_tlb.page_count = page_count;
-    smp_broadcast_message(msg, false);
+    smp_broadcast_message(msg);
+    // While the other processors handle this request, we'll flush ours
+    flush_tlb_local(vaddr, page_count);
+    // Now wait until everybody is done as well
+    smp_broadcast_wait_sync(msg);
 }
 
 void Processor::smp_broadcast_halt()
@@ -1677,9 +2087,8 @@ void Processor::smp_broadcast_halt()
     // We don't want to use a message, because this could have been triggered
     // by being out of memory and we might not be able to get a message
     for_each(
-        [&](Processor& proc) -> IterationDecision
-        {
-            proc.m_halt_requested = true;
+        [&](Processor& proc) -> IterationDecision {
+            proc.m_halt_requested.store(true, AK::MemoryOrder::memory_order_release);
             return IterationDecision::Continue;
         });
 
@@ -1693,6 +2102,125 @@ void Processor::Processor::halt()
         smp_broadcast_halt();
 
     halt_this();
+}
+
+void Processor::deferred_call_pool_init()
+{
+    size_t pool_count = sizeof(m_deferred_call_pool) / sizeof(m_deferred_call_pool[0]);
+    for (size_t i = 0; i < pool_count; i++) {
+        auto& entry = m_deferred_call_pool[i];
+        entry.next = i < pool_count - 1 ? &m_deferred_call_pool[i + 1] : nullptr;
+        entry.was_allocated = false;
+    }
+    m_pending_deferred_calls = nullptr;
+    m_free_deferred_call_pool_entry = &m_deferred_call_pool[0];
+}
+
+void Processor::deferred_call_return_to_pool(DeferredCallEntry* entry)
+{
+    ASSERT(m_in_critical);
+    ASSERT(!entry->was_allocated);
+
+    entry->next = m_free_deferred_call_pool_entry;
+    m_free_deferred_call_pool_entry = entry;
+}
+
+DeferredCallEntry* Processor::deferred_call_get_free()
+{
+    ASSERT(m_in_critical);
+
+    if (m_free_deferred_call_pool_entry) {
+        // Fast path, we have an entry in our pool
+        auto* entry = m_free_deferred_call_pool_entry;
+        m_free_deferred_call_pool_entry = entry->next;
+        ASSERT(!entry->was_allocated);
+        return entry;
+    }
+
+    auto* entry = new DeferredCallEntry;
+    entry->was_allocated = true;
+    return entry;
+}
+
+void Processor::deferred_call_execute_pending()
+{
+    ASSERT(m_in_critical);
+
+    if (!m_pending_deferred_calls)
+        return;
+    auto* pending_list = m_pending_deferred_calls;
+    m_pending_deferred_calls = nullptr;
+
+    // We pulled the stack of pending deferred calls in LIFO order, so we need to reverse the list first
+    auto reverse_list =
+        [](DeferredCallEntry* list) -> DeferredCallEntry*
+        {
+            DeferredCallEntry* rev_list = nullptr;
+            while (list) {
+                auto next = list->next;
+                list->next = rev_list;
+                rev_list = list;
+                list = next;
+            }
+            return rev_list;
+        };
+    pending_list = reverse_list(pending_list);
+
+    do {
+        // Call the appropriate callback handler
+        if (pending_list->have_data) {
+            pending_list->callback_with_data.handler(pending_list->callback_with_data.data);
+            if (pending_list->callback_with_data.free)
+                pending_list->callback_with_data.free(pending_list->callback_with_data.data);
+        } else {
+            pending_list->callback.handler();
+        }
+
+        // Return the entry back to the pool, or free it
+        auto* next = pending_list->next;
+        if (pending_list->was_allocated)
+            delete pending_list;
+        else
+            deferred_call_return_to_pool(pending_list);
+        pending_list = next;
+    } while (pending_list);
+}
+
+void Processor::deferred_call_queue_entry(DeferredCallEntry* entry)
+{
+    ASSERT(m_in_critical);
+    entry->next = m_pending_deferred_calls;
+    m_pending_deferred_calls = entry;
+}
+
+void Processor::deferred_call_queue(void (*callback)())
+{
+    // NOTE: If we are called outside of a critical section and outside
+    // of an irq handler, the function will be executed before we return!
+    ScopedCritical critical;
+    auto& cur_proc = Processor::current();
+
+    auto* entry = cur_proc.deferred_call_get_free();
+    entry->have_data = false;
+    entry->callback.handler = callback;
+
+    cur_proc.deferred_call_queue_entry(entry);
+}
+
+void Processor::deferred_call_queue(void (*callback)(void*), void* data, void (*free_data)(void*))
+{
+    // NOTE: If we are called outside of a critical section and outside
+    // of an irq handler, the function will be executed before we return!
+    ScopedCritical critical;
+    auto& cur_proc = Processor::current();
+
+    auto* entry = cur_proc.deferred_call_get_free();
+    entry->have_data = true;
+    entry->callback_with_data.handler = callback;
+    entry->callback_with_data.data = data;
+    entry->callback_with_data.free = free_data;
+
+    cur_proc.deferred_call_queue_entry(entry);
 }
 
 void Processor::gdt_init()
@@ -1782,9 +2310,7 @@ void __assertion_failed(const char* msg, const char* file, unsigned line, const 
         MM.enter_process_paging_scope(*process);
 
     Kernel::dump_backtrace();
-    asm volatile("hlt");
-    for (;;)
-        ;
+    Processor::halt();
 }
 #endif
 

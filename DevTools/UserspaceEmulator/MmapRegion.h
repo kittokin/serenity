@@ -31,35 +31,49 @@
 
 namespace UserspaceEmulator {
 
-class MmapRegion final : public SoftMMU::Region {
+class MallocRegionMetadata;
+class MallocTracer;
+
+class MmapRegion final : public Region {
 public:
     static NonnullOwnPtr<MmapRegion> create_anonymous(u32 base, u32 size, u32 prot);
-    static NonnullOwnPtr<MmapRegion> create_file_backed(u32 base, u32 size, u32 prot, int flags, int fd, off_t offset);
+    static NonnullOwnPtr<MmapRegion> create_file_backed(u32 base, u32 size, u32 prot, int flags, int fd, off_t offset, String name = {});
     virtual ~MmapRegion() override;
 
-    virtual u8 read8(u32 offset) override;
-    virtual u16 read16(u32 offset) override;
-    virtual u32 read32(u32 offset) override;
+    virtual ValueWithShadow<u8> read8(u32 offset) override;
+    virtual ValueWithShadow<u16> read16(u32 offset) override;
+    virtual ValueWithShadow<u32> read32(u32 offset) override;
+    virtual ValueWithShadow<u64> read64(u32 offset) override;
 
-    virtual void write8(u32 offset, u8 value) override;
-    virtual void write16(u32 offset, u16 value) override;
-    virtual void write32(u32 offset, u32 value) override;
+    virtual void write8(u32 offset, ValueWithShadow<u8>) override;
+    virtual void write16(u32 offset, ValueWithShadow<u16>) override;
+    virtual void write32(u32 offset, ValueWithShadow<u32>) override;
+    virtual void write64(u32 offset, ValueWithShadow<u64>) override;
 
-    u8* data() { return m_data; }
+    virtual u8* data() override { return m_data; }
+    virtual u8* shadow_data() override { return m_shadow_data; }
 
-    bool is_readable() const { return m_prot & PROT_READ; }
-    bool is_writable() const { return m_prot & PROT_WRITE; }
-    bool is_executable() const { return m_prot & PROT_EXEC; }
+    bool is_malloc_block() const { return m_malloc; }
+    void set_malloc(bool b) { m_malloc = b; }
 
-    bool is_malloc_block() const;
+    void set_prot(int prot);
+
+    MallocRegionMetadata* malloc_metadata() { return m_malloc_metadata; }
+    void set_malloc_metadata(Badge<MallocTracer>, NonnullOwnPtr<MallocRegionMetadata> metadata) { m_malloc_metadata = move(metadata); }
+
+    const String& name() const { return m_name; }
 
 private:
     MmapRegion(u32 base, u32 size, int prot);
     virtual bool is_mmap() const override { return true; }
 
     u8* m_data { nullptr };
-    int m_prot { 0 };
+    u8* m_shadow_data { nullptr };
     bool m_file_backed { false };
+    bool m_malloc { false };
+
+    OwnPtr<MallocRegionMetadata> m_malloc_metadata;
+    String m_name;
 };
 
 }

@@ -25,7 +25,6 @@
  */
 
 #include <AK/FlyString.h>
-#include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibWeb/Bindings/NavigatorObject.h>
@@ -39,18 +38,19 @@ NavigatorObject::NavigatorObject(JS::GlobalObject& global_object)
 {
 }
 
-void NavigatorObject::initialize(JS::Interpreter& interpreter, JS::GlobalObject& global_object)
+void NavigatorObject::initialize(JS::GlobalObject& global_object)
 {
+    auto& heap = this->heap();
     auto* languages = JS::Array::create(global_object);
-    languages->indexed_properties().append(js_string(heap(), "en-US"));
+    languages->indexed_properties().append(js_string(heap, "en-US"));
 
-    define_property("appCodeName", js_string(interpreter.heap(), "Mozilla"));
-    define_property("appName", js_string(interpreter.heap(), "Netscape"));
-    define_property("appVersion", js_string(interpreter.heap(), "4.0"));
+    define_property("appCodeName", js_string(heap, "Mozilla"));
+    define_property("appName", js_string(heap, "Netscape"));
+    define_property("appVersion", js_string(heap, "4.0"));
     define_property("language", languages->get(0));
     define_property("languages", languages);
-    define_property("platform", js_string(interpreter.heap(), "SerenityOS"));
-    define_property("product", js_string(interpreter.heap(), "Gecko"));
+    define_property("platform", js_string(heap, "SerenityOS"));
+    define_property("product", js_string(heap, "Gecko"));
 
     define_native_property("userAgent", user_agent_getter, nullptr);
 }
@@ -61,7 +61,7 @@ NavigatorObject::~NavigatorObject()
 
 JS_DEFINE_NATIVE_GETTER(NavigatorObject::user_agent_getter)
 {
-    return JS::js_string(interpreter, ResourceLoader::the().user_agent());
+    return JS::js_string(vm, ResourceLoader::the().user_agent());
 }
 
 }

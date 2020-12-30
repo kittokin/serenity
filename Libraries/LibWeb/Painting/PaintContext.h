@@ -26,9 +26,10 @@
 
 #pragma once
 
+#include <LibGfx/Forward.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/Rect.h>
-#include <LibGfx/Forward.h>
+#include <LibWeb/SVG/SVGContext.h>
 
 namespace Web {
 
@@ -44,6 +45,10 @@ public:
     Gfx::Painter& painter() const { return m_painter; }
     const Palette& palette() const { return m_palette; }
 
+    bool has_svg_context() const { return m_svg_context.has_value(); }
+    SVGContext& svg_context() { return m_svg_context.value(); }
+    void set_svg_context(SVGContext context) { m_svg_context = context; }
+
     bool should_show_line_box_borders() const { return m_should_show_line_box_borders; }
     void set_should_show_line_box_borders(bool value) { m_should_show_line_box_borders = value; }
 
@@ -52,12 +57,17 @@ public:
 
     const Gfx::IntPoint& scroll_offset() const { return m_scroll_offset; }
 
+    bool has_focus() const { return m_focus; }
+    void set_has_focus(bool focus) { m_focus = focus; }
+
 private:
     Gfx::Painter& m_painter;
     Palette m_palette;
+    Optional<SVGContext> m_svg_context;
     Gfx::IntRect m_viewport_rect;
     Gfx::IntPoint m_scroll_offset;
     bool m_should_show_line_box_borders { false };
+    bool m_focus { false };
 };
 
 }

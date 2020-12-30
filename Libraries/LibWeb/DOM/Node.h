@@ -29,12 +29,13 @@
 #include <AK/Badge.h>
 #include <AK/RefPtr.h>
 #include <AK/String.h>
+#include <AK/TypeCasts.h>
 #include <AK/Vector.h>
 #include <LibWeb/Bindings/Wrappable.h>
 #include <LibWeb/DOM/EventTarget.h>
 #include <LibWeb/TreeNode.h>
 
-namespace Web {
+namespace Web::DOM {
 
 enum class NodeType : unsigned {
     INVALID = 0,
@@ -45,15 +46,6 @@ enum class NodeType : unsigned {
     DOCUMENT_TYPE_NODE = 10,
     DOCUMENT_FRAGMENT_NODE = 11,
 };
-
-class Document;
-class Element;
-class HTMLElement;
-class HTMLAnchorElement;
-class ParentNode;
-class LayoutNode;
-class StyleResolver;
-class StyleProperties;
 
 class Node
     : public TreeNode<Node>
@@ -68,9 +60,12 @@ public:
     // ^EventTarget
     virtual void ref_event_target() final { ref(); }
     virtual void unref_event_target() final { unref(); }
-    virtual void dispatch_event(NonnullRefPtr<Event>) final;
+    virtual bool dispatch_event(NonnullRefPtr<Event>) final;
+    virtual Bindings::EventTargetWrapper* create_wrapper(JS::GlobalObject&) override;
 
     virtual ~Node();
+
+    void removed_last_ref();
 
     NodeType type() const { return m_type; }
     bool is_element() const { return type() == NodeType::ELEMENT_NODE; }
@@ -81,27 +76,48 @@ public:
     bool is_character_data() const { return type() == NodeType::TEXT_NODE || type() == NodeType::COMMENT_NODE; }
     bool is_document_fragment() const { return type() == NodeType::DOCUMENT_FRAGMENT_NODE; }
     bool is_parent_node() const { return is_element() || is_document() || is_document_fragment(); }
+    bool is_slottable() const { return is_element() || is_text(); }
+    virtual bool is_svg_element() const { return false; }
+    virtual bool is_shadow_root() const { return false; }
+
+    virtual bool is_node() const final { return true; }
+
+    virtual bool is_editable() const;
 
     RefPtr<Node> append_child(NonnullRefPtr<Node>, bool notify = true);
     RefPtr<Node> insert_before(NonnullRefPtr<Node> node, RefPtr<Node> child, bool notify = true);
+    void remove_all_children();
 
-    virtual RefPtr<LayoutNode> create_layout_node(const StyleProperties* parent_style);
+    virtual RefPtr<Layout::Node> create_layout_node(const CSS::StyleProperties* parent_style);
 
     virtual FlyString node_name() const = 0;
 
     virtual String text_content() const;
+    void set_text_content(const String&);
 
     Document& document() { return *m_document; }
     const Document& document() const { return *m_document; }
 
-    const HTMLAnchorElement* enclosing_link_element() const;
-    const HTMLElement* enclosing_html_element() const;
+    const HTML::HTMLAnchorElement* enclosing_link_element() const;
+    const HTML::HTMLElement* enclosing_html_element() const;
 
     String child_text_content() const;
 
     virtual bool is_html_element() const { return false; }
+    virtual bool is_unknown_html_element() const { return false; }
 
-    const Node* root() const;
+    Node* root();
+    const Node* root() const
+    {
+        return const_cast<Node*>(this)->root();
+    }
+
+    Node* shadow_including_root();
+    const Node* shadow_including_root() const
+    {
+        return const_cast<Node*>(this)->shadow_including_root();
+    }
+
     bool is_connected() const;
 
     Node* parent_node() { return parent(); }
@@ -110,117 +126,43 @@ public:
     Element* parent_element();
     const Element* parent_element() const;
 
-    template<typename T>
-    const T* first_child_of_type() const;
+    virtual void inserted_into(Node&);
+    virtual void removed_from(Node&) { }
+    virtual void children_changed() { }
 
-    template<typename T>
-    const T* first_ancestor_of_type() const;
+    const Layout::Node* layout_node() const { return m_layout_node; }
+    Layout::Node* layout_node() { return m_layout_node; }
 
-    virtual void inserted_into(Node&) {}
-    virtual void removed_from(Node&) {}
-    virtual void children_changed() {}
-
-    const LayoutNode* layout_node() const { return m_layout_node; }
-    LayoutNode* layout_node() { return m_layout_node; }
-
-    void set_layout_node(Badge<LayoutNode>, LayoutNode* layout_node) const { m_layout_node = layout_node; }
-
-    const Element* previous_element_sibling() const;
-    const Element* next_element_sibling() const;
+    void set_layout_node(Badge<Layout::Node>, Layout::Node*) const;
 
     virtual bool is_child_allowed(const Node&) const { return true; }
 
     bool needs_style_update() const { return m_needs_style_update; }
-    void set_needs_style_update(bool value) { m_needs_style_update = value; }
+    void set_needs_style_update(bool);
+
+    bool child_needs_style_update() const { return m_child_needs_style_update; }
+    void set_child_needs_style_update(bool b) { m_child_needs_style_update = b; }
 
     void invalidate_style();
 
     bool is_link() const;
 
-    virtual void document_did_attach_to_frame(Frame&) {}
-    virtual void document_will_detach_from_frame(Frame&) {}
-
     void set_document(Badge<Document>, Document&);
+
+    virtual EventTarget* get_parent(const Event&) override;
 
 protected:
     Node(Document&, NodeType);
 
     Document* m_document { nullptr };
-    mutable LayoutNode* m_layout_node { nullptr };
+    mutable WeakPtr<Layout::Node> m_layout_node;
     NodeType m_type { NodeType::INVALID };
-    bool m_needs_style_update { true };
+    bool m_needs_style_update { false };
+    bool m_child_needs_style_update { false };
 };
 
-template<typename T>
-inline bool is(const Node&)
-{
-    return false;
 }
 
-template<typename T>
-inline bool is(const Node* node)
-{
-    return !node || is<T>(*node);
-}
-
-template<>
-inline bool is<Node>(const Node&)
-{
-    return true;
-}
-
-template<>
-inline bool is<ParentNode>(const Node& node)
-{
-    return node.is_parent_node();
-}
-
-template<typename T>
-inline const T& to(const Node& node)
-{
-    ASSERT(is<T>(node));
-    return static_cast<const T&>(node);
-}
-
-template<typename T>
-inline T* to(Node* node)
-{
-    ASSERT(is<T>(node));
-    return static_cast<T*>(node);
-}
-
-template<typename T>
-inline const T* to(const Node* node)
-{
-    ASSERT(is<T>(node));
-    return static_cast<const T*>(node);
-}
-
-template<typename T>
-inline T& to(Node& node)
-{
-    ASSERT(is<T>(node));
-    return static_cast<T&>(node);
-}
-
-template<typename T>
-inline const T* Node::first_child_of_type() const
-{
-    for (auto* child = first_child(); child; child = child->next_sibling()) {
-        if (is<T>(*child))
-            return to<T>(child);
-    }
-    return nullptr;
-}
-
-template<typename T>
-inline const T* Node::first_ancestor_of_type() const
-{
-    for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
-        if (is<T>(*ancestor))
-            return to<T>(ancestor);
-    }
-    return nullptr;
-}
-
-}
+AK_BEGIN_TYPE_TRAITS(Web::DOM::Node)
+static bool is_type(const Web::DOM::EventTarget& event_target) { return event_target.is_node(); }
+AK_END_TYPE_TRAITS()

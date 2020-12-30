@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2020, Linus Groh <mail@linusgroh.de>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,6 +29,7 @@
 #include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/EventLoop.h>
+#include <LibCore/File.h>
 #include <LibDesktop/Launcher.h>
 #include <string.h>
 
@@ -36,25 +38,28 @@ int main(int argc, char* argv[])
     Core::EventLoop loop;
     Vector<const char*> urls_or_paths;
     Core::ArgsParser parser;
+    parser.set_general_help("Open a file or URL by executing the appropriate program.");
     parser.add_positional_argument(urls_or_paths, "URL or file path to open", "url-or-path");
     parser.parse(argc, argv);
 
     bool all_ok = true;
 
     for (auto& url_or_path : urls_or_paths) {
-        URL url = URL::create_with_url_or_path(url_or_path);
-        if (url.protocol() == "file" && !url.path().starts_with('/')) {
-            if (auto* path = realpath(url.path().characters(), nullptr)) {
-                url.set_path(path);
-                free(path);
-            } else {
-                fprintf(stderr, "Failed to open '%s': %s\n", url.path().characters(), strerror(errno));
+        auto url = URL::create_with_url_or_path(url_or_path);
+
+        if (url.protocol() == "file") {
+            auto real_path = Core::File::real_path_for(url.path());
+            if (real_path.is_null()) {
+                // errno *should* be preserved from Core::File::real_path_for().
+                warnln("Failed to open '{}': {}", url.path(), strerror(errno));
                 all_ok = false;
                 continue;
             }
+            url = URL::create_with_url_or_path(real_path);
         }
+
         if (!Desktop::Launcher::open(url)) {
-            fprintf(stderr, "Failed to open '%s'\n", url.path().characters());
+            warnln("Failed to open '{}'", url);
             all_ok = false;
         }
     }

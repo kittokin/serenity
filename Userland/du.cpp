@@ -33,8 +33,8 @@
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
 #include <LibCore/Object.h>
-#include <LibM/math.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -104,6 +104,7 @@ int parse_args(int argc, char** argv, Vector<String>& files, DuOption& du_option
     };
 
     Core::ArgsParser args_parser;
+    args_parser.set_general_help("Display actual or apparent disk usage of files or directories.");
     args_parser.add_option(du_option.all, "Write counts for all files, not just directories", "all", 'a');
     args_parser.add_option(du_option.apparent_size, "Print apparent sizes, rather than disk usage", "apparent-size", 0);
     args_parser.add_option(max_depth, "Print the total for a directory or file only if it is N or fewer levels below the command line argument", "max-depth", 'd', "N");

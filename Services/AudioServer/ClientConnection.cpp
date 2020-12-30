@@ -29,7 +29,6 @@
 #include <AK/SharedBuffer.h>
 #include <AudioServer/AudioClientEndpoint.h>
 #include <LibAudio/Buffer.h>
-#include <LibCore/EventLoop.h>
 #include <errno.h>
 #include <stdio.h>
 #include <sys/socket.h>
@@ -51,7 +50,7 @@ void ClientConnection::for_each(Function<void(ClientConnection&)> callback)
 }
 
 ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> client_socket, int client_id, Mixer& mixer)
-    : IPC::ClientConnection<AudioServerEndpoint>(*this, move(client_socket), client_id)
+    : IPC::ClientConnection<AudioClientEndpoint, AudioServerEndpoint>(*this, move(client_socket), client_id)
     , m_mixer(mixer)
 {
     s_connections.set(client_id, *this);
@@ -74,6 +73,11 @@ void ClientConnection::did_finish_playing_buffer(Badge<BufferQueue>, int buffer_
 void ClientConnection::did_change_muted_state(Badge<Mixer>, bool muted)
 {
     post_message(Messages::AudioClient::MutedStateChanged(muted));
+}
+
+void ClientConnection::did_change_main_mix_volume(Badge<Mixer>, int volume)
+{
+    post_message(Messages::AudioClient::MainMixVolumeChanged(volume));
 }
 
 OwnPtr<Messages::AudioServer::GreetResponse> ClientConnection::handle(const Messages::AudioServer::Greet&)

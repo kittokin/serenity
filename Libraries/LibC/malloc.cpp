@@ -24,8 +24,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/Bitmap.h>
 #include <AK/InlineLinkedList.h>
+#include <AK/LogStream.h>
 #include <AK/ScopedValueRollback.h>
 #include <AK/Vector.h>
 #include <LibThread/Lock.h>
@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/internals.h>
 #include <sys/mman.h>
 
 // FIXME: Thread safety.
@@ -42,8 +43,6 @@
 //#define MALLOC_DEBUG
 #define RECYCLE_BIG_ALLOCATIONS
 
-#define MAGIC_PAGE_HEADER 0x42657274
-#define MAGIC_BIGALLOC_HEADER 0x42697267
 #define PAGE_ROUND_UP(x) ((((size_t)(x)) + PAGE_SIZE - 1) & (~(PAGE_SIZE - 1)))
 
 ALWAYS_INLINE static void ue_notify_malloc(const void* ptr, size_t size)
@@ -54,6 +53,11 @@ ALWAYS_INLINE static void ue_notify_malloc(const void* ptr, size_t size)
 ALWAYS_INLINE static void ue_notify_free(const void* ptr)
 {
     send_secret_data_to_userspace_emulator(2, (FlatPtr)ptr, 0);
+}
+
+ALWAYS_INLINE static void ue_notify_realloc(const void* ptr, size_t size)
+{
+    send_secret_data_to_userspace_emulator(3, size, (FlatPtr)ptr);
 }
 
 static LibThread::Lock& malloc_lock()
@@ -69,65 +73,29 @@ static bool s_log_malloc = false;
 static bool s_scrub_malloc = true;
 static bool s_scrub_free = true;
 static bool s_profiling = false;
-static unsigned short size_classes[] = { 8, 16, 32, 64, 128, 252, 508, 1016, 2036, 4090, 8188, 16376, 32756, 0 };
-static constexpr size_t num_size_classes = sizeof(size_classes) / sizeof(unsigned short);
 
-constexpr size_t block_size = 64 * KB;
-constexpr size_t block_mask = ~(block_size - 1);
+struct MallocStats {
+    size_t number_of_malloc_calls;
 
-struct CommonHeader {
-    size_t m_magic;
-    size_t m_size;
+    size_t number_of_big_allocator_hits;
+    size_t number_of_big_allocator_purge_hits;
+    size_t number_of_big_allocs;
+
+    size_t number_of_empty_block_hits;
+    size_t number_of_empty_block_purge_hits;
+    size_t number_of_block_allocs;
+    size_t number_of_blocks_full;
+
+    size_t number_of_free_calls;
+
+    size_t number_of_big_allocator_keeps;
+    size_t number_of_big_allocator_frees;
+
+    size_t number_of_freed_full_blocks;
+    size_t number_of_keeps;
+    size_t number_of_frees;
 };
-
-struct BigAllocationBlock : public CommonHeader {
-    BigAllocationBlock(size_t size)
-    {
-        m_magic = MAGIC_BIGALLOC_HEADER;
-        m_size = size;
-    }
-    unsigned char* m_slot[0];
-};
-
-struct FreelistEntry {
-    FreelistEntry* next;
-};
-
-struct ChunkedBlock
-    : public CommonHeader
-    , public InlineLinkedListNode<ChunkedBlock> {
-
-    ChunkedBlock(size_t bytes_per_chunk)
-    {
-        m_magic = MAGIC_PAGE_HEADER;
-        m_size = bytes_per_chunk;
-        m_free_chunks = chunk_capacity();
-        m_freelist = (FreelistEntry*)chunk(0);
-        for (size_t i = 0; i < chunk_capacity(); ++i) {
-            auto* entry = (FreelistEntry*)chunk(i);
-            if (i != chunk_capacity() - 1)
-                entry->next = (FreelistEntry*)chunk(i + 1);
-            else
-                entry->next = nullptr;
-        }
-    }
-
-    ChunkedBlock* m_prev { nullptr };
-    ChunkedBlock* m_next { nullptr };
-    FreelistEntry* m_freelist { nullptr };
-    unsigned short m_free_chunks { 0 };
-    unsigned char m_slot[0];
-
-    void* chunk(size_t index)
-    {
-        return &m_slot[index * m_size];
-    }
-    bool is_full() const { return m_free_chunks == 0; }
-    size_t bytes_per_chunk() const { return m_size; }
-    size_t free_chunks() const { return m_free_chunks; }
-    size_t used_chunks() const { return chunk_capacity() - m_free_chunks; }
-    size_t chunk_capacity() const { return (block_size - sizeof(ChunkedBlock)) / m_size; }
-};
+static MallocStats g_malloc_stats = {};
 
 struct Allocator {
     size_t size { 0 };
@@ -173,27 +141,20 @@ static Allocator* allocator_for_size(size_t size, size_t& good_size)
     return nullptr;
 }
 
+#ifdef RECYCLE_BIG_ALLOCATIONS
 static BigAllocator* big_allocator_for_size(size_t size)
 {
     if (size == 65536)
         return &big_allocators()[0];
     return nullptr;
 }
+#endif
 
 extern "C" {
 
-size_t malloc_good_size(size_t size)
-{
-    for (size_t i = 0; size_classes[i]; ++i) {
-        if (size < size_classes[i])
-            return size_classes[i];
-    }
-    return PAGE_ROUND_UP(size);
-}
-
 static void* os_alloc(size_t size, const char* name)
 {
-    auto* ptr = serenity_mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_PURGEABLE, 0, 0, block_size, name);
+    auto* ptr = serenity_mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_PURGEABLE, 0, 0, ChunkedBlock::block_size, name);
     ASSERT(ptr != MAP_FAILED);
     return ptr;
 }
@@ -214,14 +175,17 @@ static void* malloc_impl(size_t size)
     if (!size)
         return nullptr;
 
+    g_malloc_stats.number_of_malloc_calls++;
+
     size_t good_size;
     auto* allocator = allocator_for_size(size, good_size);
 
     if (!allocator) {
-        size_t real_size = round_up_to_power_of_two(sizeof(BigAllocationBlock) + size, block_size);
+        size_t real_size = round_up_to_power_of_two(sizeof(BigAllocationBlock) + size, ChunkedBlock::block_size);
 #ifdef RECYCLE_BIG_ALLOCATIONS
         if (auto* allocator = big_allocator_for_size(real_size)) {
             if (!allocator->blocks.is_empty()) {
+                g_malloc_stats.number_of_big_allocator_hits++;
                 auto* block = allocator->blocks.take_last();
                 int rc = madvise(block, real_size, MADV_SET_NONVOLATILE);
                 bool this_block_was_purged = rc == 1;
@@ -233,14 +197,17 @@ static void* malloc_impl(size_t size)
                     perror("mprotect");
                     ASSERT_NOT_REACHED();
                 }
-                if (this_block_was_purged)
+                if (this_block_was_purged) {
+                    g_malloc_stats.number_of_big_allocator_purge_hits++;
                     new (block) BigAllocationBlock(real_size);
+                }
 
                 ue_notify_malloc(&block->m_slot[0], size);
                 return &block->m_slot[0];
             }
         }
 #endif
+        g_malloc_stats.number_of_big_allocs++;
         auto* block = (BigAllocationBlock*)os_alloc(real_size, "malloc: BigAllocationBlock");
         new (block) BigAllocationBlock(real_size);
         ue_notify_malloc(&block->m_slot[0], size);
@@ -255,27 +222,31 @@ static void* malloc_impl(size_t size)
     }
 
     if (!block && allocator->empty_block_count) {
+        g_malloc_stats.number_of_empty_block_hits++;
         block = allocator->empty_blocks[--allocator->empty_block_count];
-        int rc = madvise(block, block_size, MADV_SET_NONVOLATILE);
+        int rc = madvise(block, ChunkedBlock::block_size, MADV_SET_NONVOLATILE);
         bool this_block_was_purged = rc == 1;
         if (rc < 0) {
             perror("madvise");
             ASSERT_NOT_REACHED();
         }
-        rc = mprotect(block, block_size, PROT_READ | PROT_WRITE);
+        rc = mprotect(block, ChunkedBlock::block_size, PROT_READ | PROT_WRITE);
         if (rc < 0) {
             perror("mprotect");
             ASSERT_NOT_REACHED();
         }
-        if (this_block_was_purged)
+        if (this_block_was_purged) {
+            g_malloc_stats.number_of_empty_block_purge_hits++;
             new (block) ChunkedBlock(good_size);
+        }
         allocator->usable_blocks.append(block);
     }
 
     if (!block) {
+        g_malloc_stats.number_of_block_allocs++;
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "malloc: ChunkedBlock(%zu)", good_size);
-        block = (ChunkedBlock*)os_alloc(block_size, buffer);
+        block = (ChunkedBlock*)os_alloc(ChunkedBlock::block_size, buffer);
         new (block) ChunkedBlock(good_size);
         allocator->usable_blocks.append(block);
         ++allocator->block_count;
@@ -283,8 +254,10 @@ static void* malloc_impl(size_t size)
 
     --block->m_free_chunks;
     void* ptr = block->m_freelist;
+    ASSERT(ptr);
     block->m_freelist = block->m_freelist->next;
     if (block->is_full()) {
+        g_malloc_stats.number_of_blocks_full++;
 #ifdef MALLOC_DEBUG
         dbgprintf("Block %p is now full in size class %zu\n", block, good_size);
 #endif
@@ -295,10 +268,10 @@ static void* malloc_impl(size_t size)
     dbgprintf("LibC: allocated %p (chunk in block %p, size %zu)\n", ptr, block, block->bytes_per_chunk());
 #endif
 
-    ue_notify_malloc(ptr, size);
-
     if (s_scrub_malloc)
         memset(ptr, MALLOC_SCRUB_BYTE, block->m_size);
+
+    ue_notify_malloc(ptr, size);
     return ptr;
 }
 
@@ -309,9 +282,11 @@ static void free_impl(void* ptr)
     if (!ptr)
         return;
 
+    g_malloc_stats.number_of_free_calls++;
+
     LOCKER(malloc_lock());
 
-    void* block_base = (void*)((FlatPtr)ptr & block_mask);
+    void* block_base = (void*)((FlatPtr)ptr & ChunkedBlock::ChunkedBlock::block_mask);
     size_t magic = *(size_t*)block_base;
 
     if (magic == MAGIC_BIGALLOC_HEADER) {
@@ -319,6 +294,7 @@ static void free_impl(void* ptr)
 #ifdef RECYCLE_BIG_ALLOCATIONS
         if (auto* allocator = big_allocator_for_size(block->m_size)) {
             if (allocator->blocks.size() < number_of_big_blocks_to_keep_around_per_size_class) {
+                g_malloc_stats.number_of_big_allocator_keeps++;
                 allocator->blocks.append(block);
                 size_t this_block_size = block->m_size;
                 if (mprotect(block, this_block_size, PROT_NONE) < 0) {
@@ -333,6 +309,7 @@ static void free_impl(void* ptr)
             }
         }
 #endif
+        g_malloc_stats.number_of_big_allocator_frees++;
         os_free(block, block->m_size);
         return;
     }
@@ -341,7 +318,7 @@ static void free_impl(void* ptr)
     auto* block = (ChunkedBlock*)block_base;
 
 #ifdef MALLOC_DEBUG
-    dbgprintf("LibC: freeing %p in allocator %p (size=%u, used=%u)\n", ptr, block, block->bytes_per_chunk(), block->used_chunks());
+    dbgprintf("LibC: freeing %p in allocator %p (size=%zu, used=%zu)\n", ptr, block, block->bytes_per_chunk(), block->used_chunks());
 #endif
 
     if (s_scrub_free)
@@ -355,8 +332,9 @@ static void free_impl(void* ptr)
         size_t good_size;
         auto* allocator = allocator_for_size(block->m_size, good_size);
 #ifdef MALLOC_DEBUG
-        dbgprintf("Block %p no longer full in size class %u\n", block, good_size);
+        dbgprintf("Block %p no longer full in size class %zu\n", block, good_size);
 #endif
+        g_malloc_stats.number_of_freed_full_blocks++;
         allocator->full_blocks.remove(block);
         allocator->usable_blocks.prepend(block);
     }
@@ -368,24 +346,26 @@ static void free_impl(void* ptr)
         auto* allocator = allocator_for_size(block->m_size, good_size);
         if (allocator->block_count < number_of_chunked_blocks_to_keep_around_per_size_class) {
 #ifdef MALLOC_DEBUG
-            dbgprintf("Keeping block %p around for size class %u\n", block, good_size);
+            dbgprintf("Keeping block %p around for size class %zu\n", block, good_size);
 #endif
+            g_malloc_stats.number_of_keeps++;
             allocator->usable_blocks.remove(block);
             allocator->empty_blocks[allocator->empty_block_count++] = block;
-            mprotect(block, block_size, PROT_NONE);
-            madvise(block, block_size, MADV_SET_VOLATILE);
+            mprotect(block, ChunkedBlock::block_size, PROT_NONE);
+            madvise(block, ChunkedBlock::block_size, MADV_SET_VOLATILE);
             return;
         }
 #ifdef MALLOC_DEBUG
-        dbgprintf("Releasing block %p for size class %u\n", block, good_size);
+        dbgprintf("Releasing block %p for size class %zu\n", block, good_size);
 #endif
+        g_malloc_stats.number_of_frees++;
         allocator->usable_blocks.remove(block);
         --allocator->block_count;
-        os_free(block, block_size);
+        os_free(block, ChunkedBlock::block_size);
     }
 }
 
-void* malloc(size_t size)
+[[gnu::flatten]] void* malloc(size_t size)
 {
     void* ptr = malloc_impl(size);
     if (s_profiling)
@@ -393,19 +373,20 @@ void* malloc(size_t size)
     return ptr;
 }
 
-void free(void* ptr)
+[[gnu::flatten]] void free(void* ptr)
 {
     if (s_profiling)
         perf_event(PERF_EVENT_FREE, reinterpret_cast<FlatPtr>(ptr), 0);
-    free_impl(ptr);
     ue_notify_free(ptr);
+    free_impl(ptr);
 }
 
 void* calloc(size_t count, size_t size)
 {
     size_t new_size = count * size;
     auto* ptr = malloc(new_size);
-    memset(ptr, 0, new_size);
+    if (ptr)
+        memset(ptr, 0, new_size);
     return ptr;
 }
 
@@ -414,11 +395,13 @@ size_t malloc_size(void* ptr)
     if (!ptr)
         return 0;
     LOCKER(malloc_lock());
-    void* page_base = (void*)((FlatPtr)ptr & block_mask);
+    void* page_base = (void*)((FlatPtr)ptr & ChunkedBlock::block_mask);
     auto* header = (const CommonHeader*)page_base;
     auto size = header->m_size;
     if (header->m_magic == MAGIC_BIGALLOC_HEADER)
         size -= sizeof(CommonHeader);
+    else
+        ASSERT(header->m_magic == MAGIC_PAGE_HEADER);
     return size;
 }
 
@@ -426,13 +409,21 @@ void* realloc(void* ptr, size_t size)
 {
     if (!ptr)
         return malloc(size);
+    if (!size)
+        return nullptr;
+
     LOCKER(malloc_lock());
     auto existing_allocation_size = malloc_size(ptr);
-    if (size <= existing_allocation_size)
+
+    if (size <= existing_allocation_size) {
+        ue_notify_realloc(ptr, size);
         return ptr;
+    }
     auto* new_ptr = malloc(size);
-    memcpy(new_ptr, ptr, min(existing_allocation_size, size));
-    free(ptr);
+    if (new_ptr) {
+        memcpy(new_ptr, ptr, min(existing_allocation_size, size));
+        free(ptr);
+    }
     return new_ptr;
 }
 
@@ -454,5 +445,28 @@ void __malloc_init()
     }
 
     new (&big_allocators()[0])(BigAllocator);
+}
+
+void serenity_dump_malloc_stats()
+{
+    dbg() << "# malloc() calls: " << g_malloc_stats.number_of_malloc_calls;
+    dbg();
+    dbg() << "big alloc hits: " << g_malloc_stats.number_of_big_allocator_hits;
+    dbg() << "big alloc hits that were purged: " << g_malloc_stats.number_of_big_allocator_purge_hits;
+    dbg() << "big allocs: " << g_malloc_stats.number_of_big_allocs;
+    dbg();
+    dbg() << "empty block hits: " << g_malloc_stats.number_of_empty_block_hits;
+    dbg() << "empty block hits that were purged: " << g_malloc_stats.number_of_empty_block_purge_hits;
+    dbg() << "block allocs: " << g_malloc_stats.number_of_block_allocs;
+    dbg() << "filled blocks: " << g_malloc_stats.number_of_blocks_full;
+    dbg();
+    dbg() << "# free() calls: " << g_malloc_stats.number_of_free_calls;
+    dbg();
+    dbg() << "big alloc keeps: " << g_malloc_stats.number_of_big_allocator_keeps;
+    dbg() << "big alloc frees: " << g_malloc_stats.number_of_big_allocator_frees;
+    dbg();
+    dbg() << "full block frees: " << g_malloc_stats.number_of_freed_full_blocks;
+    dbg() << "number of keeps: " << g_malloc_stats.number_of_keeps;
+    dbg() << "number of frees: " << g_malloc_stats.number_of_frees;
 }
 }

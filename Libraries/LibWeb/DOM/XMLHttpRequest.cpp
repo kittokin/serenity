@@ -24,22 +24,25 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Function.h>
 #include <LibWeb/Bindings/EventWrapper.h>
 #include <LibWeb/Bindings/EventWrapperFactory.h>
 #include <LibWeb/Bindings/XMLHttpRequestWrapper.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
+#include <LibWeb/DOM/EventDispatcher.h>
 #include <LibWeb/DOM/EventListener.h>
 #include <LibWeb/DOM/Window.h>
 #include <LibWeb/DOM/XMLHttpRequest.h>
+#include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/Loader/ResourceLoader.h>
+#include <LibWeb/Origin.h>
 
 namespace Web {
 
-XMLHttpRequest::XMLHttpRequest(Window& window)
-    : m_window(window)
+XMLHttpRequest::XMLHttpRequest(DOM::Window& window)
+    : EventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.document()))
+    , m_window(window)
 {
 }
 
@@ -69,38 +72,50 @@ void XMLHttpRequest::open(const String& method, const String& url)
 
 void XMLHttpRequest::send()
 {
+    URL request_url = m_window->document().complete_url(m_url);
+    dbg() << "XHR send from " << m_window->document().url() << " to " << request_url;
+
+    // TODO: Add support for preflight requests to support CORS requests
+    Origin request_url_origin = Origin(request_url.protocol(), request_url.host(), request_url.port());
+
+    if (!m_window->document().origin().is_same(request_url_origin)) {
+        dbg() << "XHR failed to load: Same-Origin Policy violation: " << m_window->document().url() << " may not load " << request_url;
+        auto weak_this = make_weak_ptr();
+        if (!weak_this)
+            return;
+        const_cast<XMLHttpRequest&>(*weak_this).set_ready_state(ReadyState::Done);
+        const_cast<XMLHttpRequest&>(*weak_this).dispatch_event(DOM::Event::create(HTML::EventNames::error));
+        return;
+    }
+
     // FIXME: in order to properly set ReadyState::HeadersReceived and ReadyState::Loading,
     // we need to make ResourceLoader give us more detailed updates than just "done" and "error".
     ResourceLoader::the().load(
         m_window->document().complete_url(m_url),
-        [weak_this = make_weak_ptr()](auto& data, auto&) {
+        [weak_this = make_weak_ptr()](auto data, auto&) {
             if (!weak_this)
                 return;
-            const_cast<XMLHttpRequest&>(*weak_this).m_response = data;
+            const_cast<XMLHttpRequest&>(*weak_this).m_response = ByteBuffer::copy(data);
             const_cast<XMLHttpRequest&>(*weak_this).set_ready_state(ReadyState::Done);
-            const_cast<XMLHttpRequest&>(*weak_this).dispatch_event(Event::create("load"));
+            const_cast<XMLHttpRequest&>(*weak_this).dispatch_event(DOM::Event::create(HTML::EventNames::load));
         },
         [weak_this = make_weak_ptr()](auto& error) {
             if (!weak_this)
                 return;
             dbg() << "XHR failed to load: " << error;
             const_cast<XMLHttpRequest&>(*weak_this).set_ready_state(ReadyState::Done);
-            const_cast<XMLHttpRequest&>(*weak_this).dispatch_event(Event::create("error"));
+            const_cast<XMLHttpRequest&>(*weak_this).dispatch_event(DOM::Event::create(HTML::EventNames::error));
         });
 }
 
-void XMLHttpRequest::dispatch_event(NonnullRefPtr<Event> event)
+bool XMLHttpRequest::dispatch_event(NonnullRefPtr<DOM::Event> event)
 {
-    for (auto& listener : listeners()) {
-        if (listener.event_name == event->type()) {
-            auto& function = const_cast<EventListener&>(*listener.listener).function();
-            auto& global_object = function.global_object();
-            auto* this_value = wrap(global_object, *this);
-            JS::MarkedValueList arguments(global_object.heap());
-            arguments.append(wrap(global_object, *event));
-            function.interpreter().call(function, this_value, move(arguments));
-        }
-    }
+    return DOM::EventDispatcher::dispatch(*this, move(event));
+}
+
+Bindings::EventTargetWrapper* XMLHttpRequest::create_wrapper(JS::GlobalObject& global_object)
+{
+    return wrap(global_object, *this);
 }
 
 }

@@ -67,16 +67,20 @@ public:
     };
 
     bool parse(int argc, char** argv, bool exit_on_failure = true);
+    // *Without* trailing newline!
+    void set_general_help(const char* help_string) { m_general_help = help_string; };
     void print_usage(FILE*, const char* argv0);
 
     void add_option(Option&&);
     void add_option(bool& value, const char* help_string, const char* long_name, char short_name);
     void add_option(const char*& value, const char* help_string, const char* long_name, char short_name, const char* value_name);
     void add_option(int& value, const char* help_string, const char* long_name, char short_name, const char* value_name);
+    void add_option(double& value, const char* help_string, const char* long_name, char short_name, const char* value_name);
 
     void add_positional_argument(Arg&&);
     void add_positional_argument(const char*& value, const char* help_string, const char* name, Required required = Required::Yes);
     void add_positional_argument(int& value, const char* help_string, const char* name, Required required = Required::Yes);
+    void add_positional_argument(double& value, const char* help_string, const char* name, Required required = Required::Yes);
     void add_positional_argument(Vector<const char*>& value, const char* help_string, const char* name, Required required = Required::Yes);
 
 private:
@@ -84,6 +88,7 @@ private:
     Vector<Arg> m_positional_args;
 
     bool m_show_help { false };
+    const char* m_general_help { nullptr };
 };
 
 }

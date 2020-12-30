@@ -29,12 +29,12 @@
 #include "History.h"
 #include <AK/URL.h>
 #include <LibGUI/Widget.h>
+#include <LibGfx/ShareableBitmap.h>
 #include <LibHTTP/HttpJob.h>
 #include <LibWeb/Forward.h>
 
-class WebContentView;
-
 namespace Web {
+class OutOfProcessWebView;
 class WebViewHooks;
 }
 
@@ -87,8 +87,8 @@ private:
 
     History m_history;
 
-    RefPtr<Web::PageView> m_page_view;
-    RefPtr<WebContentView> m_web_content_view;
+    RefPtr<Web::InProcessWebView> m_page_view;
+    RefPtr<Web::OutOfProcessWebView> m_web_content_view;
 
     RefPtr<GUI::Action> m_go_back_action;
     RefPtr<GUI::Action> m_go_forward_action;
@@ -102,13 +102,22 @@ private:
     RefPtr<GUI::ToolBarContainer> m_toolbar_container;
 
     RefPtr<GUI::Menu> m_link_context_menu;
+    RefPtr<GUI::Action> m_link_context_menu_default_action;
     URL m_link_context_menu_url;
+
+    RefPtr<GUI::Menu> m_image_context_menu;
+    Gfx::ShareableBitmap m_image_context_menu_bitmap;
+    URL m_image_context_menu_url;
 
     RefPtr<GUI::Menu> m_tab_context_menu;
     RefPtr<GUI::Menu> m_page_context_menu;
 
     String m_title;
     RefPtr<const Gfx::Bitmap> m_icon;
+
+    bool m_is_history_navigation { false };
 };
+
+URL url_from_user_input(const String& input);
 
 }

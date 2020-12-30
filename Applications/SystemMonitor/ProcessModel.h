@@ -57,6 +57,9 @@ public:
         User,
         PID,
         TID,
+        PPID,
+        PGID,
+        SID,
         Virtual,
         Physical,
         DirtyPrivate,
@@ -86,7 +89,7 @@ public:
     virtual int row_count(const GUI::ModelIndex&) const override;
     virtual int column_count(const GUI::ModelIndex&) const override;
     virtual String column_name(int column) const override;
-    virtual GUI::Variant data(const GUI::ModelIndex&, Role = Role::Display) const override;
+    virtual GUI::Variant data(const GUI::ModelIndex&, GUI::ModelRole) const override;
     virtual void update() override;
 
     struct CpuInfo {
@@ -107,9 +110,15 @@ private:
     ProcessModel();
 
     struct ThreadState {
-        int tid;
+        pid_t tid;
         pid_t pid;
+        pid_t ppid;
+        pid_t pgid;
+        pid_t sid;
         unsigned times_scheduled;
+        unsigned ticks_user;
+        unsigned ticks_kernel;
+        String executable;
         String name;
         String state;
         String user;
@@ -135,7 +144,6 @@ private:
         unsigned file_read_bytes;
         unsigned file_write_bytes;
         float cpu_percent;
-        int icon_id;
     };
 
     struct Thread {

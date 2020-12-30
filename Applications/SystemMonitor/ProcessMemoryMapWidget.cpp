@@ -35,12 +35,12 @@
 
 class PagemapPaintingDelegate final : public GUI::TableCellPaintingDelegate {
 public:
-    virtual ~PagemapPaintingDelegate() override {}
+    virtual ~PagemapPaintingDelegate() override { }
 
-    virtual void paint(GUI::Painter& painter, const Gfx::IntRect& a_rect, const Gfx::Palette&, const GUI::Model& model, const GUI::ModelIndex& index) override
+    virtual void paint(GUI::Painter& painter, const Gfx::IntRect& a_rect, const Gfx::Palette&, const GUI::ModelIndex& index) override
     {
         auto rect = a_rect.shrunken(2, 2);
-        auto pagemap = model.data(index, GUI::Model::Role::Custom).to_string();
+        auto pagemap = index.data(GUI::ModelRole::Custom).to_string();
 
         float scale_factor = (float)pagemap.length() / (float)rect.width();
 
@@ -70,9 +70,10 @@ ProcessMemoryMapWidget::ProcessMemoryMapWidget()
     layout()->set_margins({ 4, 4, 4, 4 });
     m_table_view = add<GUI::TableView>();
     Vector<GUI::JsonArrayModel::FieldSpec> pid_vm_fields;
-    pid_vm_fields.empend("Address", Gfx::TextAlignment::CenterLeft, [](auto& object) {
-        return String::format("%#x", object.get("address").to_u32());
-    });
+    pid_vm_fields.empend(
+        "Address", Gfx::TextAlignment::CenterLeft,
+        [](auto& object) { return String::formatted("{:#x}", object.get("address").to_u32()); },
+        [](auto& object) { return object.get("address").to_u32(); });
     pid_vm_fields.empend("size", "Size", Gfx::TextAlignment::CenterRight);
     pid_vm_fields.empend("amount_resident", "Resident", Gfx::TextAlignment::CenterRight);
     pid_vm_fields.empend("amount_dirty", "Dirty", Gfx::TextAlignment::CenterRight);
@@ -106,7 +107,7 @@ ProcessMemoryMapWidget::ProcessMemoryMapWidget()
             return GUI::Variant();
         },
         [](auto&) {
-            return GUI::Variant();
+            return GUI::Variant(0);
         },
         [](const JsonObject& object) {
             auto pagemap = object.get("pagemap").as_string_or({});
@@ -117,9 +118,9 @@ ProcessMemoryMapWidget::ProcessMemoryMapWidget()
     m_json_model = GUI::JsonArrayModel::create({}, move(pid_vm_fields));
     m_table_view->set_model(GUI::SortingProxyModel::create(*m_json_model));
 
-    m_table_view->set_cell_painting_delegate(7, make<PagemapPaintingDelegate>());
+    m_table_view->set_column_painting_delegate(7, make<PagemapPaintingDelegate>());
 
-    m_table_view->model()->set_key_column_and_sort_order(0, GUI::SortOrder::Ascending);
+    m_table_view->set_key_column_and_sort_order(0, GUI::SortOrder::Ascending);
     m_timer = add<Core::Timer>(1000, [this] { refresh(); });
 }
 
@@ -132,7 +133,7 @@ void ProcessMemoryMapWidget::set_pid(pid_t pid)
     if (m_pid == pid)
         return;
     m_pid = pid;
-    m_json_model->set_json_path(String::format("/proc/%d/vm", pid));
+    m_json_model->set_json_path(String::formatted("/proc/{}/vm", pid));
 }
 
 void ProcessMemoryMapWidget::refresh()

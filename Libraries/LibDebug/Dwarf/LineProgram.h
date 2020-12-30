@@ -26,16 +26,19 @@
 
 #pragma once
 
-#include <AK/BufferStream.h>
+#include <AK/FlyString.h>
+#include <AK/MemoryStream.h>
 #include <AK/Vector.h>
+
+namespace Debug::Dwarf {
 
 class LineProgram {
 public:
-    explicit LineProgram(BufferStream& stream);
+    explicit LineProgram(InputMemoryStream& stream);
 
     struct LineInfo {
         u32 address { 0 };
-        String file;
+        FlyString file;
         size_t line { 0 };
     };
 
@@ -90,14 +93,14 @@ private:
     };
 
     struct FileEntry {
-        String name;
+        FlyString name;
         size_t directory_index { 0 };
     };
 
     static constexpr u16 DWARF_VERSION = 3;
     static constexpr u8 SPECIAL_OPCODES_BASE = 13;
 
-    BufferStream& m_stream;
+    InputMemoryStream& m_stream;
 
     size_t m_unit_offset { 0 };
     UnitHeader32 m_unit_header {};
@@ -112,3 +115,5 @@ private:
 
     Vector<LineInfo> m_lines;
 };
+
+}

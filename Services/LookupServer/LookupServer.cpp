@@ -27,23 +27,26 @@
 #include "LookupServer.h"
 #include "DNSRequest.h"
 #include "DNSResponse.h"
+#include <AK/ByteBuffer.h>
 #include <AK/HashMap.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <LibCore/ConfigFile.h>
-#include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
 #include <LibCore/LocalServer.h>
 #include <LibCore/LocalSocket.h>
 #include <LibCore/UDPSocket.h>
 #include <stdio.h>
+#include <sys/time.h>
 #include <unistd.h>
+
+//#define LOOKUPSERVER_DEBUG
 
 LookupServer::LookupServer()
 {
     auto config = Core::ConfigFile::get_for_system("LookupServer");
-    dbg() << "Using network config file at " << config->file_name();
-    m_nameserver = config->read_entry("DNS", "Nameserver", "1.1.1.1");
+    dbgln("Using network config file at {}", config->file_name());
+    m_nameservers = config->read_entry("DNS", "Nameservers", "1.1.1.1,1.0.0.1").split(',');
 
     load_etc_hosts();
 
@@ -69,8 +72,7 @@ void LookupServer::load_etc_hosts()
         auto line = file->read_line(1024);
         if (line.is_empty())
             break;
-        auto str_line = String((const char*)line.data(), line.size() - 1, Chomp);
-        auto fields = str_line.split('\t');
+        auto fields = line.split('\t');
 
         auto sections = fields[0].split('.');
         IPv4Address addr {
@@ -109,30 +111,44 @@ void LookupServer::service_client(RefPtr<Core::LocalSocket> socket)
 
     char lookup_type = client_buffer[0];
     if (lookup_type != 'L' && lookup_type != 'R') {
-        dbg() << "Invalid lookup_type " << lookup_type;
+        dbgln("Invalid lookup_type '{}'", lookup_type);
         return;
     }
     auto hostname = String((const char*)client_buffer + 1, nrecv - 1, Chomp);
-    dbg() << "Got request for '" << hostname << "' (using IP " << m_nameserver << ")";
+#ifdef LOOKUPSERVER_DEBUG
+    dbgln("Got request for '{}'", hostname);
+#endif
 
     Vector<String> responses;
 
     if (auto known_host = m_etc_hosts.get(hostname); known_host.has_value()) {
         responses.append(known_host.value());
     } else if (!hostname.is_empty()) {
-        bool did_timeout;
-        int retries = 3;
-        do {
-            did_timeout = false;
-            if (lookup_type == 'L')
-                responses = lookup(hostname, did_timeout, T_A);
-            else if (lookup_type == 'R')
-                responses = lookup(hostname, did_timeout, T_PTR);
-            if (!did_timeout)
+        for (auto& nameserver : m_nameservers) {
+#ifdef LOOKUPSERVER_DEBUG
+            dbgln("Doing lookup using nameserver '{}'", nameserver);
+#endif
+            bool did_get_response = false;
+            int retries = 3;
+            do {
+                if (lookup_type == 'L')
+                    responses = lookup(hostname, nameserver, did_get_response, T_A);
+                else if (lookup_type == 'R')
+                    responses = lookup(hostname, nameserver, did_get_response, T_PTR);
+                if (did_get_response)
+                    break;
+            } while (--retries);
+            if (!responses.is_empty()) {
                 break;
-        } while (--retries);
-        if (did_timeout) {
-            fprintf(stderr, "LookupServer: Out of retries :(\n");
+            } else {
+                if (!did_get_response)
+                    dbgln("Never got a response from '{}', trying next nameserver", nameserver);
+                else
+                    dbgln("Received response from '{}' but no result(s), trying next nameserver", nameserver);
+            }
+        }
+        if (responses.is_empty()) {
+            fprintf(stderr, "LookupServer: Tried all nameservers but never got a response :(\n");
             return;
         }
     }
@@ -153,17 +169,18 @@ void LookupServer::service_client(RefPtr<Core::LocalSocket> socket)
     }
 }
 
-Vector<String> LookupServer::lookup(const String& hostname, bool& did_timeout, unsigned short record_type, ShouldRandomizeCase should_randomize_case)
+Vector<String> LookupServer::lookup(const String& hostname, const String& nameserver, bool& did_get_response, unsigned short record_type, ShouldRandomizeCase should_randomize_case)
 {
     if (auto it = m_lookup_cache.find(hostname); it != m_lookup_cache.end()) {
         auto& cached_lookup = it->value;
         if (cached_lookup.question.record_type() == record_type) {
             Vector<String> responses;
             for (auto& cached_answer : cached_lookup.answers) {
-                dbg() << "Cache hit: " << hostname << " -> " << cached_answer.record_data() << ", expired: " << cached_answer.has_expired();
-                if (!cached_answer.has_expired()) {
+#ifdef LOOKUPSERVER_DEBUG
+                dbgln("Cache hit: {} -> {}, expired: {}", hostname, cached_answer.record_data(), cached_answer.has_expired());
+#endif
+                if (!cached_answer.has_expired())
                     responses.append(cached_answer.record_data());
-                }
             }
             if (!responses.is_empty())
                 return responses;
@@ -189,7 +206,7 @@ Vector<String> LookupServer::lookup(const String& hostname, bool& did_timeout, u
         return {};
     }
 
-    if (!udp_socket->connect(m_nameserver, 53))
+    if (!udp_socket->connect(nameserver, 53))
         return {};
 
     if (!udp_socket->write(buffer))
@@ -200,6 +217,8 @@ Vector<String> LookupServer::lookup(const String& hostname, bool& did_timeout, u
     if (nrecv == 0)
         return {};
 
+    did_get_response = true;
+
     auto o_response = DNSResponse::from_raw_response(response_buffer, nrecv);
     if (!o_response.has_value())
         return {};
@@ -207,20 +226,20 @@ Vector<String> LookupServer::lookup(const String& hostname, bool& did_timeout, u
     auto& response = o_response.value();
 
     if (response.id() != request.id()) {
-        dbgprintf("LookupServer: ID mismatch (%u vs %u) :(\n", response.id(), request.id());
+        dbgln("LookupServer: ID mismatch ({} vs {}) :(", response.id(), request.id());
         return {};
     }
 
     if (response.code() == DNSResponse::Code::REFUSED) {
         if (should_randomize_case == ShouldRandomizeCase::Yes) {
             // Retry with 0x20 case randomization turned off.
-            return lookup(hostname, did_timeout, record_type, ShouldRandomizeCase::No);
+            return lookup(hostname, nameserver, did_get_response, record_type, ShouldRandomizeCase::No);
         }
         return {};
     }
 
     if (response.question_count() != request.question_count()) {
-        dbgprintf("LookupServer: Question count (%u vs %u) :(\n", response.question_count(), request.question_count());
+        dbgln("LookupServer: Question count ({} vs {}) :(", response.question_count(), request.question_count());
         return {};
     }
 
@@ -228,15 +247,15 @@ Vector<String> LookupServer::lookup(const String& hostname, bool& did_timeout, u
         auto& request_question = request.questions()[i];
         auto& response_question = response.questions()[i];
         if (request_question != response_question) {
-            dbg() << "Request and response questions do not match";
-            dbg() << "   Request: {_" << request_question.name() << "_, " << request_question.record_type() << ", " << request_question.class_code() << "}";
-            dbg() << "  Response: {_" << response_question.name() << "_, " << response_question.record_type() << ", " << response_question.class_code() << "}";
+            dbgln("Request and response questions do not match");
+            dbgln("   Request: name=_{}_, type={}, class={}", request_question.name(), response_question.record_type(), response_question.class_code());
+            dbgln("  Response: name=_{}_, type={}, class={}", response_question.name(), response_question.record_type(), response_question.class_code());
             return {};
         }
     }
 
     if (response.answer_count() < 1) {
-        dbgprintf("LookupServer: Not enough answers (%u) :(\n", response.answer_count());
+        dbgln("LookupServer: Not enough answers ({}) :(", response.answer_count());
         return {};
     }
 

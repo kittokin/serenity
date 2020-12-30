@@ -31,6 +31,7 @@
 #include <AK/IntrusiveList.h>
 #include <AK/Types.h>
 #include <Kernel/SpinLock.h>
+#include <Kernel/Time/TimeManagement.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
@@ -44,9 +45,7 @@ struct SchedulerData;
 extern Thread* g_finalizer;
 extern WaitQueue* g_finalizer_wait_queue;
 extern Atomic<bool> g_finalizer_has_work;
-extern u64 g_uptime;
 extern SchedulerData* g_scheduler_data;
-extern timeval g_timeofday;
 extern RecursiveSpinLock g_scheduler_lock;
 
 class Scheduler {
@@ -57,14 +56,18 @@ public:
     static void timer_tick(const RegisterState&);
     [[noreturn]] static void start();
     static bool pick_next();
-    static timeval time_since_boot();
     static bool yield();
-    static bool donate_to(Thread*, const char* reason);
+    static void yield_from_critical();
+    static bool donate_to_and_switch(Thread*, const char* reason);
+    static bool donate_to(RefPtr<Thread>&, const char* reason);
     static bool context_switch(Thread*);
-    static void enter_current(Thread& prev_thread);
+    static void enter_current(Thread& prev_thread, bool is_first);
+    static void leave_on_first_switch(u32 flags);
+    static void prepare_after_exec();
+    static void prepare_for_idle_loop();
     static Process* colonel();
     static void beep();
-    static void idle_loop();
+    static void idle_loop(void*);
     static void invoke_async();
     static void notify_finalizer();
 
@@ -75,7 +78,6 @@ public:
     static inline IterationDecision for_each_nonrunnable(Callback);
 
     static void init_thread(Thread& thread);
-    static void update_state_for_thread(Thread& thread);
 };
 
 }

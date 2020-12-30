@@ -24,6 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/ByteBuffer.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
@@ -35,7 +36,7 @@
 #include <string.h>
 #include <unistd.h>
 
-int parse_options(const StringView& options)
+static int parse_options(const StringView& options)
 {
     int flags = 0;
     Vector<StringView> parts = options.split_view(',');
@@ -60,12 +61,12 @@ int parse_options(const StringView& options)
     return flags;
 }
 
-bool is_source_none(const char* source)
+static bool is_source_none(const char* source)
 {
     return !strcmp("none", source);
 }
 
-int get_source_fd(const char* source)
+static int get_source_fd(const char* source)
 {
     if (is_source_none(source))
         return -1;
@@ -81,7 +82,7 @@ int get_source_fd(const char* source)
     return fd;
 }
 
-bool mount_all()
+static bool mount_all()
 {
     // Mount all filesystems listed in /etc/fstab.
     dbg() << "Mounting all filesystems...";
@@ -94,13 +95,7 @@ bool mount_all()
 
     bool all_ok = true;
     while (fstab->can_read_line()) {
-        ByteBuffer buffer = fstab->read_line(1024);
-        StringView line_view = (const char*)buffer.data();
-
-        // Trim the trailing newline, if any.
-        if (line_view.length() > 0 && line_view[line_view.length() - 1] == '\n')
-            line_view = line_view.substring_view(0, line_view.length() - 1);
-        String line = line_view;
+        auto line = fstab->read_line();
 
         // Skip comments and blank lines.
         if (line.is_empty() || line.starts_with("#"))
@@ -139,7 +134,7 @@ bool mount_all()
     return all_ok;
 }
 
-bool print_mounts()
+static bool print_mounts()
 {
     // Output info about currently mounted filesystems.
     auto df = Core::File::construct("/proc/df");

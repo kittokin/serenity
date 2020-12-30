@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2020, William McPherson <willmcpherson2@gmail.com>
+ * Copyright (c) 2020, William McPherson <willmcpherson2@gmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -99,13 +99,11 @@ SamplerWidget::SamplerWidget(TrackManager& track_manager)
     m_open_button_and_recorded_sample_name_container = add<GUI::Widget>();
     m_open_button_and_recorded_sample_name_container->set_layout<GUI::HorizontalBoxLayout>();
     m_open_button_and_recorded_sample_name_container->layout()->set_spacing(10);
-    m_open_button_and_recorded_sample_name_container->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_open_button_and_recorded_sample_name_container->set_preferred_size(0, 24);
+    m_open_button_and_recorded_sample_name_container->set_fixed_height(24);
 
     m_open_button = m_open_button_and_recorded_sample_name_container->add<GUI::Button>();
-    m_open_button->set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-    m_open_button->set_preferred_size(24, 24);
-    m_open_button->set_focusable(false);
+    m_open_button->set_fixed_size(24, 24);
+    m_open_button->set_focus_policy(GUI::FocusPolicy::TabFocus);
     m_open_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/open.png"));
     m_open_button->on_click = [this](auto) {
         Optional<String> open_path = GUI::FilePicker::get_open_filepath(window());
@@ -113,7 +111,7 @@ SamplerWidget::SamplerWidget(TrackManager& track_manager)
             return;
         String error_string = m_track_manager.current_track().set_recorded_sample(open_path.value());
         if (!error_string.is_empty()) {
-            GUI::MessageBox::show(window(), String::format("Failed to load WAV file: %s", error_string.characters()), "Error", GUI::MessageBox::Type::Error);
+            GUI::MessageBox::show(window(), String::formatted("Failed to load WAV file: {}", error_string.characters()), "Error", GUI::MessageBox::Type::Error);
             return;
         }
         m_recorded_sample_name->set_text(open_path.value());
@@ -124,8 +122,7 @@ SamplerWidget::SamplerWidget(TrackManager& track_manager)
     m_recorded_sample_name->set_text_alignment(Gfx::TextAlignment::CenterLeft);
 
     m_wave_editor = add<WaveEditor>(m_track_manager);
-    m_wave_editor->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_wave_editor->set_preferred_size(0, 100);
+    m_wave_editor->set_fixed_height(100);
 }
 
 SamplerWidget::~SamplerWidget()

@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <AK/ByteBuffer.h>
 #include <AK/Optional.h>
 #include <AK/String.h>
 #include <AK/URL.h>
@@ -60,20 +61,23 @@ public:
     Method method() const { return m_method; }
     void set_method(Method method) { m_method = method; }
 
+    const ByteBuffer& body() const { return m_body; }
+    void set_body(ReadonlyBytes body) { m_body = ByteBuffer::copy(body); }
+    void set_body(ByteBuffer&& body) { m_body = move(body); }
+
     String method_name() const;
     ByteBuffer to_raw_request() const;
 
-    RefPtr<Core::NetworkJob> schedule();
-
     void set_headers(const HashMap<String, String>&);
 
-    static Optional<HttpRequest> from_raw_request(const ByteBuffer&);
+    static Optional<HttpRequest> from_raw_request(ReadonlyBytes);
 
 private:
     URL m_url;
     String m_resource;
     Method m_method { GET };
     Vector<Header> m_headers;
+    ByteBuffer m_body;
 };
 
 }

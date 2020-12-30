@@ -34,8 +34,7 @@
 
 namespace Kernel {
 
-class TCPSocket final : public IPv4Socket
-    , public Weakable<TCPSocket> {
+class TCPSocket final : public IPv4Socket {
 public:
     static void for_each(Function<void(const TCPSocket&)>);
     static NonnullRefPtr<TCPSocket> create(int protocol);
@@ -149,7 +148,7 @@ public:
     u32 packets_out() const { return m_packets_out; }
     u32 bytes_out() const { return m_bytes_out; }
 
-    void send_tcp_packet(u16 flags, const void* = nullptr, size_t = 0);
+    [[nodiscard]] int send_tcp_packet(u16 flags, const UserOrKernelBuffer* = nullptr, size_t = 0);
     void send_outgoing_packets();
     void receive_tcp_packet(const TCPPacket&, u16 size);
 
@@ -160,7 +159,7 @@ public:
     static Lockable<HashMap<IPv4SocketTuple, RefPtr<TCPSocket>>>& closing_sockets();
 
     RefPtr<TCPSocket> create_client(const IPv4Address& local_address, u16 local_port, const IPv4Address& peer_address, u16 peer_port);
-    void set_originator(TCPSocket& originator) { m_originator = originator.make_weak_ptr(); }
+    void set_originator(TCPSocket& originator) { m_originator = originator; }
     bool has_originator() { return !!m_originator; }
     void release_to_originator();
     void release_for_accept(RefPtr<TCPSocket>);
@@ -178,8 +177,8 @@ private:
 
     virtual void shut_down_for_writing() override;
 
-    virtual int protocol_receive(const KBuffer&, void* buffer, size_t buffer_size, int flags) override;
-    virtual int protocol_send(const void*, size_t) override;
+    virtual KResultOr<size_t> protocol_receive(ReadonlyBytes raw_ipv4_packet, UserOrKernelBuffer& buffer, size_t buffer_size, int flags) override;
+    virtual KResultOr<size_t> protocol_send(const UserOrKernelBuffer&, size_t) override;
     virtual KResult protocol_connect(FileDescription&, ShouldBlock) override;
     virtual int protocol_allocate_local_port() override;
     virtual bool protocol_is_disconnected() const override;

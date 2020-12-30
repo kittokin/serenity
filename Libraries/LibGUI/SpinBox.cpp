@@ -24,7 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <LibGUI/Button.h>
+#include <LibGUI/ControlBoxButton.h>
 #include <LibGUI/SpinBox.h>
 #include <LibGUI/TextBox.h>
 
@@ -32,6 +32,8 @@ namespace GUI {
 
 SpinBox::SpinBox()
 {
+    set_min_width(32);
+    set_fixed_height(22);
     m_editor = add<TextBox>();
     m_editor->set_text("0");
     m_editor->on_change = [this] {
@@ -41,16 +43,24 @@ SpinBox::SpinBox()
         else
             m_editor->set_text(String::number(m_value));
     };
-    m_increment_button = add<Button>();
-    m_increment_button->set_focusable(false);
-    m_increment_button->set_text("\xE2\xAC\x86"); // UPWARDS BLACK ARROW
+    m_editor->on_up_pressed = [this] {
+        set_value(m_value + 1);
+    };
+    m_editor->on_down_pressed = [this] {
+        set_value(m_value - 1);
+    };
+
+    m_increment_button = add<ControlBoxButton>(ControlBoxButton::UpArrow);
+    m_increment_button->set_focus_policy(GUI::FocusPolicy::NoFocus);
     m_increment_button->on_click = [this](auto) { set_value(m_value + 1); };
     m_increment_button->set_auto_repeat_interval(150);
-    m_decrement_button = add<Button>();
-    m_decrement_button->set_focusable(false);
-    m_decrement_button->set_text("\xE2\xAC\x87"); // DOWNWARDS BLACK ARROW
+    m_decrement_button = add<ControlBoxButton>(ControlBoxButton::DownArrow);
+    m_decrement_button->set_focus_policy(GUI::FocusPolicy::NoFocus);
     m_decrement_button->on_click = [this](auto) { set_value(m_value - 1); };
     m_decrement_button->set_auto_repeat_interval(150);
+
+    REGISTER_INT_PROPERTY("min", min, set_min);
+    REGISTER_INT_PROPERTY("max", max, set_max);
 }
 
 SpinBox::~SpinBox()
@@ -87,20 +97,6 @@ void SpinBox::set_range(int min, int max)
     }
 
     update();
-}
-
-void SpinBox::keydown_event(KeyEvent& event)
-{
-    if (event.key() == KeyCode::Key_Up) {
-        set_value(m_value + 1);
-        return;
-    }
-    if (event.key() == KeyCode::Key_Down) {
-        set_value(m_value - 1);
-        return;
-    }
-
-    event.ignore();
 }
 
 void SpinBox::mousewheel_event(MouseEvent& event)

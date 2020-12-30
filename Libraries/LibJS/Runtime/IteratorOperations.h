@@ -36,11 +36,11 @@ namespace JS {
 
 Object* get_iterator(GlobalObject&, Value value, String hint = "sync", Value method = {});
 bool is_iterator_complete(Object& iterator_result);
-Value create_iterator_result_object(Interpreter&, GlobalObject&, Value value, bool done);
+Value create_iterator_result_object(GlobalObject&, Value value, bool done);
 
 Object* iterator_next(Object& iterator, Value value = {});
 void iterator_close(Object& iterator);
 
-void get_iterator_values(GlobalObject&, Value value, AK::Function<IterationDecision(Value&)> callback);
+void get_iterator_values(GlobalObject&, Value value, AK::Function<IterationDecision(Value)> callback);
 
 }

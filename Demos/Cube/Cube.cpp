@@ -26,6 +26,7 @@
 
 #include <LibCore/ElapsedTimer.h>
 #include <LibGUI/Application.h>
+#include <LibGUI/Icon.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Widget.h>
@@ -177,8 +178,8 @@ void Cube::timer_event(Core::TimerEvent&)
     }
 
     if ((m_cycles % 50) == 0) {
-        dbgprintf("%d total cycles. finished 50 in %d ms, avg %d ms\n", m_cycles, m_accumulated_time, m_accumulated_time / 50);
-        m_stats->set_text(String::format("%d ms", m_accumulated_time / 50));
+        dbgln("{} total cycles. finished 50 in {} ms, avg {} ms", m_cycles, m_accumulated_time, m_accumulated_time / 50);
+        m_stats->set_text(String::formatted("{} ms", m_accumulated_time / 50));
         m_accumulated_time = 0;
     }
 
@@ -192,22 +193,38 @@ int main(int argc, char** argv)
 {
     auto app = GUI::Application::construct(argc, argv);
 
+    if (pledge("stdio rpath shared_buffer", nullptr) < 0) {
+        perror("pledge");
+        return 1;
+    }
+
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil(nullptr, nullptr) < 0) {
+        perror("unveil");
+        return 1;
+    }
+
     auto window = GUI::Window::construct();
     window->set_double_buffering_enabled(true);
     window->set_title("Cube");
     window->set_resizable(false);
-    window->set_rect(100, 100, WIDTH, HEIGHT);
+    window->resize(WIDTH, HEIGHT);
 
     auto& cube = window->set_main_widget<Cube>();
 
     auto& time = cube.add<GUI::Label>();
     time.set_relative_rect({ 0, 4, 40, 10 });
     time.move_by({ window->width() - time.width(), 0 });
-    time.set_foreground_color(Color::from_rgb(0x222222));
     cube.set_stat_label(time);
 
     window->show();
-    window->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-cube.png"));
+
+    auto app_icon = GUI::Icon::default_icon("app-cube");
+    window->set_icon(app_icon.bitmap_for_size(16));
 
     return app->exec();
 }

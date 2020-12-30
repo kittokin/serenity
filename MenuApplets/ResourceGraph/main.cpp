@@ -25,6 +25,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/ByteBuffer.h>
 #include <AK/CircularQueue.h>
 #include <AK/JsonObject.h>
 #include <LibCore/ArgsParser.h>
@@ -35,6 +36,7 @@
 #include <LibGUI/Painter.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Palette.h>
+#include <serenity.h>
 #include <spawn.h>
 #include <stdio.h>
 
@@ -47,6 +49,8 @@ class GraphWidget final : public GUI::Frame {
     C_OBJECT(GraphWidget);
 
 public:
+    static constexpr size_t history_size = 30;
+
     GraphWidget(GraphType graph_type, Optional<Gfx::Color> graph_color)
         : m_graph_type(graph_type)
     {
@@ -69,19 +73,23 @@ private:
             m_last_cpu_idle = idle;
             float cpu = (float)busy_diff / (float)(busy_diff + idle_diff);
             m_history.enqueue(cpu);
+            m_tooltip = String::format("CPU usage: %.1f%%", 100 * cpu);
             break;
         }
         case GraphType::Memory: {
             unsigned allocated;
             unsigned available;
             get_memory_usage(allocated, available);
-            float memory = (float)allocated / (float)(allocated + available);
+            float total_memory = allocated + available;
+            float memory = (float)allocated / total_memory;
             m_history.enqueue(memory);
+            m_tooltip = String::format("Memory: %.1f MiB of %.1f MiB in use", (float)allocated / MiB, total_memory / MiB);
             break;
         }
         default:
             ASSERT_NOT_REACHED();
         }
+        set_tooltip(m_tooltip);
         update();
     }
 
@@ -96,8 +104,8 @@ private:
         auto rect = frame_inner_rect();
         for (auto value : m_history) {
             painter.draw_line(
-                { i, rect.bottom() },
-                { i, (int)(rect.height() - (value * (float)rect.height())) },
+                { rect.x() + i, rect.bottom() },
+                { rect.x() + i, rect.top() + (int)(round(rect.height() - (value * rect.height()))) },
                 m_graph_color);
             ++i;
         }
@@ -109,8 +117,12 @@ private:
             return;
         pid_t child_pid;
         const char* argv[] = { "SystemMonitor", nullptr };
-        if ((errno = posix_spawn(&child_pid, "/bin/SystemMonitor", nullptr, nullptr, const_cast<char**>(argv), environ)))
+        if ((errno = posix_spawn(&child_pid, "/bin/SystemMonitor", nullptr, nullptr, const_cast<char**>(argv), environ))) {
             perror("posix_spawn");
+        } else {
+            if (disown(child_pid) < 0)
+                perror("disown");
+        }
     }
 
     static void get_cpu_usage(unsigned& busy, unsigned& idle)
@@ -123,9 +135,9 @@ private:
         for (auto& it : all_processes) {
             for (auto& jt : it.value.threads) {
                 if (it.value.pid == 0)
-                    idle += jt.times_scheduled;
+                    idle += jt.ticks_user + jt.ticks_kernel;
                 else
-                    busy += jt.times_scheduled;
+                    busy += jt.ticks_user + jt.ticks_kernel;
             }
         }
     }
@@ -141,15 +153,16 @@ private:
         ASSERT(json.has_value());
         unsigned user_physical_allocated = json.value().as_object().get("user_physical_allocated").to_u32();
         unsigned user_physical_available = json.value().as_object().get("user_physical_available").to_u32();
-        allocated = (user_physical_allocated * 4096) / 1024;
-        available = (user_physical_available * 4096) / 1024;
+        allocated = (user_physical_allocated * PAGE_SIZE);
+        available = (user_physical_available * PAGE_SIZE);
     }
 
     GraphType m_graph_type;
     Gfx::Color m_graph_color;
-    CircularQueue<float, 30> m_history;
+    CircularQueue<float, history_size> m_history;
     unsigned m_last_cpu_busy { 0 };
     unsigned m_last_cpu_idle { 0 };
+    String m_tooltip;
 };
 
 int main(int argc, char** argv)
@@ -201,7 +214,7 @@ int main(int argc, char** argv)
     auto window = GUI::Window::construct();
     window->set_title(name);
     window->set_window_type(GUI::WindowType::MenuApplet);
-    window->resize(30, 16);
+    window->resize(GraphWidget::history_size + 2, 16);
 
     window->set_main_widget<GraphWidget>(graph_type, graph_color);
     window->show();

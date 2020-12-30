@@ -2,6 +2,7 @@ set(SOURCES
     Emulator.cpp
     MallocTracer.cpp
     MmapRegion.cpp
+    Region.cpp
     SharedBufferRegion.cpp
     SimpleRegion.cpp
     SoftCPU.cpp
@@ -10,4 +11,4 @@ set(SOURCES
 )
 
 serenity_bin(UserspaceEmulator)
-target_link_libraries(UserspaceEmulator LibX86 LibCore)
+target_link_libraries(UserspaceEmulator LibX86 LibDebug LibCore LibPthread)

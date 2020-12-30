@@ -51,8 +51,7 @@ BookmarksBarWidget::BookmarksBarWidget(const String& bookmarks_file, bool enable
     set_layout<GUI::HorizontalBoxLayout>();
     layout()->set_spacing(0);
 
-    set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    set_preferred_size(0, 20);
+    set_fixed_height(20);
 
     if (!enabled)
         set_visible(false);
@@ -60,8 +59,8 @@ BookmarksBarWidget::BookmarksBarWidget(const String& bookmarks_file, bool enable
     m_additional = GUI::Button::construct();
     m_additional->set_button_style(Gfx::ButtonStyle::CoolBar);
     m_additional->set_text(">");
-    m_additional->set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
-    m_additional->set_preferred_size(14, 20);
+    m_additional->set_fixed_size(14, 20);
+    m_additional->set_focus_policy(GUI::FocusPolicy::TabFocus);
     m_additional->on_click = [this](auto) {
         if (m_additional_menu) {
             m_additional_menu->popup(m_additional->relative_position().translated(relative_position().translated(m_additional->window()->position())));
@@ -71,12 +70,18 @@ BookmarksBarWidget::BookmarksBarWidget(const String& bookmarks_file, bool enable
     m_separator = GUI::Widget::construct();
 
     m_context_menu = GUI::Menu::construct();
-    m_context_menu->add_action(GUI::Action::create("Delete", [this](auto&) {
-        remove_bookmark(m_context_menu_url);
-    }));
+    auto default_action = GUI::Action::create("Open", [this](auto&) {
+        if (on_bookmark_click)
+            on_bookmark_click(m_context_menu_url, Mod_None);
+    });
+    m_context_menu_default_action = default_action;
+    m_context_menu->add_action(default_action);
     m_context_menu->add_action(GUI::Action::create("Open in new tab", [this](auto&) {
         if (on_bookmark_click)
             on_bookmark_click(m_context_menu_url, Mod_Ctrl);
+    }));
+    m_context_menu->add_action(GUI::Action::create("Delete", [this](auto&) {
+        remove_bookmark(m_context_menu_url);
     }));
 
     Vector<GUI::JsonArrayModel::FieldSpec> fields;
@@ -108,19 +113,17 @@ void BookmarksBarWidget::resize_event(GUI::ResizeEvent& event)
     update_content_size();
 }
 
-void BookmarksBarWidget::on_model_update(unsigned)
+void BookmarksBarWidget::model_did_update(unsigned)
 {
-    for (auto* child : child_widgets()) {
-        child->remove_from_parent();
-    }
+    remove_all_children();
 
     m_bookmarks.clear();
 
     int width = 0;
     for (int item_index = 0; item_index < model()->row_count(); ++item_index) {
 
-        auto title = model()->data(model()->index(item_index, 0)).to_string();
-        auto url = model()->data(model()->index(item_index, 1)).to_string();
+        auto title = model()->index(item_index, 0).data().to_string();
+        auto url = model()->index(item_index, 1).data().to_string();
 
         Gfx::IntRect rect { width, 0, font().width(title) + 32, height() };
 
@@ -129,10 +132,11 @@ void BookmarksBarWidget::on_model_update(unsigned)
 
         button.set_button_style(Gfx::ButtonStyle::CoolBar);
         button.set_text(title);
-        button.set_size_policy(GUI::SizePolicy::Fixed, GUI::SizePolicy::Fixed);
         button.set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/filetype-html.png"));
-        button.set_preferred_size(font().width(title) + 32, 20);
+        button.set_fixed_size(font().width(title) + 32, 20);
         button.set_relative_rect(rect);
+        button.set_focus_policy(GUI::FocusPolicy::TabFocus);
+        button.set_tooltip(url);
 
         button.on_click = [title, url, this](auto modifiers) {
             if (on_bookmark_click)
@@ -141,7 +145,7 @@ void BookmarksBarWidget::on_model_update(unsigned)
 
         button.on_context_menu_request = [this, url](auto& context_menu_event) {
             m_context_menu_url = url;
-            m_context_menu->popup(context_menu_event.screen_position());
+            m_context_menu->popup(context_menu_event.screen_position(), m_context_menu_default_action);
         };
 
         width += rect.width();
@@ -192,8 +196,8 @@ bool BookmarksBarWidget::contains_bookmark(const String& url)
 {
     for (int item_index = 0; item_index < model()->row_count(); ++item_index) {
 
-        auto item_title = model()->data(model()->index(item_index, 0)).to_string();
-        auto item_url = model()->data(model()->index(item_index, 1)).to_string();
+        auto item_title = model()->index(item_index, 0).data().to_string();
+        auto item_url = model()->index(item_index, 1).data().to_string();
         if (item_url == url) {
             return true;
         }
@@ -205,8 +209,8 @@ bool BookmarksBarWidget::remove_bookmark(const String& url)
 {
     for (int item_index = 0; item_index < model()->row_count(); ++item_index) {
 
-        auto item_title = model()->data(model()->index(item_index, 0)).to_string();
-        auto item_url = model()->data(model()->index(item_index, 1)).to_string();
+        auto item_title = model()->index(item_index, 0).data().to_string();
+        auto item_url = model()->index(item_index, 1).data().to_string();
         if (item_url == url) {
             auto& json_model = *static_cast<GUI::JsonArrayModel*>(model());
 

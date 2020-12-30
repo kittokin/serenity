@@ -41,19 +41,19 @@ public:
         __Count
     };
 
-    static NonnullRefPtr<StylePropertiesModel> create(const StyleProperties& properties) { return adopt(*new StylePropertiesModel(properties)); }
+    static NonnullRefPtr<StylePropertiesModel> create(const CSS::StyleProperties& properties) { return adopt(*new StylePropertiesModel(properties)); }
 
     virtual int row_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override;
     virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return Column::__Count; }
     virtual String column_name(int) const override;
-    virtual GUI::Variant data(const GUI::ModelIndex&, Role = Role::Display) const override;
+    virtual GUI::Variant data(const GUI::ModelIndex&, GUI::ModelRole) const override;
     virtual void update() override;
 
 private:
-    explicit StylePropertiesModel(const StyleProperties& properties);
-    const StyleProperties& properties() const { return *m_properties; }
+    explicit StylePropertiesModel(const CSS::StyleProperties& properties);
+    const CSS::StyleProperties& properties() const { return *m_properties; }
 
-    NonnullRefPtr<StyleProperties> m_properties;
+    NonnullRefPtr<CSS::StyleProperties> m_properties;
 
     struct Value {
         String name;

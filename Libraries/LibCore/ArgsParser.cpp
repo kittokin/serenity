@@ -24,12 +24,24 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/Format.h>
 #include <AK/StringBuilder.h>
 #include <LibCore/ArgsParser.h>
 #include <getopt.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+
+static constexpr bool isnan(double __x) { return __builtin_isnan(__x); }
+
+static Optional<double> convert_to_double(const char* s)
+{
+    char* p;
+    double v = strtod(s, &p);
+    if (isnan(v) || p == s)
+        return {};
+    return v;
+}
 
 namespace Core {
 
@@ -105,7 +117,7 @@ bool ArgsParser::parse(int argc, char** argv, bool exit_on_failure)
 
         const char* arg = found_option->requires_argument ? optarg : nullptr;
         if (!found_option->accept_value(arg)) {
-            fprintf(stderr, "\033[31mInvalid value for option \033[1m%s\033[22m, dude\033[0m\n", found_option->name_for_display().characters());
+            warnln("\033[31mInvalid value for option \033[1m{}\033[22m, dude\033[0m", found_option->name_for_display());
             print_usage_and_exit();
             return false;
         }
@@ -148,7 +160,7 @@ bool ArgsParser::parse(int argc, char** argv, bool exit_on_failure)
         for (int j = 0; j < num_values_for_arg[i]; j++) {
             const char* value = argv[optind++];
             if (!arg.accept_value(value)) {
-                fprintf(stderr, "Invalid value for argument %s\n", arg.name);
+                warnln("Invalid value for argument {}", arg.name);
                 print_usage_and_exit();
                 return false;
             }
@@ -169,67 +181,72 @@ bool ArgsParser::parse(int argc, char** argv, bool exit_on_failure)
 
 void ArgsParser::print_usage(FILE* file, const char* argv0)
 {
-    fprintf(file, "Usage:\n\t\033[1m%s\033[0m", argv0);
+    out(file, "Usage:\n\t\033[1m{}\033[0m", argv0);
 
     for (auto& opt : m_options) {
         if (opt.long_name && !strcmp(opt.long_name, "help"))
             continue;
         if (opt.requires_argument)
-            fprintf(file, " [%s %s]", opt.name_for_display().characters(), opt.value_name);
+            out(file, " [{} {}]", opt.name_for_display(), opt.value_name);
         else
-            fprintf(file, " [%s]", opt.name_for_display().characters());
+            out(file, " [{}]", opt.name_for_display());
     }
     for (auto& arg : m_positional_args) {
         bool required = arg.min_values > 0;
         bool repeated = arg.max_values > 1;
 
         if (required && repeated)
-            fprintf(file, " <%s...>", arg.name);
+            out(file, " <{}...>", arg.name);
         else if (required && !repeated)
-            fprintf(file, " <%s>", arg.name);
+            out(file, " <{}>", arg.name);
         else if (!required && repeated)
-            fprintf(file, " [%s...]", arg.name);
+            out(file, " [{}...]", arg.name);
         else if (!required && !repeated)
-            fprintf(file, " [%s]", arg.name);
+            out(file, " [{}]", arg.name);
+    }
+    outln(file);
+
+    if (m_general_help != nullptr && m_general_help[0] != '\0') {
+        outln(file, "\nDescription:");
+        outln(file, m_general_help);
     }
 
     if (!m_options.is_empty())
-        fprintf(file, "\nOptions:\n");
-
+        outln(file, "\nOptions:");
     for (auto& opt : m_options) {
         auto print_argument = [&]() {
             if (opt.value_name) {
                 if (opt.requires_argument)
-                    fprintf(file, " %s", opt.value_name);
+                    out(file, " {}", opt.value_name);
                 else
-                    fprintf(file, " [%s]", opt.value_name);
+                    out(file, " [{}]", opt.value_name);
             }
         };
-        fprintf(file, "\t");
+        out(file, "\t");
         if (opt.short_name) {
-            fprintf(file, "\033[1m-%c\033[0m", opt.short_name);
+            out(file, "\033[1m-{}\033[0m", opt.short_name);
             print_argument();
         }
         if (opt.short_name && opt.long_name)
-            fprintf(file, ", ");
+            out(file, ", ");
         if (opt.long_name) {
-            fprintf(file, "\033[1m--%s\033[0m", opt.long_name);
+            out(file, "\033[1m--{}\033[0m", opt.long_name);
             print_argument();
         }
 
         if (opt.help_string)
-            fprintf(file, "\t%s", opt.help_string);
-        fprintf(file, "\n");
+            out(file, "\t{}", opt.help_string);
+        outln(file);
     }
 
     if (!m_positional_args.is_empty())
-        fprintf(file, "\nArguments:\n");
+        outln(file, "\nArguments:");
 
     for (auto& arg : m_positional_args) {
-        fprintf(file, "\t\033[1m%s\033[0m", arg.name);
+        out(file, "\t\033[1m{}\033[0m", arg.name);
         if (arg.help_string)
-            fprintf(file, "\t%s", arg.help_string);
-        fprintf(file, "\n");
+            out(file, "\t{}", arg.help_string);
+        outln(file);
     }
 }
 
@@ -288,6 +305,23 @@ void ArgsParser::add_option(int& value, const char* help_string, const char* lon
     add_option(move(option));
 }
 
+void ArgsParser::add_option(double& value, const char* help_string, const char* long_name, char short_name, const char* value_name)
+{
+    Option option {
+        true,
+        help_string,
+        long_name,
+        short_name,
+        value_name,
+        [&value](const char* s) {
+            auto opt = convert_to_double(s);
+            value = opt.value_or(0.0);
+            return opt.has_value();
+        }
+    };
+    add_option(move(option));
+}
+
 void ArgsParser::add_positional_argument(Arg&& arg)
 {
     m_positional_args.append(move(arg));
@@ -318,6 +352,22 @@ void ArgsParser::add_positional_argument(int& value, const char* help_string, co
         [&value](const char* s) {
             auto opt = StringView(s).to_int();
             value = opt.value_or(0);
+            return opt.has_value();
+        }
+    };
+    add_positional_argument(move(arg));
+}
+
+void ArgsParser::add_positional_argument(double& value, const char* help_string, const char* name, Required required)
+{
+    Arg arg {
+        help_string,
+        name,
+        required == Required::Yes ? 1 : 0,
+        1,
+        [&value](const char* s) {
+            auto opt = convert_to_double(s);
+            value = opt.value_or(0.0);
             return opt.has_value();
         }
     };

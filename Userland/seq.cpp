@@ -30,12 +30,26 @@
 #include <string.h>
 #include <unistd.h>
 
-double get_double(const char* name, const char* d_string, int* number_of_decimals)
+const char* const g_usage = R"(Usage:
+    seq [-h|--help]
+    seq LAST
+    seq FIRST LAST
+    seq FIRST INCREMENT LAST
+)";
+
+static void print_usage(FILE* stream)
+{
+    fputs(g_usage, stream);
+    return;
+}
+
+static double get_double(const char* name, const char* d_string, int* number_of_decimals)
 {
     char* end;
     double d = strtod(d_string, &end);
     if (d == 0 && end == d_string) {
-        fprintf(stderr, "%s: invalid double vallue \"%s\"\n", name, d_string);
+        fprintf(stderr, "%s: invalid argument \"%s\"\n", name, d_string);
+        print_usage(stderr);
         exit(1);
     }
     if (char* dot = strchr(d_string, '.'))
@@ -56,6 +70,13 @@ int main(int argc, const char* argv[])
         return 1;
     }
 
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(stdout);
+            exit(0);
+        }
+    }
+
     double start = 1, step = 1, end = 1;
     int number_of_start_decimals = 0, number_of_step_decimals = 0, number_of_end_decimals = 0;
     switch (argc) {
@@ -73,6 +94,7 @@ int main(int argc, const char* argv[])
         break;
     default:
         fprintf(stderr, "%s: unexpected number of arguments\n", argv[0]);
+        print_usage(stderr);
         return 1;
     }
 
@@ -81,13 +103,10 @@ int main(int argc, const char* argv[])
         return 1;
     }
 
-#if 0
-    // FIXME: Check for NaN once math.h has isnan().
-    if (isnan(start) || isnan(step) || isnan(end)) {
+    if (__builtin_isnan(start) || __builtin_isnan(step) || __builtin_isnan(end)) {
         fprintf(stderr, "%s: start, step, and end must not be NaN\n", argv[0]);
         return 1;
     }
-#endif
 
     int number_of_decimals = max(number_of_start_decimals, max(number_of_step_decimals, number_of_end_decimals));
 
@@ -95,7 +114,7 @@ int main(int argc, const char* argv[])
     double d = start;
     for (int i = 0; i <= n; ++i) {
         char buf[40];
-        sprintf(buf, "%f", d); // FIXME: Serenity's printf() doesn't seem to handle %f correctly: For `seq 1 0.1 2` this always prints "1.0" as `d` goes from 1.0 to 2.0.
+        snprintf(buf, sizeof(buf), "%f", d);
         if (char* dot = strchr(buf, '.')) {
             if (number_of_decimals == 0)
                 *dot = '\0';
@@ -105,4 +124,6 @@ int main(int argc, const char* argv[])
         printf("%s\n", buf);
         d += step;
     }
+
+    return 0;
 }

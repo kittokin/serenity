@@ -25,10 +25,12 @@
  */
 
 #include "WebContentClient.h"
-#include "WebContentView.h"
+#include "OutOfProcessWebView.h"
 #include <AK/SharedBuffer.h>
 
-WebContentClient::WebContentClient(WebContentView& view)
+namespace Web {
+
+WebContentClient::WebContentClient(OutOfProcessWebView& view)
     : IPC::ServerConnection<WebContentClientEndpoint, WebContentServerEndpoint>(*this, "/tmp/portal/webcontent")
     , m_view(view)
 {
@@ -50,11 +52,9 @@ void WebContentClient::handle(const Messages::WebContentClient::DidPaint& messag
     m_view.notify_server_did_paint({}, message.shbuf_id());
 }
 
-void WebContentClient::handle([[maybe_unused]] const Messages::WebContentClient::DidFinishLoad& message)
+void WebContentClient::handle([[maybe_unused]] const Messages::WebContentClient::DidFinishLoading& message)
 {
-#ifdef DEBUG_SPAM
-    dbg() << "handle: WebContentClient::DidFinishLoad! url=" << message.url();
-#endif
+    m_view.notify_server_did_finish_loading({}, message.url());
 }
 
 void WebContentClient::handle(const Messages::WebContentClient::DidInvalidateContentRect& message)
@@ -138,4 +138,12 @@ void WebContentClient::handle(const Messages::WebContentClient::DidRequestContex
 void WebContentClient::handle(const Messages::WebContentClient::DidRequestLinkContextMenu& message)
 {
     m_view.notify_server_did_request_link_context_menu({}, message.content_position(), message.url(), message.target(), message.modifiers());
+}
+
+OwnPtr<Messages::WebContentClient::DidRequestAlertResponse> WebContentClient::handle(const Messages::WebContentClient::DidRequestAlert& message)
+{
+    m_view.notify_server_did_request_alert({}, message.message());
+    return make<Messages::WebContentClient::DidRequestAlertResponse>();
+}
+
 }

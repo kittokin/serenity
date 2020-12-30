@@ -36,6 +36,7 @@ namespace Kernel {
 class BXVGADevice final : public BlockDevice {
     AK_MAKE_ETERNAL
 public:
+    static void initialize();
     static BXVGADevice& the();
 
     BXVGADevice();
@@ -43,14 +44,16 @@ public:
     virtual int ioctl(FileDescription&, unsigned request, FlatPtr arg) override;
     virtual KResultOr<Region*> mmap(Process&, FileDescription&, VirtualAddress preferred_vaddr, size_t offset, size_t, int prot, bool shared) override;
 
+    // ^Device
+    virtual mode_t required_mode() const override { return 0660; }
+
 private:
     virtual const char* class_name() const override { return "BXVGA"; }
     virtual bool can_read(const FileDescription&, size_t) const override { return true; }
     virtual bool can_write(const FileDescription&, size_t) const override { return true; }
-    virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) override { return -EINVAL; }
-    virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) override { return -EINVAL; }
-    virtual bool read_blocks(unsigned, u16, u8*) override { return false; }
-    virtual bool write_blocks(unsigned, u16, const u8*) override { return false; }
+    virtual void start_request(AsyncBlockDeviceRequest& request) override { request.complete(AsyncDeviceRequest::Failure); }
+    virtual KResultOr<size_t> read(FileDescription&, size_t, UserOrKernelBuffer&, size_t) override { return -EINVAL; }
+    virtual KResultOr<size_t> write(FileDescription&, size_t, const UserOrKernelBuffer&, size_t) override { return -EINVAL; }
 
     void set_safe_resolution();
 

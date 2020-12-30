@@ -31,7 +31,7 @@
 
 class VirtualAddress {
 public:
-    VirtualAddress() {}
+    VirtualAddress() { }
     explicit VirtualAddress(FlatPtr address)
         : m_address(address)
     {
@@ -74,4 +74,13 @@ inline VirtualAddress operator-(const VirtualAddress& a, const VirtualAddress& b
 inline const LogStream& operator<<(const LogStream& stream, VirtualAddress value)
 {
     return stream << 'V' << value.as_ptr();
+}
+
+namespace AK {
+
+template<>
+struct Formatter<VirtualAddress> : Formatter<StringView> {
+    void format(FormatBuilder&, const VirtualAddress&);
+};
+
 }

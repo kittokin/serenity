@@ -31,10 +31,10 @@
 __BEGIN_DECLS
 
 #define RTLD_DEFAULT 0
-#define RTLD_LAZY 1
-#define RTLD_NOW 2
-#define RTLD_GLOBAL 3
-#define RTLD_LOCAL 4
+#define RTLD_LAZY 2
+#define RTLD_NOW 4
+#define RTLD_GLOBAL 8
+#define RTLD_LOCAL 16
 
 int dlclose(void*);
 char* dlerror();

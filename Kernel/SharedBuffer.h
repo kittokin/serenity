@@ -36,12 +36,13 @@ namespace Kernel {
 class SharedBuffer {
 private:
     struct Reference {
-        Reference(pid_t pid)
+        Reference(ProcessID pid, unsigned count = 0)
             : pid(pid)
+            , count(count)
         {
         }
 
-        pid_t pid;
+        ProcessID pid;
         unsigned count { 0 };
         WeakPtr<Region> region;
     };
@@ -64,12 +65,13 @@ public:
     }
 
     void sanity_check(const char* what);
-    bool is_shared_with(pid_t peer_pid) const;
+    bool is_shared_with(ProcessID peer_pid) const;
     void* ref_for_process_and_get_address(Process& process);
-    void share_with(pid_t peer_pid);
+    void share_with(ProcessID peer_pid);
     void share_globally() { m_global = true; }
     void deref_for_process(Process& process);
-    void disown(pid_t pid);
+    bool disown(ProcessID pid);
+    static void share_all_shared_buffers(Process& from_process, Process& with_process);
     size_t size() const { return m_vmobject->size(); }
     void destroy_if_unused();
     void seal();

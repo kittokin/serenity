@@ -28,6 +28,7 @@
 #include "Emulator.h"
 #include <Kernel/API/Syscall.h>
 #include <serenity.h>
+#include <string.h>
 #include <sys/mman.h>
 
 namespace UserspaceEmulator {
@@ -42,46 +43,65 @@ SharedBufferRegion::SharedBufferRegion(u32 base, u32 size, int shbuf_id, u8* hos
     , m_data(host_data)
     , m_shbuf_id(shbuf_id)
 {
+    m_shadow_data = (u8*)malloc(size);
+    memset(m_shadow_data, 1, size);
 }
 
 SharedBufferRegion::~SharedBufferRegion()
 {
+    free(m_shadow_data);
 }
 
-u8 SharedBufferRegion::read8(FlatPtr offset)
+ValueWithShadow<u8> SharedBufferRegion::read8(FlatPtr offset)
 {
     ASSERT(offset < size());
-    return *reinterpret_cast<const u8*>(m_data + offset);
+    return { *reinterpret_cast<const u8*>(m_data + offset), *reinterpret_cast<const u8*>(m_shadow_data + offset) };
 }
 
-u16 SharedBufferRegion::read16(u32 offset)
+ValueWithShadow<u16> SharedBufferRegion::read16(u32 offset)
 {
     ASSERT(offset + 1 < size());
-    return *reinterpret_cast<const u16*>(m_data + offset);
+    return { *reinterpret_cast<const u16*>(m_data + offset), *reinterpret_cast<const u16*>(m_shadow_data + offset) };
 }
 
-u32 SharedBufferRegion::read32(u32 offset)
+ValueWithShadow<u32> SharedBufferRegion::read32(u32 offset)
 {
     ASSERT(offset + 3 < size());
-    return *reinterpret_cast<const u32*>(m_data + offset);
+    return { *reinterpret_cast<const u32*>(m_data + offset), *reinterpret_cast<const u32*>(m_shadow_data + offset) };
 }
 
-void SharedBufferRegion::write8(u32 offset, u8 value)
+ValueWithShadow<u64> SharedBufferRegion::read64(u32 offset)
+{
+    ASSERT(offset + 7 < size());
+    return { *reinterpret_cast<const u64*>(m_data + offset), *reinterpret_cast<const u64*>(m_shadow_data + offset) };
+}
+
+void SharedBufferRegion::write8(u32 offset, ValueWithShadow<u8> value)
 {
     ASSERT(offset < size());
-    *reinterpret_cast<u8*>(m_data + offset) = value;
+    *reinterpret_cast<u8*>(m_data + offset) = value.value();
+    *reinterpret_cast<u8*>(m_shadow_data + offset) = value.shadow();
 }
 
-void SharedBufferRegion::write16(u32 offset, u16 value)
+void SharedBufferRegion::write16(u32 offset, ValueWithShadow<u16> value)
 {
     ASSERT(offset + 1 < size());
-    *reinterpret_cast<u16*>(m_data + offset) = value;
+    *reinterpret_cast<u16*>(m_data + offset) = value.value();
+    *reinterpret_cast<u16*>(m_shadow_data + offset) = value.shadow();
 }
 
-void SharedBufferRegion::write32(u32 offset, u32 value)
+void SharedBufferRegion::write32(u32 offset, ValueWithShadow<u32> value)
 {
     ASSERT(offset + 3 < size());
-    *reinterpret_cast<u32*>(m_data + offset) = value;
+    *reinterpret_cast<u32*>(m_data + offset) = value.value();
+    *reinterpret_cast<u32*>(m_shadow_data + offset) = value.shadow();
+}
+
+void SharedBufferRegion::write64(u32 offset, ValueWithShadow<u64> value)
+{
+    ASSERT(offset + 7 < size());
+    *reinterpret_cast<u64*>(m_data + offset) = value.value();
+    *reinterpret_cast<u64*>(m_shadow_data + offset) = value.shadow();
 }
 
 int SharedBufferRegion::allow_all()

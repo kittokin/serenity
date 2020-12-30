@@ -1,6 +1,7 @@
 set(SOURCES
     AST.cpp
     Console.cpp
+    Heap/Allocator.cpp
     Heap/Handle.cpp
     Heap/HeapBlock.cpp
     Heap/Heap.cpp
@@ -9,6 +10,9 @@ set(SOURCES
     MarkupGenerator.cpp
     Parser.cpp
     Runtime/Array.cpp
+    Runtime/ArrayBuffer.cpp
+    Runtime/ArrayBufferConstructor.cpp
+    Runtime/ArrayBufferPrototype.cpp
     Runtime/ArrayConstructor.cpp
     Runtime/ArrayIterator.cpp
     Runtime/ArrayIteratorPrototype.cpp
@@ -51,15 +55,14 @@ set(SOURCES
     Runtime/Object.cpp
     Runtime/ObjectPrototype.cpp
     Runtime/PrimitiveString.cpp
-    Runtime/PropertyAttributes.cpp
     Runtime/ProxyConstructor.cpp
     Runtime/ProxyObject.cpp
-    Runtime/ProxyPrototype.cpp
     Runtime/Reference.cpp
     Runtime/ReflectObject.cpp
     Runtime/RegExpConstructor.cpp
     Runtime/RegExpObject.cpp
     Runtime/RegExpPrototype.cpp
+    Runtime/ScopeObject.cpp
     Runtime/ScriptFunction.cpp
     Runtime/Shape.cpp
     Runtime/StringConstructor.cpp
@@ -71,10 +74,15 @@ set(SOURCES
     Runtime/SymbolConstructor.cpp
     Runtime/SymbolObject.cpp
     Runtime/SymbolPrototype.cpp
+    Runtime/TypedArray.cpp
+    Runtime/TypedArrayConstructor.cpp
+    Runtime/TypedArrayPrototype.cpp
     Runtime/Uint8ClampedArray.cpp
+    Runtime/VM.cpp
     Runtime/Value.cpp
+    Runtime/WithScope.cpp
     Token.cpp
 )
 
 serenity_lib(LibJS js)
-target_link_libraries(LibJS LibM LibCore LibCrypto)
+target_link_libraries(LibJS LibM LibCore LibCrypto LibRegex)

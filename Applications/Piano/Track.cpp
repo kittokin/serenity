@@ -27,7 +27,7 @@
 
 #include "Track.h"
 #include <AK/NumericLimits.h>
-#include <LibAudio/WavLoader.h>
+#include <LibAudio/Loader.h>
 #include <math.h>
 
 Track::Track(const u32& time)
@@ -138,19 +138,19 @@ void Track::reset()
 
 String Track::set_recorded_sample(const StringView& path)
 {
-    Audio::WavLoader wav_loader(path);
-    if (wav_loader.has_error())
-        return String(wav_loader.error_string());
-    auto wav_buffer = wav_loader.get_more_samples(60 * sample_rate * sizeof(Sample)); // 1 minute maximum
+    NonnullRefPtr<Audio::Loader> loader = Audio::Loader::create(path);
+    if (loader->has_error())
+        return String(loader->error_string());
+    auto buffer = loader->get_more_samples(60 * sample_rate * sizeof(Sample)); // 1 minute maximum
 
     if (!m_recorded_sample.is_empty())
         m_recorded_sample.clear();
-    m_recorded_sample.resize(wav_buffer->sample_count());
+    m_recorded_sample.resize(buffer->sample_count());
 
     double peak = 0;
-    for (int i = 0; i < wav_buffer->sample_count(); ++i) {
-        double left_abs = fabs(wav_buffer->samples()[i].left);
-        double right_abs = fabs(wav_buffer->samples()[i].right);
+    for (int i = 0; i < buffer->sample_count(); ++i) {
+        double left_abs = fabs(buffer->samples()[i].left);
+        double right_abs = fabs(buffer->samples()[i].right);
         if (left_abs > peak)
             peak = left_abs;
         if (right_abs > peak)
@@ -158,9 +158,9 @@ String Track::set_recorded_sample(const StringView& path)
     }
 
     if (peak) {
-        for (int i = 0; i < wav_buffer->sample_count(); ++i) {
-            m_recorded_sample[i].left = wav_buffer->samples()[i].left / peak;
-            m_recorded_sample[i].right = wav_buffer->samples()[i].right / peak;
+        for (int i = 0; i < buffer->sample_count(); ++i) {
+            m_recorded_sample[i].left = buffer->samples()[i].left / peak;
+            m_recorded_sample[i].right = buffer->samples()[i].right / peak;
         }
     }
 
@@ -287,7 +287,7 @@ void Track::set_roll_note(int note, u32 on_sample, u32 off_sample)
             sync_roll(note);
             return;
         }
-        if (it->on_sample == new_roll_note.on_sample && it->off_sample == new_roll_note.off_sample) {
+        if (it->on_sample <= new_roll_note.on_sample && it->off_sample >= new_roll_note.on_sample) {
             if (m_time >= it->on_sample && m_time <= it->off_sample)
                 set_note(note, Off);
             m_roll_notes[note].remove(it);
@@ -300,12 +300,6 @@ void Track::set_roll_note(int note, u32 on_sample, u32 off_sample)
             m_roll_notes[note].remove(it);
             it = m_roll_notes[note].begin();
             continue;
-        }
-        if (it->on_sample < new_roll_note.on_sample && it->off_sample >= new_roll_note.on_sample) {
-            if (m_time >= new_roll_note.off_sample && m_time <= it->off_sample)
-                set_note(note, Off);
-            it->off_sample = new_roll_note.on_sample - 1;
-            ASSERT(it->length() >= 2);
         }
         ++it;
     }

@@ -30,9 +30,9 @@
 
 namespace GUI {
 
-class JSSyntaxHighlighter final : public SyntaxHighlighter {
+class JSSyntaxHighlighter : public SyntaxHighlighter {
 public:
-    JSSyntaxHighlighter() {}
+    JSSyntaxHighlighter() { }
     virtual ~JSSyntaxHighlighter() override;
 
     virtual bool is_identifier(void*) const override;

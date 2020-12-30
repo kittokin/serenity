@@ -26,9 +26,9 @@
 
 #include <AK/TestSuite.h>
 
-#include <AK/String.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/OwnPtr.h>
+#include <AK/String.h>
 #include <AK/Vector.h>
 
 TEST_CASE(construct)
@@ -311,6 +311,87 @@ TEST_CASE(insert_trivial)
     EXPECT_EQ(ints[3], 20);
     EXPECT_EQ(ints[4], 30);
     EXPECT_EQ(ints[5], 40);
+}
+
+TEST_CASE(resize_initializes)
+{
+    struct A {
+        A() { initialized = true; }
+        bool initialized { false };
+    };
+
+    Vector<A> ints;
+    ints.resize(32);
+
+    for (size_t idx = 0; idx < 32; ++idx)
+        EXPECT(ints[idx].initialized);
+}
+
+TEST_CASE(should_compare_vectors_of_same_type)
+{
+    Vector<int> a {};
+    Vector<int> b {};
+
+    EXPECT(a == b);
+    EXPECT(!(a != b));
+
+    a.append(1);
+    EXPECT(!(a == b));
+    EXPECT(a != b);
+
+    b.append(1);
+    EXPECT(a == b);
+    EXPECT(!(a != b));
+
+    a.append(42);
+    b.append(17);
+    EXPECT(!(a == b));
+    EXPECT(a != b);
+}
+
+TEST_CASE(should_compare_vectors_of_different_inline_capacity)
+{
+    Vector<int, 1> a {};
+    Vector<int, 64> b {};
+
+    EXPECT(a == b);
+    EXPECT(!(a != b));
+
+    a.append(1);
+    EXPECT(!(a == b));
+    EXPECT(a != b);
+
+    b.append(1);
+    EXPECT(a == b);
+    EXPECT(!(a != b));
+
+    a.append(42);
+    b.append(17);
+    EXPECT(!(a == b));
+    EXPECT(a != b);
+}
+
+TEST_CASE(should_compare_vectors_of_different_sizes)
+{
+    Vector<int, 0> a {};
+    Vector<int, 0> b {};
+
+    EXPECT(a == b);
+    EXPECT(!(a != b));
+
+    // A is longer
+    a.append(1);
+    EXPECT(!(a == b));
+    EXPECT(a != b);
+
+    b.append(1);
+    EXPECT(a == b);
+    EXPECT(!(a != b));
+
+    // B is longer
+    b.append(42);
+    EXPECT(!(a == b));
+    EXPECT(a != b);
 }
 
 TEST_MAIN(Vector)
