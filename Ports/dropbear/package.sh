@@ -1,4 +1,4 @@
-#!/bin/bash ../.port_include.sh
+#!/usr/bin/env -S bash ../.port_include.sh
 port=dropbear
 version=2019.78
 files="https://mirror.dropbear.nl/mirror/releases/dropbear-${version}.tar.bz2 dropbear-${version}.tar.bz2
@@ -12,5 +12,3 @@ useconfigure=true
 configopts="--disable-zlib "
 # Serenity's utmp is not fully compatible with what dropbear expects.
 configopts+="--disable-utmp --disable-wtmp --disable-login --disable-lastlog "
-# not added automatically
-configopts+="--enable-static"

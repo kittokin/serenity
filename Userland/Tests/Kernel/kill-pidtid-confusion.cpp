@@ -1,35 +1,15 @@
 /*
  * Copyright (c) 2020, Ben Wiederhake <BenWiederhake.GitHub@gmx.de>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Assertions.h>
-#include <AK/LogStream.h>
+#include <AK/Format.h>
 #include <LibPthread/pthread.h>
-#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 /*
@@ -68,7 +48,7 @@ static void fork_into(void(fn)())
         return;
     }
     fn();
-    dbg() << "child finished (?)";
+    dbgln("child finished (?)");
     exit(1);
 }
 
@@ -87,7 +67,7 @@ static void sleep_steps(useconds_t steps)
     const int rc = usleep(steps * STEP_SIZE);
     if (rc < 0) {
         perror("usleep");
-        ASSERT_NOT_REACHED();
+        VERIFY_NOT_REACHED();
     }
 }
 
@@ -108,12 +88,12 @@ int main(int, char**)
     // This entire function is the entirety of process PX.
 
     // Time 0: PX forks into PZ (mnemonic: Zombie)
-    dbg() << "PX forks into PZ";
+    dbgln("PX forks into PZ");
     fork_into(run_pz);
     sleep_steps(4);
 
     // Time 4:
-    dbg() << "Let's hope everything went fine!";
+    dbgln("Let's hope everything went fine!");
     pid_t guessed_pid = getpid() + 1;
     pid_t guessed_tid = guessed_pid + 1;
     printf("About to kill PID %d, TID %d.\n", guessed_pid, guessed_tid);
@@ -136,14 +116,14 @@ static void run_pz()
     sleep_steps(1);
 
     // Time 1: PZ's main thread T1 creates a new thread T2
-    dbg() << "PZ calls pthread_create";
+    dbgln("PZ calls pthread_create");
     thread_into(run_pz_t2_wrap);
     sleep_steps(2);
 
     // Time 3: T1 calls thread_exit()
-    dbg() << "PZ(T1) calls thread_exit";
+    dbgln("PZ(T1) calls thread_exit");
     pthread_exit(nullptr);
-    ASSERT_NOT_REACHED();
+    VERIFY_NOT_REACHED();
 }
 
 static void* run_pz_t2_wrap(void*)
@@ -160,7 +140,7 @@ static void run_pz_t2()
     // Time 2: Nothing
     // FIXME: For some reason, both printf() and dbg() crash.
     // This also prevents us from using a pipe to communicate to PX both process and thread ID
-    // dbg() << "T2: I'm alive and well.";
+    // dbgln("T2: I'm alive and well.");
     sleep_steps(18);
 
     // Time 20: Cleanup

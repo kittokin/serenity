@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Singleton.h>
@@ -40,8 +20,6 @@
 #include <Kernel/Time/TimeManagement.h>
 #include <Kernel/TimerQueue.h>
 #include <Kernel/VM/MemoryManager.h>
-
-//#define TIME_DEBUG
 
 namespace Kernel {
 
@@ -66,7 +44,7 @@ bool TimeManagement::is_valid_clock_id(clockid_t clock_id)
     };
 }
 
-KResultOr<timespec> TimeManagement::current_time(clockid_t clock_id) const
+Time TimeManagement::current_time(clockid_t clock_id) const
 {
     switch (clock_id) {
     case CLOCK_MONOTONIC:
@@ -80,7 +58,8 @@ KResultOr<timespec> TimeManagement::current_time(clockid_t clock_id) const
     case CLOCK_REALTIME_COARSE:
         return epoch_time(TimePrecision::Coarse);
     default:
-        return KResult(EINVAL);
+        // Syscall entrypoint is missing a is_valid_clock_id(..) check?
+        VERIFY_NOT_REACHED();
     }
 }
 
@@ -89,14 +68,15 @@ bool TimeManagement::is_system_timer(const HardwareTimerBase& timer) const
     return &timer == m_system_timer.ptr();
 }
 
-void TimeManagement::set_epoch_time(timespec ts)
+void TimeManagement::set_epoch_time(Time ts)
 {
     InterruptDisabler disabler;
-    m_epoch_time = ts;
+    // FIXME: Should use AK::Time internally
+    m_epoch_time = ts.to_timespec();
     m_remaining_epoch_time_adjustment = { 0, 0 };
 }
 
-timespec TimeManagement::monotonic_time(TimePrecision precision) const
+Time TimeManagement::monotonic_time(TimePrecision precision) const
 {
     // This is the time when last updated by an interrupt.
     u64 seconds;
@@ -120,14 +100,14 @@ timespec TimeManagement::monotonic_time(TimePrecision precision) const
         }
     } while (update_iteration != m_update2.load(AK::MemoryOrder::memory_order_acquire));
 
-    ASSERT(m_time_ticks_per_second > 0);
-    ASSERT(ticks < m_time_ticks_per_second);
+    VERIFY(m_time_ticks_per_second > 0);
+    VERIFY(ticks < m_time_ticks_per_second);
     u64 ns = ((u64)ticks * 1000000000ull) / m_time_ticks_per_second;
-    ASSERT(ns < 1000000000ull);
-    return { (long)seconds, (long)ns };
+    VERIFY(ns < 1000000000ull);
+    return Time::from_timespec({ (i64)seconds, (i32)ns });
 }
 
-timespec TimeManagement::epoch_time(TimePrecision) const
+Time TimeManagement::epoch_time(TimePrecision) const
 {
     // TODO: Take into account precision
     timespec ts;
@@ -136,21 +116,23 @@ timespec TimeManagement::epoch_time(TimePrecision) const
         update_iteration = m_update1.load(AK::MemoryOrder::memory_order_acquire);
         ts = m_epoch_time;
     } while (update_iteration != m_update2.load(AK::MemoryOrder::memory_order_acquire));
-    return ts;
+    return Time::from_timespec(ts);
 }
 
 u64 TimeManagement::uptime_ms() const
 {
-    auto mtime = monotonic_time();
+    auto mtime = monotonic_time().to_timespec();
+    // This overflows after 292 million years of uptime.
+    // Since this is only used for performance timestamps and sys$times, that's probably enough.
     u64 ms = mtime.tv_sec * 1000ull;
     ms += mtime.tv_nsec / 1000000;
     return ms;
 }
 
-void TimeManagement::initialize(u32 cpu)
+UNMAP_AFTER_INIT void TimeManagement::initialize(u32 cpu)
 {
     if (cpu == 0) {
-        ASSERT(!s_the.is_initialized());
+        VERIFY(!s_the.is_initialized());
         s_the.ensure_instance();
 
         // Initialize the APIC timers after the other timers as the
@@ -158,13 +140,13 @@ void TimeManagement::initialize(u32 cpu)
         // would trigger a deadlock trying to get the s_the instance while
         // creating it.
         if (auto* apic_timer = APIC::the().initialize_timers(*s_the->m_system_timer)) {
-            klog() << "Time: Using APIC timer as system timer";
+            dmesgln("Time: Using APIC timer as system timer");
             s_the->set_system_timer(*apic_timer);
         }
     } else {
-        ASSERT(s_the.is_initialized());
+        VERIFY(s_the.is_initialized());
         if (auto* apic_timer = APIC::the().get_timer()) {
-            klog() << "Time: Enable APIC timer on CPU #" << cpu;
+            dmesgln("Time: Enable APIC timer on CPU #{}", cpu);
             apic_timer->enable_local_timer();
         }
     }
@@ -172,7 +154,7 @@ void TimeManagement::initialize(u32 cpu)
 
 void TimeManagement::set_system_timer(HardwareTimerBase& timer)
 {
-    ASSERT(Processor::current().id() == 0); // This should only be called on the BSP!
+    VERIFY(Processor::is_bootstrap_processor()); // This should only be called on the BSP!
     auto original_callback = m_system_timer->set_callback(nullptr);
     m_system_timer->disable();
     timer.set_callback(move(original_callback));
@@ -189,15 +171,15 @@ time_t TimeManagement::boot_time() const
     return RTC::boot_time();
 }
 
-TimeManagement::TimeManagement()
+UNMAP_AFTER_INIT TimeManagement::TimeManagement()
 {
-    bool probe_non_legacy_hardware_timers = !(kernel_command_line().lookup("time").value_or("modern") == "legacy");
+    bool probe_non_legacy_hardware_timers = !(kernel_command_line().is_legacy_time_enabled());
     if (ACPI::is_enabled()) {
         if (!ACPI::Parser::the()->x86_specific_flags().cmos_rtc_not_present) {
             RTC::initialize();
             m_epoch_time.tv_sec += boot_time();
         } else {
-            klog() << "ACPI: RTC CMOS Not present";
+            dmesgln("ACPI: RTC CMOS Not present");
         }
     } else {
         // We just assume that we can access RTC CMOS, if ACPI isn't usable.
@@ -207,24 +189,21 @@ TimeManagement::TimeManagement()
     if (probe_non_legacy_hardware_timers) {
         if (!probe_and_set_non_legacy_hardware_timers())
             if (!probe_and_set_legacy_hardware_timers())
-                ASSERT_NOT_REACHED();
+                VERIFY_NOT_REACHED();
     } else if (!probe_and_set_legacy_hardware_timers()) {
-        ASSERT_NOT_REACHED();
+        VERIFY_NOT_REACHED();
     }
 }
 
-timeval TimeManagement::now_as_timeval()
+Time TimeManagement::now()
 {
-    timespec ts = s_the.ptr()->epoch_time();
-    timeval tv;
-    timespec_to_timeval(ts, tv);
-    return tv;
+    return s_the.ptr()->epoch_time();
 }
 
-Vector<HardwareTimerBase*> TimeManagement::scan_and_initialize_periodic_timers()
+UNMAP_AFTER_INIT Vector<HardwareTimerBase*> TimeManagement::scan_and_initialize_periodic_timers()
 {
     bool should_enable = is_hpet_periodic_mode_allowed();
-    dbg() << "Time: Scanning for periodic timers";
+    dbgln("Time: Scanning for periodic timers");
     Vector<HardwareTimerBase*> timers;
     for (auto& hardware_timer : m_hardware_timers) {
         if (hardware_timer.is_periodic_capable()) {
@@ -236,9 +215,9 @@ Vector<HardwareTimerBase*> TimeManagement::scan_and_initialize_periodic_timers()
     return timers;
 }
 
-Vector<HardwareTimerBase*> TimeManagement::scan_for_non_periodic_timers()
+UNMAP_AFTER_INIT Vector<HardwareTimerBase*> TimeManagement::scan_for_non_periodic_timers()
 {
-    dbg() << "Time: Scanning for non-periodic timers";
+    dbgln("Time: Scanning for non-periodic timers");
     Vector<HardwareTimerBase*> timers;
     for (auto& hardware_timer : m_hardware_timers) {
         if (!hardware_timer.is_periodic_capable())
@@ -249,25 +228,27 @@ Vector<HardwareTimerBase*> TimeManagement::scan_for_non_periodic_timers()
 
 bool TimeManagement::is_hpet_periodic_mode_allowed()
 {
-    auto hpet_mode = kernel_command_line().lookup("hpet").value_or("periodic");
-    if (hpet_mode == "periodic")
+    switch (kernel_command_line().hpet_mode()) {
+    case HPETMode::Periodic:
         return true;
-    if (hpet_mode == "nonperiodic")
+    case HPETMode::NonPeriodic:
         return false;
-    ASSERT_NOT_REACHED();
+    default:
+        VERIFY_NOT_REACHED();
+    }
 }
 
-bool TimeManagement::probe_and_set_non_legacy_hardware_timers()
+UNMAP_AFTER_INIT bool TimeManagement::probe_and_set_non_legacy_hardware_timers()
 {
     if (!ACPI::is_enabled())
         return false;
     if (!HPET::test_and_initialize())
         return false;
     if (!HPET::the().comparators().size()) {
-        dbg() << "HPET initialization aborted.";
+        dbgln("HPET initialization aborted.");
         return false;
     }
-    dbg() << "HPET: Setting appropriate functions to timers.";
+    dbgln("HPET: Setting appropriate functions to timers.");
 
     for (auto& hpet_comparator : HPET::the().comparators())
         m_hardware_timers.append(hpet_comparator);
@@ -276,9 +257,9 @@ bool TimeManagement::probe_and_set_non_legacy_hardware_timers()
     auto non_periodic_timers = scan_for_non_periodic_timers();
 
     if (is_hpet_periodic_mode_allowed())
-        ASSERT(!periodic_timers.is_empty());
+        VERIFY(!periodic_timers.is_empty());
 
-    ASSERT(periodic_timers.size() + non_periodic_timers.size() > 0);
+    VERIFY(periodic_timers.size() + non_periodic_timers.size() > 0);
 
     if (periodic_timers.size() > 0)
         m_system_timer = periodic_timers[0];
@@ -289,7 +270,7 @@ bool TimeManagement::probe_and_set_non_legacy_hardware_timers()
         // Update the time. We don't really care too much about the
         // frequency of the interrupt because we'll query the main
         // counter to get an accurate time.
-        if (Processor::current().id() == 0) {
+        if (Processor::is_bootstrap_processor()) {
             // TODO: Have the other CPUs call system_timer_tick directly
             increment_time_since_boot_hpet();
         }
@@ -311,14 +292,14 @@ bool TimeManagement::probe_and_set_non_legacy_hardware_timers()
     return true;
 }
 
-bool TimeManagement::probe_and_set_legacy_hardware_timers()
+UNMAP_AFTER_INIT bool TimeManagement::probe_and_set_legacy_hardware_timers()
 {
     if (ACPI::is_enabled()) {
         if (ACPI::Parser::the()->x86_specific_flags().cmos_rtc_not_present) {
-            dbg() << "ACPI: CMOS RTC Not Present";
+            dbgln("ACPI: CMOS RTC Not Present");
             return false;
         } else {
-            dbg() << "ACPI: CMOS RTC Present";
+            dbgln("ACPI: CMOS RTC Present");
         }
     }
 
@@ -339,8 +320,8 @@ void TimeManagement::update_time(const RegisterState&)
 
 void TimeManagement::increment_time_since_boot_hpet()
 {
-    ASSERT(!m_time_keeper_timer.is_null());
-    ASSERT(m_time_keeper_timer->timer_type() == HardwareTimerType::HighPrecisionEventTimer);
+    VERIFY(!m_time_keeper_timer.is_null());
+    VERIFY(m_time_keeper_timer->timer_type() == HardwareTimerType::HighPrecisionEventTimer);
 
     // NOTE: m_seconds_since_boot and m_ticks_this_second are only ever
     // updated here! So we can safely read that information, query the clock,
@@ -361,7 +342,7 @@ void TimeManagement::increment_time_since_boot_hpet()
 
 void TimeManagement::increment_time_since_boot()
 {
-    ASSERT(!m_time_keeper_timer.is_null());
+    VERIFY(!m_time_keeper_timer.is_null());
 
     // Compute time adjustment for adjtime. Let the clock run up to 1% fast or slow.
     // That way, adjtime can adjust up to 36 seconds per hour, without time getting very jumpy.

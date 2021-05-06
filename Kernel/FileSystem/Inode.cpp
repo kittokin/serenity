@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/NonnullRefPtrVector.h>
@@ -49,7 +29,7 @@ SpinLock<u32>& Inode::all_inodes_lock()
 
 InlineLinkedList<Inode>& Inode::all_with_lock()
 {
-    ASSERT(s_all_inodes_lock.is_locked());
+    VERIFY(s_all_inodes_lock.is_locked());
 
     return *s_list;
 }
@@ -66,7 +46,7 @@ void Inode::sync()
     }
 
     for (auto& inode : inodes) {
-        ASSERT(inode.is_metadata_dirty());
+        VERIFY(inode.is_metadata_dirty());
         inode.flush_metadata();
     }
 }
@@ -80,10 +60,11 @@ KResultOr<NonnullOwnPtr<KBuffer>> Inode::read_entire(FileDescription* descriptio
     off_t offset = 0;
     for (;;) {
         auto buf = UserOrKernelBuffer::for_kernel_buffer(buffer);
-        nread = read_bytes(offset, sizeof(buffer), buf, description);
-        if (nread < 0)
-            return KResult(nread);
-        ASSERT(nread <= (ssize_t)sizeof(buffer));
+        auto result = read_bytes(offset, sizeof(buffer), buf, description);
+        if (result.is_error())
+            return result.error();
+        nread = result.value();
+        VERIFY(nread <= (ssize_t)sizeof(buffer));
         if (nread <= 0)
             break;
         builder.append((const char*)buffer, nread);
@@ -92,13 +73,13 @@ KResultOr<NonnullOwnPtr<KBuffer>> Inode::read_entire(FileDescription* descriptio
             break;
     }
     if (nread < 0) {
-        klog() << "Inode::read_entire: ERROR: " << nread;
-        return KResult(nread);
+        dmesgln("Inode::read_entire: Error: {}", nread);
+        return KResult((ErrnoCode)-nread);
     }
 
     auto entire_file = builder.build();
     if (!entire_file)
-        return KResult(-ENOMEM);
+        return ENOMEM;
     return entire_file.release_nonnull();
 }
 
@@ -116,7 +97,7 @@ KResultOr<NonnullRefPtr<Custody>> Inode::resolve_as_link(Custody& base, RefPtr<C
     return VFS::the().resolve_path(path, base, out_parent, options, symlink_recursion_level);
 }
 
-Inode::Inode(FS& fs, unsigned index)
+Inode::Inode(FS& fs, InodeIndex index)
     : m_fs(fs)
     , m_index(index)
 {
@@ -132,55 +113,45 @@ Inode::~Inode()
 
 void Inode::will_be_destroyed()
 {
+    Locker locker(m_lock);
     if (m_metadata_dirty)
         flush_metadata();
 }
 
-void Inode::inode_contents_changed(off_t offset, ssize_t size, const UserOrKernelBuffer& data)
+KResult Inode::set_atime(time_t)
 {
-    if (auto shared_vmobject = this->shared_vmobject())
-        shared_vmobject->inode_contents_changed({}, offset, size, data);
+    return ENOTIMPL;
 }
 
-void Inode::inode_size_changed(size_t old_size, size_t new_size)
+KResult Inode::set_ctime(time_t)
 {
-    if (auto shared_vmobject = this->shared_vmobject())
-        shared_vmobject->inode_size_changed({}, old_size, new_size);
+    return ENOTIMPL;
 }
 
-int Inode::set_atime(time_t)
+KResult Inode::set_mtime(time_t)
 {
-    return -ENOTIMPL;
-}
-
-int Inode::set_ctime(time_t)
-{
-    return -ENOTIMPL;
-}
-
-int Inode::set_mtime(time_t)
-{
-    return -ENOTIMPL;
+    return ENOTIMPL;
 }
 
 KResult Inode::increment_link_count()
 {
-    return KResult(-ENOTIMPL);
+    return ENOTIMPL;
 }
 
 KResult Inode::decrement_link_count()
 {
-    return KResult(-ENOTIMPL);
+    return ENOTIMPL;
 }
 
 void Inode::set_shared_vmobject(SharedInodeVMObject& vmobject)
 {
+    Locker locker(m_lock);
     m_shared_vmobject = vmobject;
 }
 
 bool Inode::bind_socket(LocalSocket& socket)
 {
-    LOCKER(m_lock);
+    Locker locker(m_lock);
     if (m_socket)
         return false;
     m_socket = socket;
@@ -189,7 +160,7 @@ bool Inode::bind_socket(LocalSocket& socket)
 
 bool Inode::unbind_socket()
 {
-    LOCKER(m_lock);
+    Locker locker(m_lock);
     if (!m_socket)
         return false;
     m_socket = nullptr;
@@ -198,32 +169,40 @@ bool Inode::unbind_socket()
 
 void Inode::register_watcher(Badge<InodeWatcher>, InodeWatcher& watcher)
 {
-    LOCKER(m_lock);
-    ASSERT(!m_watchers.contains(&watcher));
+    Locker locker(m_lock);
+    VERIFY(!m_watchers.contains(&watcher));
     m_watchers.set(&watcher);
 }
 
 void Inode::unregister_watcher(Badge<InodeWatcher>, InodeWatcher& watcher)
 {
-    LOCKER(m_lock);
-    ASSERT(m_watchers.contains(&watcher));
+    Locker locker(m_lock);
+    VERIFY(m_watchers.contains(&watcher));
     m_watchers.remove(&watcher);
 }
 
-FIFO& Inode::fifo()
+NonnullRefPtr<FIFO> Inode::fifo()
 {
-    ASSERT(metadata().is_fifo());
+    Locker locker(m_lock);
+    VERIFY(metadata().is_fifo());
 
     // FIXME: Release m_fifo when it is closed by all readers and writers
     if (!m_fifo)
         m_fifo = FIFO::create(metadata().uid);
 
-    ASSERT(m_fifo);
+    VERIFY(m_fifo);
     return *m_fifo;
 }
 
 void Inode::set_metadata_dirty(bool metadata_dirty)
 {
+    Locker locker(m_lock);
+
+    if (metadata_dirty) {
+        // Sanity check.
+        VERIFY(!fs().is_readonly());
+    }
+
     if (m_metadata_dirty == metadata_dirty)
         return;
 
@@ -231,7 +210,6 @@ void Inode::set_metadata_dirty(bool metadata_dirty)
     if (m_metadata_dirty) {
         // FIXME: Maybe we should hook into modification events somewhere else, I'm not sure where.
         //        We don't always end up on this particular code path, for instance when writing to an ext2fs file.
-        LOCKER(m_lock);
         for (auto& watcher : m_watchers) {
             watcher->notify_inode_event({}, InodeWatcherEvent::Type::Modified);
         }
@@ -240,7 +218,7 @@ void Inode::set_metadata_dirty(bool metadata_dirty)
 
 void Inode::did_add_child(const InodeIdentifier& child_id)
 {
-    LOCKER(m_lock);
+    Locker locker(m_lock);
     for (auto& watcher : m_watchers) {
         watcher->notify_child_added({}, child_id);
     }
@@ -248,7 +226,7 @@ void Inode::did_add_child(const InodeIdentifier& child_id)
 
 void Inode::did_remove_child(const InodeIdentifier& child_id)
 {
-    LOCKER(m_lock);
+    Locker locker(m_lock);
     for (auto& watcher : m_watchers) {
         watcher->notify_child_removed({}, child_id);
     }
@@ -258,12 +236,12 @@ KResult Inode::prepare_to_write_data()
 {
     // FIXME: It's a poor design that filesystems are expected to call this before writing out data.
     //        We should funnel everything through an interface at the VFS layer so this can happen from a single place.
-    LOCKER(m_lock);
+    Locker locker(m_lock);
     if (fs().is_readonly())
-        return KResult(-EROFS);
+        return EROFS;
     auto metadata = this->metadata();
     if (metadata.is_setuid() || metadata.is_setgid()) {
-        dbg() << "Inode::prepare_to_write_data(): Stripping SUID/SGID bits from " << identifier();
+        dbgln("Inode::prepare_to_write_data(): Stripping SUID/SGID bits from {}", identifier());
         return chmod(metadata.mode & ~(04000 | 02000));
     }
     return KSuccess;
@@ -271,11 +249,13 @@ KResult Inode::prepare_to_write_data()
 
 RefPtr<SharedInodeVMObject> Inode::shared_vmobject() const
 {
+    Locker locker(m_lock);
     return m_shared_vmobject.strong_ref();
 }
 
 bool Inode::is_shared_vmobject(const SharedInodeVMObject& other) const
 {
+    Locker locker(m_lock);
     return m_shared_vmobject.unsafe_ptr() == &other;
 }
 

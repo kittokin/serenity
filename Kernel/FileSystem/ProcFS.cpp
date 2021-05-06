@@ -1,39 +1,22 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Spencer Dixon <spencercdixon@gmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/JsonArraySerializer.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonObjectSerializer.h>
 #include <AK/JsonValue.h>
-#include <Kernel/Arch/i386/CPU.h>
-#include <Kernel/Arch/i386/ProcessorInfo.h>
+#include <AK/ScopeGuard.h>
+#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/ProcessorInfo.h>
 #include <Kernel/CommandLine.h>
 #include <Kernel/Console.h>
+#include <Kernel/DMI.h>
+#include <Kernel/Debug.h>
 #include <Kernel/Devices/BlockDevice.h>
-#include <Kernel/Devices/KeyboardDevice.h>
+#include <Kernel/Devices/HID/HIDManagement.h>
 #include <Kernel/FileSystem/Custody.h>
 #include <Kernel/FileSystem/FileBackedFileSystem.h>
 #include <Kernel/FileSystem/FileDescription.h>
@@ -43,7 +26,6 @@
 #include <Kernel/Interrupts/GenericInterruptHandler.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
 #include <Kernel/KBufferBuilder.h>
-#include <Kernel/KSyms.h>
 #include <Kernel/Module.h>
 #include <Kernel/Net/LocalSocket.h>
 #include <Kernel/Net/NetworkAdapter.h>
@@ -51,16 +33,15 @@
 #include <Kernel/Net/TCPSocket.h>
 #include <Kernel/Net/UDPSocket.h>
 #include <Kernel/PCI/Access.h>
+#include <Kernel/PerformanceEventBuffer.h>
 #include <Kernel/Process.h>
-#include <Kernel/Profiling.h>
 #include <Kernel/Scheduler.h>
 #include <Kernel/StdLib.h>
 #include <Kernel/TTY/TTY.h>
+#include <Kernel/UBSanitizer.h>
+#include <Kernel/VM/AnonymousVMObject.h>
 #include <Kernel/VM/MemoryManager.h>
-#include <Kernel/VM/PurgeableVMObject.h>
 #include <LibC/errno_numbers.h>
-
-//#define PROCFS_DEBUG
 
 namespace Kernel {
 
@@ -81,15 +62,14 @@ enum ProcFileType {
     FI_Root = 1, // directory
 
     __FI_Root_Start,
-    FI_Root_mm,
-    FI_Root_mounts,
     FI_Root_df,
     FI_Root_all,
     FI_Root_memstat,
     FI_Root_cpuinfo,
-    FI_Root_inodes,
     FI_Root_dmesg,
     FI_Root_interrupts,
+    FI_Root_dmi,
+    FI_Root_smbios_entry_point,
     FI_Root_keymap,
     FI_Root_pci,
     FI_Root_devices,
@@ -113,8 +93,8 @@ enum ProcFileType {
     FI_PID,
 
     __FI_PID_Start,
+    FI_PID_perf_events,
     FI_PID_vm,
-    FI_PID_vmobjects,
     FI_PID_stacks, // directory
     FI_PID_fds,
     FI_PID_unveil,
@@ -129,10 +109,7 @@ enum ProcFileType {
 
 static inline ProcessID to_pid(const InodeIdentifier& identifier)
 {
-#ifdef PROCFS_DEBUG
-    dbg() << "to_pid, index=" << String::format("%08x", identifier.index()) << " -> " << (identifier.index() >> 16);
-#endif
-    return identifier.index() >> 16u;
+    return identifier.index().value() >> 16u;
 }
 
 static inline ThreadID to_tid(const InodeIdentifier& identifier)
@@ -143,25 +120,25 @@ static inline ThreadID to_tid(const InodeIdentifier& identifier)
 
 static inline ProcParentDirectory to_proc_parent_directory(const InodeIdentifier& identifier)
 {
-    return (ProcParentDirectory)((identifier.index() >> 12) & 0xf);
+    return (ProcParentDirectory)((identifier.index().value() >> 12) & 0xf);
 }
 
 static inline ProcFileType to_proc_file_type(const InodeIdentifier& identifier)
 {
-    return (ProcFileType)(identifier.index() & 0xff);
+    return (ProcFileType)(identifier.index().value() & 0xff);
 }
 
 static inline int to_fd(const InodeIdentifier& identifier)
 {
-    ASSERT(to_proc_parent_directory(identifier) == PDI_PID_fd);
-    return (identifier.index() & 0xff) - FI_MaxStaticFileIndex;
+    VERIFY(to_proc_parent_directory(identifier) == PDI_PID_fd);
+    return (identifier.index().value() & 0xff) - FI_MaxStaticFileIndex;
 }
 
 static inline size_t to_sys_index(const InodeIdentifier& identifier)
 {
-    ASSERT(to_proc_parent_directory(identifier) == PDI_Root_sys);
-    ASSERT(to_proc_file_type(identifier) == FI_Root_sys_variable);
-    return identifier.index() >> 16u;
+    VERIFY(to_proc_parent_directory(identifier) == PDI_Root_sys);
+    VERIFY(to_proc_file_type(identifier) == FI_Root_sys_variable);
+    return identifier.index().value() >> 16u;
 }
 
 static inline InodeIdentifier to_identifier(unsigned fsid, ProcParentDirectory parent, ProcessID pid, ProcFileType proc_file_type)
@@ -181,7 +158,7 @@ static inline InodeIdentifier to_identifier_with_stack(unsigned fsid, ThreadID t
 
 static inline InodeIdentifier sys_var_to_identifier(unsigned fsid, unsigned index)
 {
-    ASSERT(index < 256);
+    VERIFY(index < 256);
     return { fsid, (PDI_Root_sys << 12u) | (index << 16u) | FI_Root_sys_variable };
 }
 
@@ -202,7 +179,7 @@ static inline InodeIdentifier to_parent_id(const InodeIdentifier& identifier)
     case PDI_PID_stacks:
         return to_identifier(identifier.fsid(), PDI_PID, to_pid(identifier), FI_PID_stacks);
     }
-    ASSERT_NOT_REACHED();
+    VERIFY_NOT_REACHED();
 }
 
 #if 0
@@ -253,28 +230,31 @@ static inline bool is_persistent_inode(const InodeIdentifier& identifier)
     return to_proc_parent_directory(identifier) == PDI_Root_sys;
 }
 
+struct ProcFSInodeData : public FileDescriptionData {
+    RefPtr<KBufferImpl> buffer;
+};
+
 NonnullRefPtr<ProcFS> ProcFS::create()
 {
-    return adopt(*new ProcFS);
+    return adopt_ref(*new ProcFS);
 }
 
 ProcFS::~ProcFS()
 {
 }
 
-static OwnPtr<KBuffer> procfs$pid_fds(InodeIdentifier identifier)
+static bool procfs$pid_fds(InodeIdentifier identifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
 
     auto process = Process::from_pid(to_pid(identifier));
     if (!process) {
         array.finish();
-        return builder.build();
+        return true;
     }
     if (process->number_of_open_file_descriptors() == 0) {
         array.finish();
-        return builder.build();
+        return true;
     }
 
     for (int i = 0; i < process->max_open_file_descriptors(); ++i) {
@@ -295,60 +275,59 @@ static OwnPtr<KBuffer> procfs$pid_fds(InodeIdentifier identifier)
         description_object.add("can_write", description->can_write());
     }
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$pid_fd_entry(InodeIdentifier identifier)
+static bool procfs$pid_fd_entry(InodeIdentifier identifier, KBufferBuilder& builder)
 {
     auto process = Process::from_pid(to_pid(identifier));
     if (!process)
-        return {};
+        return false;
     int fd = to_fd(identifier);
     auto description = process->file_description(fd);
     if (!description)
-        return {};
-    return KBuffer::try_create_with_bytes(description->absolute_path().bytes());
+        return false;
+    builder.append_bytes(description->absolute_path().bytes());
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$pid_vm(InodeIdentifier identifier)
+static bool procfs$pid_vm(InodeIdentifier identifier, KBufferBuilder& builder)
 {
     auto process = Process::from_pid(to_pid(identifier));
     if (!process)
-        return {};
-    KBufferBuilder builder;
+        return false;
     JsonArraySerializer array { builder };
     {
-        ScopedSpinLock lock(process->get_lock());
-        for (auto& region : process->regions()) {
-            if (!region.is_user_accessible() && !Process::current()->is_superuser())
+        ScopedSpinLock lock(process->space().get_lock());
+        for (auto& region : process->space().regions()) {
+            if (!region->is_user() && !Process::current()->is_superuser())
                 continue;
             auto region_object = array.add_object();
-            region_object.add("readable", region.is_readable());
-            region_object.add("writable", region.is_writable());
-            region_object.add("executable", region.is_executable());
-            region_object.add("stack", region.is_stack());
-            region_object.add("shared", region.is_shared());
-            region_object.add("user_accessible", region.is_user_accessible());
-            region_object.add("purgeable", region.vmobject().is_purgeable());
-            if (region.vmobject().is_purgeable()) {
-                region_object.add("volatile", static_cast<const PurgeableVMObject&>(region.vmobject()).is_volatile());
+            region_object.add("readable", region->is_readable());
+            region_object.add("writable", region->is_writable());
+            region_object.add("executable", region->is_executable());
+            region_object.add("stack", region->is_stack());
+            region_object.add("shared", region->is_shared());
+            region_object.add("syscall", region->is_syscall_region());
+            region_object.add("purgeable", region->vmobject().is_anonymous());
+            if (region->vmobject().is_anonymous()) {
+                region_object.add("volatile", static_cast<const AnonymousVMObject&>(region->vmobject()).is_any_volatile());
             }
-            region_object.add("cacheable", region.is_cacheable());
-            region_object.add("kernel", region.is_kernel());
-            region_object.add("address", region.vaddr().get());
-            region_object.add("size", region.size());
-            region_object.add("amount_resident", region.amount_resident());
-            region_object.add("amount_dirty", region.amount_dirty());
-            region_object.add("cow_pages", region.cow_pages());
-            region_object.add("name", region.name());
-            region_object.add("vmobject", region.vmobject().class_name());
+            region_object.add("cacheable", region->is_cacheable());
+            region_object.add("address", region->vaddr().get());
+            region_object.add("size", region->size());
+            region_object.add("amount_resident", region->amount_resident());
+            region_object.add("amount_dirty", region->amount_dirty());
+            region_object.add("cow_pages", region->cow_pages());
+            region_object.add("name", region->name());
+            region_object.add("vmobject", region->vmobject().class_name());
 
             StringBuilder pagemap_builder;
-            for (size_t i = 0; i < region.page_count(); ++i) {
-                auto* page = region.physical_page(i);
+            for (size_t i = 0; i < region->page_count(); ++i) {
+                auto* page = region->physical_page(i);
                 if (!page)
                     pagemap_builder.append('N');
-                else if (page->is_shared_zero_page())
+                else if (page->is_shared_zero_page() || page->is_lazy_committed_page())
                     pagemap_builder.append('Z');
                 else
                     pagemap_builder.append('P');
@@ -357,18 +336,17 @@ static OwnPtr<KBuffer> procfs$pid_vm(InodeIdentifier identifier)
         }
     }
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$pci(InodeIdentifier)
+static bool procfs$pci(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     PCI::enumerate([&array](PCI::Address address, PCI::ID id) {
         auto obj = array.add_object();
         obj.add("seg", address.seg());
         obj.add("bus", address.bus());
-        obj.add("slot", address.slot());
+        obj.add("device", address.device());
         obj.add("function", address.function());
         obj.add("vendor_id", id.vendor_id);
         obj.add("device_id", id.device_id);
@@ -379,12 +357,29 @@ static OwnPtr<KBuffer> procfs$pci(InodeIdentifier)
         obj.add("subsystem_vendor_id", PCI::get_subsystem_vendor_id(address));
     });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$interrupts(InodeIdentifier)
+static bool procfs$dmi(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
+    if (!DMIExpose::the().is_available())
+        return false;
+    auto structures_ptr = DMIExpose::the().structure_table();
+    builder.append_bytes(ReadonlyBytes { structures_ptr->data(), structures_ptr->size() });
+    return true;
+}
+
+static bool procfs$smbios_entry_point(InodeIdentifier, KBufferBuilder& builder)
+{
+    if (!DMIExpose::the().is_available())
+        return false;
+    auto structures_ptr = DMIExpose::the().entry_point();
+    builder.append_bytes(ReadonlyBytes { structures_ptr->data(), structures_ptr->size() });
+    return true;
+}
+
+static bool procfs$interrupts(InodeIdentifier, KBufferBuilder& builder)
+{
     JsonArraySerializer array { builder };
     InterruptManagement::the().enumerate_interrupt_handlers([&array](GenericInterruptHandler& handler) {
         auto obj = array.add_object();
@@ -396,21 +391,19 @@ static OwnPtr<KBuffer> procfs$interrupts(InodeIdentifier)
         obj.add("call_count", (unsigned)handler.get_invoking_count());
     });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$keymap(InodeIdentifier)
+static bool procfs$keymap(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonObjectSerializer<KBufferBuilder> json { builder };
-    json.add("keymap", KeyboardDevice::the().keymap_name());
+    json.add("keymap", HIDManagement::the().keymap_name());
     json.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$devices(InodeIdentifier)
+static bool procfs$devices(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     Device::for_each([&array](auto& device) {
         auto obj = array.add_object();
@@ -423,31 +416,28 @@ static OwnPtr<KBuffer> procfs$devices(InodeIdentifier)
         else if (device.is_character_device())
             obj.add("type", "character");
         else
-            ASSERT_NOT_REACHED();
+            VERIFY_NOT_REACHED();
     });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$uptime(InodeIdentifier)
+static bool procfs$uptime(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
-    builder.appendf("%llu\n", TimeManagement::the().uptime_ms() / 1000);
-    return builder.build();
+    builder.appendff("{}\n", TimeManagement::the().uptime_ms() / 1000);
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$cmdline(InodeIdentifier)
+static bool procfs$cmdline(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     builder.append(kernel_command_line().string());
     builder.append('\n');
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$modules(InodeIdentifier)
+static bool procfs$modules(InodeIdentifier, KBufferBuilder& builder)
 {
     extern HashMap<String, OwnPtr<Module>>* g_modules;
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     for (auto& it : *g_modules) {
         auto obj = array.add_object();
@@ -461,44 +451,31 @@ static OwnPtr<KBuffer> procfs$modules(InodeIdentifier)
         obj.add("size", size);
     }
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$profile(InodeIdentifier)
+static bool procfs$profile(InodeIdentifier, KBufferBuilder& builder)
 {
+    extern PerformanceEventBuffer* g_global_perf_events;
+    if (!g_global_perf_events)
+        return false;
+
+    return g_global_perf_events->to_json(builder);
+}
+
+static bool procfs$pid_perf_events(InodeIdentifier identifier, KBufferBuilder& builder)
+{
+    auto process = Process::from_pid(to_pid(identifier));
+    if (!process)
+        return false;
     InterruptDisabler disabler;
-    KBufferBuilder builder;
-
-    JsonObjectSerializer object(builder);
-    object.add("pid", Profiling::pid().value());
-    object.add("executable", Profiling::executable_path());
-
-    auto array = object.add_array("events");
-    bool mask_kernel_addresses = !Process::current()->is_superuser();
-    Profiling::for_each_sample([&](auto& sample) {
-        auto object = array.add_object();
-        object.add("type", "sample");
-        object.add("tid", sample.tid.value());
-        object.add("timestamp", sample.timestamp);
-        auto frames_array = object.add_array("stack");
-        for (size_t i = 0; i < Profiling::max_stack_frame_count; ++i) {
-            if (sample.frames[i] == 0)
-                break;
-            u32 address = (u32)sample.frames[i];
-            if (mask_kernel_addresses && !is_user_address(VirtualAddress(address)))
-                address = 0xdeadc0de;
-            frames_array.add(address);
-        }
-        frames_array.finish();
-    });
-    array.finish();
-    object.finish();
-    return builder.build();
+    if (!process->perf_events())
+        return false;
+    return process->perf_events()->to_json(builder);
 }
 
-static OwnPtr<KBuffer> procfs$net_adapters(InodeIdentifier)
+static bool procfs$net_adapters(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     NetworkAdapter::for_each([&array](auto& adapter) {
         auto obj = array.add_object();
@@ -519,26 +496,24 @@ static OwnPtr<KBuffer> procfs$net_adapters(InodeIdentifier)
         obj.add("mtu", adapter.mtu());
     });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$net_arp(InodeIdentifier)
+static bool procfs$net_arp(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
-    LOCKER(arp_table().lock(), Lock::Mode::Shared);
+    Locker locker(arp_table().lock(), Lock::Mode::Shared);
     for (auto& it : arp_table().resource()) {
         auto obj = array.add_object();
         obj.add("mac_address", it.value.to_string());
         obj.add("ip_address", it.key.to_string());
     }
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$net_tcp(InodeIdentifier)
+static bool procfs$net_tcp(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     TCPSocket::for_each([&array](auto& socket) {
         auto obj = array.add_object();
@@ -555,12 +530,11 @@ static OwnPtr<KBuffer> procfs$net_tcp(InodeIdentifier)
         obj.add("bytes_out", socket.bytes_out());
     });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$net_udp(InodeIdentifier)
+static bool procfs$net_udp(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     UDPSocket::for_each([&array](auto& socket) {
         auto obj = array.add_object();
@@ -570,12 +544,11 @@ static OwnPtr<KBuffer> procfs$net_udp(InodeIdentifier)
         obj.add("peer_port", socket.peer_port());
     });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$net_local(InodeIdentifier)
+static bool procfs$net_local(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     LocalSocket::for_each([&array](auto& socket) {
         auto obj = array.add_object();
@@ -588,50 +561,14 @@ static OwnPtr<KBuffer> procfs$net_local(InodeIdentifier)
         obj.add("acceptor_gid", socket.acceptor_gid());
     });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$pid_vmobjects(InodeIdentifier identifier)
+static bool procfs$pid_unveil(InodeIdentifier identifier, KBufferBuilder& builder)
 {
     auto process = Process::from_pid(to_pid(identifier));
     if (!process)
-        return {};
-    KBufferBuilder builder;
-    builder.appendf("BEGIN       END         SIZE        NAME\n");
-    {
-        ScopedSpinLock lock(process->get_lock());
-        for (auto& region : process->regions()) {
-            builder.appendf("%x -- %x    %x    %s\n",
-                region.vaddr().get(),
-                region.vaddr().offset(region.size() - 1).get(),
-                region.size(),
-                region.name().characters());
-            builder.appendf("VMO: %s @ %x(%u)\n",
-                region.vmobject().is_anonymous() ? "anonymous" : "file-backed",
-                &region.vmobject(),
-                region.vmobject().ref_count());
-            for (size_t i = 0; i < region.vmobject().page_count(); ++i) {
-                auto& physical_page = region.vmobject().physical_pages()[i];
-                bool should_cow = false;
-                if (i >= region.first_page_index() && i <= region.last_page_index())
-                    should_cow = region.should_cow(i - region.first_page_index());
-                builder.appendf("P%x%s(%u) ",
-                    physical_page ? physical_page->paddr().get() : 0,
-                    should_cow ? "!" : "",
-                    physical_page ? physical_page->ref_count() : 0);
-            }
-            builder.appendf("\n");
-        }
-    }
-    return builder.build();
-}
-
-static OwnPtr<KBuffer> procfs$pid_unveil(InodeIdentifier identifier)
-{
-    auto process = Process::from_pid(to_pid(identifier));
-    if (!process)
-        return {};
-    KBufferBuilder builder;
+        return false;
     JsonArraySerializer array { builder };
     for (auto& unveiled_path : process->unveiled_paths()) {
         if (!unveiled_path.was_explicitly_unveiled())
@@ -652,105 +589,78 @@ static OwnPtr<KBuffer> procfs$pid_unveil(InodeIdentifier identifier)
         obj.add("permissions", permissions_builder.to_string());
     }
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$tid_stack(InodeIdentifier identifier)
+static bool procfs$tid_stack(InodeIdentifier identifier, KBufferBuilder& builder)
 {
     auto thread = Thread::from_tid(to_tid(identifier));
     if (!thread)
-        return {};
-    KBufferBuilder builder;
-    builder.appendf("Thread %d (%s):\n", thread->tid().value(), thread->name().characters());
-    builder.append(thread->backtrace());
-    return builder.build();
+        return false;
+
+    JsonArraySerializer array { builder };
+    bool show_kernel_addresses = Process::current()->is_superuser();
+    bool kernel_address_added = false;
+    for (auto address : Processor::capture_stack_trace(*thread, 1024)) {
+        if (!show_kernel_addresses && !is_user_address(VirtualAddress { address })) {
+            if (kernel_address_added)
+                continue;
+            address = 0xdeadc0de;
+            kernel_address_added = true;
+        }
+        array.add(JsonValue(address));
+    }
+
+    array.finish();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$pid_exe(InodeIdentifier identifier)
+static bool procfs$pid_exe(InodeIdentifier identifier, KBufferBuilder& builder)
 {
     auto process = Process::from_pid(to_pid(identifier));
     if (!process)
-        return {};
+        return false;
     auto* custody = process->executable();
-    ASSERT(custody);
-    return KBuffer::try_create_with_bytes(custody->absolute_path().bytes());
+    VERIFY(custody);
+    builder.append(custody->absolute_path().bytes());
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$pid_cwd(InodeIdentifier identifier)
+static bool procfs$pid_cwd(InodeIdentifier identifier, KBufferBuilder& builder)
 {
     auto process = Process::from_pid(to_pid(identifier));
     if (!process)
-        return {};
-    return KBuffer::try_create_with_bytes(process->current_directory().absolute_path().bytes());
+        return false;
+    builder.append_bytes(process->current_directory().absolute_path().bytes());
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$pid_root(InodeIdentifier identifier)
+static bool procfs$pid_root(InodeIdentifier identifier, KBufferBuilder& builder)
 {
     auto process = Process::from_pid(to_pid(identifier));
     if (!process)
-        return {};
-    return KBuffer::try_create_with_bytes(process->root_directory_relative_to_global_root().absolute_path().to_byte_buffer());
+        return false;
+    builder.append_bytes(process->root_directory_relative_to_global_root().absolute_path().to_byte_buffer());
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$self(InodeIdentifier)
+static bool procfs$self(InodeIdentifier, KBufferBuilder& builder)
 {
-    char buffer[16];
-    int written = snprintf(buffer, sizeof(buffer), "%d", Process::current()->pid().value());
-    return KBuffer::try_create_with_bytes(ReadonlyBytes { buffer, static_cast<size_t>(written) });
+    builder.appendff("{}", Process::current()->pid().value());
+    return true;
 }
 
-OwnPtr<KBuffer> procfs$mm(InodeIdentifier)
-{
-    InterruptDisabler disabler;
-    KBufferBuilder builder;
-    u32 vmobject_count = 0;
-    MemoryManager::for_each_vmobject([&](auto& vmobject) {
-        ++vmobject_count;
-        builder.appendf("VMObject: %p %s(%u): p:%4u\n",
-            &vmobject,
-            vmobject.is_anonymous() ? "anon" : "file",
-            vmobject.ref_count(),
-            vmobject.page_count());
-        return IterationDecision::Continue;
-    });
-    builder.appendf("VMO count: %u\n", vmobject_count);
-    builder.appendf("Free physical pages: %u\n", MM.user_physical_pages() - MM.user_physical_pages_used());
-    builder.appendf("Free supervisor physical pages: %u\n", MM.super_physical_pages() - MM.super_physical_pages_used());
-    return builder.build();
-}
-
-static OwnPtr<KBuffer> procfs$dmesg(InodeIdentifier)
+static bool procfs$dmesg(InodeIdentifier, KBufferBuilder& builder)
 {
     InterruptDisabler disabler;
-    KBufferBuilder builder;
     for (char ch : Console::the().logbuffer())
         builder.append(ch);
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$mounts(InodeIdentifier)
+static bool procfs$df(InodeIdentifier, KBufferBuilder& builder)
 {
     // FIXME: This is obviously racy against the VFS mounts changing.
-    KBufferBuilder builder;
-    VFS::the().for_each_mount([&builder](auto& mount) {
-        auto& fs = mount.guest_fs();
-        builder.appendf("%s @ ", fs.class_name());
-        if (mount.host() == nullptr)
-            builder.appendf("/");
-        else {
-            builder.appendf("%u:%u", mount.host()->fsid(), mount.host()->index());
-            builder.append(' ');
-            builder.append(mount.absolute_path());
-        }
-        builder.append('\n');
-    });
-    return builder.build();
-}
-
-static OwnPtr<KBuffer> procfs$df(InodeIdentifier)
-{
-    // FIXME: This is obviously racy against the VFS mounts changing.
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     VFS::the().for_each_mount([&array](auto& mount) {
         auto& fs = mount.guest_fs();
@@ -771,12 +681,11 @@ static OwnPtr<KBuffer> procfs$df(InodeIdentifier)
             fs_object.add("source", "none");
     });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$cpuinfo(InodeIdentifier)
+static bool procfs$cpuinfo(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
     Processor::for_each(
         [&](Processor& proc) -> IterationDecision {
@@ -785,7 +694,7 @@ static OwnPtr<KBuffer> procfs$cpuinfo(InodeIdentifier)
             JsonArray features;
             for (auto& feature : info.features().split(' '))
                 features.append(feature);
-            obj.add("processor", proc.id());
+            obj.add("processor", proc.get_id());
             obj.add("cpuid", info.cpuid());
             obj.add("family", info.display_family());
             obj.add("features", features);
@@ -796,39 +705,49 @@ static OwnPtr<KBuffer> procfs$cpuinfo(InodeIdentifier)
             return IterationDecision::Continue;
         });
     array.finish();
-    return builder.build();
+    return true;
 }
 
-OwnPtr<KBuffer> procfs$memstat(InodeIdentifier)
+static bool procfs$memstat(InodeIdentifier, KBufferBuilder& builder)
 {
     InterruptDisabler disabler;
 
     kmalloc_stats stats;
     get_kmalloc_stats(stats);
 
-    KBufferBuilder builder;
+    ScopedSpinLock mm_lock(s_mm_lock);
+    auto user_physical_pages_total = MM.user_physical_pages();
+    auto user_physical_pages_used = MM.user_physical_pages_used();
+    auto user_physical_pages_committed = MM.user_physical_pages_committed();
+    auto user_physical_pages_uncommitted = MM.user_physical_pages_uncommitted();
+
+    auto super_physical_total = MM.super_physical_pages();
+    auto super_physical_used = MM.super_physical_pages_used();
+    mm_lock.unlock();
+
     JsonObjectSerializer<KBufferBuilder> json { builder };
     json.add("kmalloc_allocated", stats.bytes_allocated);
     json.add("kmalloc_available", stats.bytes_free);
     json.add("kmalloc_eternal_allocated", stats.bytes_eternal);
-    json.add("user_physical_allocated", MM.user_physical_pages_used());
-    json.add("user_physical_available", MM.user_physical_pages() - MM.user_physical_pages_used());
-    json.add("super_physical_allocated", MM.super_physical_pages_used());
-    json.add("super_physical_available", MM.super_physical_pages() - MM.super_physical_pages_used());
+    json.add("user_physical_allocated", user_physical_pages_used);
+    json.add("user_physical_available", user_physical_pages_total - user_physical_pages_used);
+    json.add("user_physical_committed", user_physical_pages_committed);
+    json.add("user_physical_uncommitted", user_physical_pages_uncommitted);
+    json.add("super_physical_allocated", super_physical_used);
+    json.add("super_physical_available", super_physical_total - super_physical_used);
     json.add("kmalloc_call_count", stats.kmalloc_call_count);
     json.add("kfree_call_count", stats.kfree_call_count);
     slab_alloc_stats([&json](size_t slab_size, size_t num_allocated, size_t num_free) {
-        auto prefix = String::format("slab_%zu", slab_size);
-        json.add(String::format("%s_num_allocated", prefix.characters()), num_allocated);
-        json.add(String::format("%s_num_free", prefix.characters()), num_free);
+        auto prefix = String::formatted("slab_{}", slab_size);
+        json.add(String::formatted("{}_num_allocated", prefix), num_allocated);
+        json.add(String::formatted("{}_num_free", prefix), num_free);
     });
     json.finish();
-    return builder.build();
+    return true;
 }
 
-static OwnPtr<KBuffer> procfs$all(InodeIdentifier)
+static bool procfs$all(InodeIdentifier, KBufferBuilder& builder)
 {
-    KBufferBuilder builder;
     JsonArraySerializer array { builder };
 
     // Keep this in sync with CProcessStatistics.
@@ -874,17 +793,21 @@ static OwnPtr<KBuffer> procfs$all(InodeIdentifier)
         process_object.add("name", process.name());
         process_object.add("executable", process.executable() ? process.executable()->absolute_path() : "");
         process_object.add("tty", process.tty() ? process.tty()->tty_name() : "notty");
-        process_object.add("amount_virtual", process.amount_virtual());
-        process_object.add("amount_resident", process.amount_resident());
-        process_object.add("amount_dirty_private", process.amount_dirty_private());
-        process_object.add("amount_clean_inode", process.amount_clean_inode());
-        process_object.add("amount_shared", process.amount_shared());
-        process_object.add("amount_purgeable_volatile", process.amount_purgeable_volatile());
-        process_object.add("amount_purgeable_nonvolatile", process.amount_purgeable_nonvolatile());
+        process_object.add("amount_virtual", process.space().amount_virtual());
+        process_object.add("amount_resident", process.space().amount_resident());
+        process_object.add("amount_dirty_private", process.space().amount_dirty_private());
+        process_object.add("amount_clean_inode", process.space().amount_clean_inode());
+        process_object.add("amount_shared", process.space().amount_shared());
+        process_object.add("amount_purgeable_volatile", process.space().amount_purgeable_volatile());
+        process_object.add("amount_purgeable_nonvolatile", process.space().amount_purgeable_nonvolatile());
         process_object.add("dumpable", process.is_dumpable());
+        process_object.add("kernel", process.is_kernel_process());
         auto thread_array = process_object.add_array("threads");
         process.for_each_thread([&](const Thread& thread) {
             auto thread_object = thread_array.add_object();
+#if LOCK_DEBUG
+            thread_object.add("lock_count", thread.lock_count());
+#endif
             thread_object.add("tid", thread.tid().value());
             thread_object.add("name", thread.name());
             thread_object.add("times_scheduled", thread.times_scheduled());
@@ -893,7 +816,6 @@ static OwnPtr<KBuffer> procfs$all(InodeIdentifier)
             thread_object.add("state", thread.state_string());
             thread_object.add("cpu", thread.cpu());
             thread_object.add("priority", thread.priority());
-            thread_object.add("effective_priority", thread.effective_priority());
             thread_object.add("syscall_count", thread.syscall_count());
             thread_object.add("inode_faults", thread.inode_faults());
             thread_object.add("zero_faults", thread.zero_faults());
@@ -914,18 +836,7 @@ static OwnPtr<KBuffer> procfs$all(InodeIdentifier)
     for (auto& process : processes)
         build_process(process);
     array.finish();
-    return builder.build();
-}
-
-static OwnPtr<KBuffer> procfs$inodes(InodeIdentifier)
-{
-    KBufferBuilder builder;
-    InterruptDisabler disabler;
-    ScopedSpinLock all_inodes_lock(Inode::all_inodes_lock());
-    for (auto& inode : Inode::all_with_lock()) {
-        builder.appendf("Inode{K%x} %02u:%08u (%u)\n", &inode, inode.fsid(), inode.index(), inode.ref_count());
-    }
-    return builder.build();
+    return true;
 }
 
 struct SysVariable {
@@ -965,29 +876,30 @@ SysVariable& SysVariable::for_inode(InodeIdentifier id)
     if (index >= sys_variables().size())
         return sys_variables()[0];
     auto& variable = sys_variables()[index];
-    ASSERT(variable.address);
+    VERIFY(variable.address);
     return variable;
 }
 
-static OwnPtr<KBuffer> read_sys_bool(InodeIdentifier inode_id)
+static bool read_sys_bool(InodeIdentifier inode_id, KBufferBuilder& builder)
 {
     auto& variable = SysVariable::for_inode(inode_id);
-    ASSERT(variable.type == SysVariable::Type::Boolean);
+    VERIFY(variable.type == SysVariable::Type::Boolean);
 
     u8 buffer[2];
     auto* lockable_bool = reinterpret_cast<Lockable<bool>*>(variable.address);
     {
-        LOCKER(lockable_bool->lock(), Lock::Mode::Shared);
+        Locker locker(lockable_bool->lock(), Lock::Mode::Shared);
         buffer[0] = lockable_bool->resource() ? '1' : '0';
     }
     buffer[1] = '\n';
-    return KBuffer::try_create_with_bytes(ReadonlyBytes { buffer, sizeof(buffer) });
+    builder.append_bytes(ReadonlyBytes { buffer, sizeof(buffer) });
+    return true;
 }
 
 static ssize_t write_sys_bool(InodeIdentifier inode_id, const UserOrKernelBuffer& buffer, size_t size)
 {
     auto& variable = SysVariable::for_inode(inode_id);
-    ASSERT(variable.type == SysVariable::Type::Boolean);
+    VERIFY(variable.type == SysVariable::Type::Boolean);
 
     char value = 0;
     bool did_read = false;
@@ -1000,33 +912,34 @@ static ssize_t write_sys_bool(InodeIdentifier inode_id, const UserOrKernelBuffer
     });
     if (nread < 0)
         return nread;
-    ASSERT(nread == 0 || (nread == 1 && did_read));
+    VERIFY(nread == 0 || (nread == 1 && did_read));
     if (nread == 0 || !(value == '0' || value == '1'))
         return (ssize_t)size;
 
     auto* lockable_bool = reinterpret_cast<Lockable<bool>*>(variable.address);
     {
-        LOCKER(lockable_bool->lock());
+        Locker locker(lockable_bool->lock());
         lockable_bool->resource() = value == '1';
     }
     variable.notify();
     return (ssize_t)size;
 }
 
-static OwnPtr<KBuffer> read_sys_string(InodeIdentifier inode_id)
+static bool read_sys_string(InodeIdentifier inode_id, KBufferBuilder& builder)
 {
     auto& variable = SysVariable::for_inode(inode_id);
-    ASSERT(variable.type == SysVariable::Type::String);
+    VERIFY(variable.type == SysVariable::Type::String);
 
     auto* lockable_string = reinterpret_cast<Lockable<String>*>(variable.address);
-    LOCKER(lockable_string->lock(), Lock::Mode::Shared);
-    return KBuffer::try_create_with_bytes(lockable_string->resource().bytes());
+    Locker locker(lockable_string->lock(), Lock::Mode::Shared);
+    builder.append_bytes(lockable_string->resource().bytes());
+    return true;
 }
 
 static ssize_t write_sys_string(InodeIdentifier inode_id, const UserOrKernelBuffer& buffer, size_t size)
 {
     auto& variable = SysVariable::for_inode(inode_id);
-    ASSERT(variable.type == SysVariable::Type::String);
+    VERIFY(variable.type == SysVariable::Type::String);
 
     auto string_copy = buffer.copy_into_string(size);
     if (string_copy.is_null())
@@ -1034,7 +947,7 @@ static ssize_t write_sys_string(InodeIdentifier inode_id, const UserOrKernelBuff
 
     {
         auto* lockable_string = reinterpret_cast<Lockable<String>*>(variable.address);
-        LOCKER(lockable_string->lock());
+        Locker locker(lockable_string->lock());
         lockable_string->resource() = move(string_copy);
     }
     variable.notify();
@@ -1054,28 +967,26 @@ void ProcFS::add_sys_bool(String&& name, Lockable<bool>& var, Function<void()>&&
     sys_variables().append(move(variable));
 }
 
-void ProcFS::add_sys_string(String&& name, Lockable<String>& var, Function<void()>&& notify_callback)
-{
-    InterruptDisabler disabler;
-
-    SysVariable variable;
-    variable.name = move(name);
-    variable.type = SysVariable::Type::String;
-    variable.notify_callback = move(notify_callback);
-    variable.address = &var;
-
-    sys_variables().append(move(variable));
-}
-
 bool ProcFS::initialize()
 {
     static Lockable<bool>* kmalloc_stack_helper;
+    static Lockable<bool>* ubsan_deadly_helper;
+    static Lockable<bool>* caps_lock_to_ctrl_helper;
 
     if (kmalloc_stack_helper == nullptr) {
         kmalloc_stack_helper = new Lockable<bool>();
         kmalloc_stack_helper->resource() = g_dump_kmalloc_stacks;
         ProcFS::add_sys_bool("kmalloc_stacks", *kmalloc_stack_helper, [] {
             g_dump_kmalloc_stacks = kmalloc_stack_helper->resource();
+        });
+        ubsan_deadly_helper = new Lockable<bool>();
+        ubsan_deadly_helper->resource() = UBSanitizer::g_ubsan_is_deadly;
+        ProcFS::add_sys_bool("ubsan_is_deadly", *ubsan_deadly_helper, [] {
+            UBSanitizer::g_ubsan_is_deadly = ubsan_deadly_helper->resource();
+        });
+        caps_lock_to_ctrl_helper = new Lockable<bool>();
+        ProcFS::add_sys_bool("caps_lock_to_ctrl", *caps_lock_to_ctrl_helper, [] {
+            Kernel::g_caps_lock_remapped_to_ctrl.exchange(caps_lock_to_ctrl_helper->resource());
         });
     }
     return true;
@@ -1093,38 +1004,145 @@ NonnullRefPtr<Inode> ProcFS::root_inode() const
 
 RefPtr<Inode> ProcFS::get_inode(InodeIdentifier inode_id) const
 {
-#ifdef PROCFS_DEBUG
-    dbg() << "ProcFS::get_inode(" << inode_id.index() << ")";
-#endif
+    dbgln_if(PROCFS_DEBUG, "ProcFS::get_inode({})", inode_id.index());
     if (inode_id == root_inode()->identifier())
         return m_root_inode;
 
-    LOCKER(m_inodes_lock);
-    auto it = m_inodes.find(inode_id.index());
-    if (it == m_inodes.end()) {
-        auto inode = adopt(*new ProcFSInode(const_cast<ProcFS&>(*this), inode_id.index()));
-        m_inodes.set(inode_id.index(), inode.ptr());
-        return inode;
+    Locker locker(m_inodes_lock);
+    auto it = m_inodes.find(inode_id.index().value());
+    if (it != m_inodes.end()) {
+        // It's possible that the ProcFSInode ref count was dropped to 0 or
+        // the ~ProcFSInode destructor is even running already, but blocked
+        // from removing it from this map. So we need to *try* to ref it,
+        // and if that fails we cannot return this instance anymore and just
+        // create a new one.
+        if (it->value->try_ref())
+            return adopt_ref(*it->value);
+        // We couldn't ref it, so just create a new one and replace the entry
     }
-    return (*it).value;
+    auto inode = adopt_ref(*new ProcFSInode(const_cast<ProcFS&>(*this), inode_id.index()));
+    auto result = m_inodes.set(inode_id.index().value(), inode.ptr());
+    VERIFY(result == ((it == m_inodes.end()) ? AK::HashSetResult::InsertedNewEntry : AK::HashSetResult::ReplacedExistingEntry));
+    return inode;
 }
 
-ProcFSInode::ProcFSInode(ProcFS& fs, unsigned index)
+ProcFSInode::ProcFSInode(ProcFS& fs, InodeIndex index)
     : Inode(fs, index)
 {
 }
 
 ProcFSInode::~ProcFSInode()
 {
-    LOCKER(fs().m_inodes_lock);
-    fs().m_inodes.remove(index());
+    Locker locker(fs().m_inodes_lock);
+    auto it = fs().m_inodes.find(index().value());
+    if (it != fs().m_inodes.end() && it->value == this)
+        fs().m_inodes.remove(it);
+}
+
+RefPtr<Process> ProcFSInode::process() const
+{
+    auto parent = to_proc_parent_directory(identifier());
+    if (parent == PDI_PID || parent == PDI_PID_fd || parent == PDI_PID_stacks)
+        return Process::from_pid(to_pid(identifier()));
+
+    return nullptr;
+}
+
+KResult ProcFSInode::refresh_data(FileDescription& description) const
+{
+    if (Kernel::is_directory(identifier()))
+        return KSuccess;
+
+    // For process-specific inodes, hold the process's ptrace lock across refresh
+    // and refuse to load data if the process is not dumpable.
+    // Without this, files opened before a process went non-dumpable could still be used for dumping.
+    auto process = this->process();
+    if (process) {
+        process->ptrace_lock().lock();
+        if (!process->is_dumpable()) {
+            process->ptrace_lock().unlock();
+            return EPERM;
+        }
+    }
+    ScopeGuard guard = [&] {
+        if (process)
+            process->ptrace_lock().unlock();
+    };
+
+    auto& cached_data = description.data();
+    auto* directory_entry = fs().get_directory_entry(identifier());
+
+    bool (*read_callback)(InodeIdentifier, KBufferBuilder&) = nullptr;
+    if (directory_entry) {
+        read_callback = directory_entry->read_callback;
+        VERIFY(read_callback);
+    } else {
+        switch (to_proc_parent_directory(identifier())) {
+        case PDI_PID_fd:
+            read_callback = procfs$pid_fd_entry;
+            break;
+        case PDI_PID_stacks:
+            read_callback = procfs$tid_stack;
+            break;
+        case PDI_Root_sys:
+            switch (SysVariable::for_inode(identifier()).type) {
+            case SysVariable::Type::Invalid:
+                VERIFY_NOT_REACHED();
+            case SysVariable::Type::Boolean:
+                read_callback = read_sys_bool;
+                break;
+            case SysVariable::Type::String:
+                read_callback = read_sys_string;
+                break;
+            }
+            break;
+        default:
+            VERIFY_NOT_REACHED();
+        }
+
+        VERIFY(read_callback);
+    }
+
+    if (!cached_data)
+        cached_data = new ProcFSInodeData;
+    auto& buffer = static_cast<ProcFSInodeData&>(*cached_data).buffer;
+    if (buffer) {
+        // If we're reusing the buffer, reset the size to 0 first. This
+        // ensures we don't accidentally leak previously written data.
+        buffer->set_size(0);
+    }
+    KBufferBuilder builder(buffer, true);
+    if (!read_callback(identifier(), builder))
+        return ENOENT;
+    // We don't use builder.build() here, which would steal our buffer
+    // and turn it into an OwnPtr. Instead, just flush to the buffer so
+    // that we can read all the data that was written.
+    if (!builder.flush())
+        return ENOMEM;
+    if (!buffer)
+        return ENOMEM;
+    return KSuccess;
+}
+
+KResult ProcFSInode::attach(FileDescription& description)
+{
+    return refresh_data(description);
+}
+
+void ProcFSInode::did_seek(FileDescription& description, off_t new_offset)
+{
+    if (new_offset != 0)
+        return;
+    auto result = refresh_data(description);
+    if (result.is_error()) {
+        // Subsequent calls to read will return EIO!
+        dbgln("ProcFS: Could not refresh contents: {}", result.error());
+    }
 }
 
 InodeMetadata ProcFSInode::metadata() const
 {
-#ifdef PROCFS_DEBUG
-    dbg() << "ProcFSInode::metadata(" << index() << ")";
-#endif
+    dbgln_if(PROCFS_DEBUG, "ProcFSInode::metadata({})", index());
     InodeMetadata metadata;
     metadata.inode = identifier();
     metadata.ctime = mepoch;
@@ -1133,9 +1151,7 @@ InodeMetadata ProcFSInode::metadata() const
     auto proc_parent_directory = to_proc_parent_directory(identifier());
     auto proc_file_type = to_proc_file_type(identifier());
 
-#ifdef PROCFS_DEBUG
-    dbg() << "  -> pid: " << to_pid(identifier()).value() << ", fi: " << proc_file_type << ", pdi: " << proc_parent_directory;
-#endif
+    dbgln_if(PROCFS_DEBUG, "  -> pid={}, fi={}, pdi={}", to_pid(identifier()).value(), (int)proc_file_type, (int)proc_parent_directory);
 
     if (is_process_related_file(identifier())) {
         ProcessID pid = to_pid(identifier());
@@ -1183,6 +1199,14 @@ InodeMetadata ProcFSInode::metadata() const
     case FI_PID_stacks:
         metadata.mode = S_IFDIR | S_IRUSR | S_IXUSR;
         break;
+    case FI_Root_smbios_entry_point:
+        metadata.mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
+        metadata.size = DMIExpose::the().entry_point_length();
+        break;
+    case FI_Root_dmi:
+        metadata.mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
+        metadata.size = DMIExpose::the().structure_table_length();
+        break;
     default:
         metadata.mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
         break;
@@ -1195,74 +1219,31 @@ InodeMetadata ProcFSInode::metadata() const
             metadata.mode &= ~077;
         }
     }
-
-#ifdef PROCFS_DEBUG
-    dbg() << "Returning mode " << String::format("%o", metadata.mode);
-#endif
     return metadata;
 }
 
-ssize_t ProcFSInode::read_bytes(off_t offset, ssize_t count, UserOrKernelBuffer& buffer, FileDescription* description) const
+KResultOr<ssize_t> ProcFSInode::read_bytes(off_t offset, ssize_t count, UserOrKernelBuffer& buffer, FileDescription* description) const
 {
-#ifdef PROCFS_DEBUG
-    dbg() << "ProcFS: read_bytes " << index();
-#endif
-    ASSERT(offset >= 0);
-    ASSERT(buffer.user_or_kernel_ptr());
+    dbgln_if(PROCFS_DEBUG, "ProcFS: read_bytes offset: {} count: {}", offset, count);
+    VERIFY(offset >= 0);
+    VERIFY(buffer.user_or_kernel_ptr());
 
-    auto* directory_entry = fs().get_directory_entry(identifier());
-
-    OwnPtr<KBuffer> (*read_callback)(InodeIdentifier) = nullptr;
-    if (directory_entry)
-        read_callback = directory_entry->read_callback;
-    else
-        switch (to_proc_parent_directory(identifier())) {
-        case PDI_PID_fd:
-            read_callback = procfs$pid_fd_entry;
-            break;
-        case PDI_PID_stacks:
-            read_callback = procfs$tid_stack;
-            break;
-        case PDI_Root_sys:
-            switch (SysVariable::for_inode(identifier()).type) {
-            case SysVariable::Type::Invalid:
-                ASSERT_NOT_REACHED();
-            case SysVariable::Type::Boolean:
-                read_callback = read_sys_bool;
-                break;
-            case SysVariable::Type::String:
-                read_callback = read_sys_string;
-                break;
-            }
-            break;
-        default:
-            ASSERT_NOT_REACHED();
-        }
-
-    ASSERT(read_callback);
-
-    OwnPtr<KBuffer> descriptionless_generated_data;
-    KBuffer* data = nullptr;
-    if (!description) {
-        descriptionless_generated_data = read_callback(identifier());
-        data = descriptionless_generated_data.ptr();
-    } else {
-        if (!description->generator_cache())
-            description->generator_cache() = (*read_callback)(identifier());
-        data = description->generator_cache().ptr();
+    if (!description)
+        return EIO;
+    if (!description->data()) {
+        dbgln_if(PROCFS_DEBUG, "ProcFS: Do not have cached data!");
+        return EIO;
     }
 
-    if (!data)
+    // Be sure to keep a reference to data_buffer while we use it!
+    RefPtr<KBufferImpl> data_buffer = static_cast<ProcFSInodeData&>(*description->data()).buffer;
+
+    if (!data_buffer || (size_t)offset >= data_buffer->size())
         return 0;
 
-    if ((size_t)offset >= data->size())
-        return 0;
-
-    ssize_t nread = min(static_cast<off_t>(data->size() - offset), static_cast<off_t>(count));
-    if (!buffer.write(data->data() + offset, nread))
-        return -EFAULT;
-    if (nread == 0 && description && description->generator_cache())
-        description->generator_cache().clear();
+    ssize_t nread = min(static_cast<off_t>(data_buffer->size() - offset), static_cast<off_t>(count));
+    if (!buffer.write(data_buffer->data() + offset, nread))
+        return EFAULT;
 
     return nread;
 }
@@ -1274,12 +1255,10 @@ InodeIdentifier ProcFS::ProcFSDirectoryEntry::identifier(unsigned fsid) const
 
 KResult ProcFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntryView&)> callback) const
 {
-#ifdef PROCFS_DEBUG
-    dbg() << "ProcFS: traverse_as_directory " << index();
-#endif
+    dbgln_if(PROCFS_DEBUG, "ProcFS: traverse_as_directory {}", index());
 
     if (!Kernel::is_directory(identifier()))
-        return KResult(-ENOTDIR);
+        return ENOTDIR;
 
     auto proc_file_type = to_proc_file_type(identifier());
     auto parent_id = to_parent_id(identifier());
@@ -1297,9 +1276,7 @@ KResult ProcFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntr
                 callback({ { entry.name, strlen(entry.name) }, to_identifier(fsid(), PDI_Root, 0, (ProcFileType)entry.proc_file_type), 0 });
         }
         for (auto pid_child : Process::all_pids()) {
-            char name[16];
-            size_t name_length = (size_t)snprintf(name, sizeof(name), "%d", pid_child.value());
-            callback({ { name, name_length }, to_identifier(fsid(), PDI_Root, pid_child, FI_PID), 0 });
+            callback({ String::number(pid_child.value()), to_identifier(fsid(), PDI_Root, pid_child, FI_PID), 0 });
         }
         break;
 
@@ -1322,7 +1299,7 @@ KResult ProcFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntr
         auto pid = to_pid(identifier());
         auto process = Process::from_pid(pid);
         if (!process)
-            return KResult(-ENOENT);
+            return ENOENT;
         for (auto& entry : fs().m_entries) {
             if (entry.proc_file_type > __FI_PID_Start && entry.proc_file_type < __FI_PID_End) {
                 if (entry.proc_file_type == FI_PID_exe && !process->executable())
@@ -1337,14 +1314,12 @@ KResult ProcFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntr
         auto pid = to_pid(identifier());
         auto process = Process::from_pid(pid);
         if (!process)
-            return KResult(-ENOENT);
+            return ENOENT;
         for (int i = 0; i < process->max_open_file_descriptors(); ++i) {
             auto description = process->file_description(i);
             if (!description)
                 continue;
-            char name[16];
-            size_t name_length = (size_t)snprintf(name, sizeof(name), "%d", i);
-            callback({ { name, name_length }, to_identifier_with_fd(fsid(), pid, i), 0 });
+            callback({ String::number(i), to_identifier_with_fd(fsid(), pid, i), 0 });
         }
     } break;
 
@@ -1352,12 +1327,10 @@ KResult ProcFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntr
         auto pid = to_pid(identifier());
         auto process = Process::from_pid(pid);
         if (!process)
-            return KResult(-ENOENT);
-        process->for_each_thread([&](Thread& thread) -> IterationDecision {
+            return ENOENT;
+        process->for_each_thread([&](const Thread& thread) -> IterationDecision {
             int tid = thread.tid().value();
-            char name[16];
-            size_t name_length = (size_t)snprintf(name, sizeof(name), "%d", tid);
-            callback({ { name, name_length }, to_identifier_with_stack(fsid(), tid), 0 });
+            callback({ String::number(tid), to_identifier_with_stack(fsid(), tid), 0 });
             return IterationDecision::Continue;
         });
     } break;
@@ -1371,7 +1344,7 @@ KResult ProcFSInode::traverse_as_directory(Function<bool(const FS::DirectoryEntr
 
 RefPtr<Inode> ProcFSInode::lookup(StringView name)
 {
-    ASSERT(is_directory());
+    VERIFY(is_directory());
     if (name == ".")
         return this;
     if (name == "..")
@@ -1481,8 +1454,24 @@ void ProcFSInode::flush_metadata()
 {
 }
 
-ssize_t ProcFSInode::write_bytes(off_t offset, ssize_t size, const UserOrKernelBuffer& buffer, FileDescription*)
+KResultOr<ssize_t> ProcFSInode::write_bytes(off_t offset, ssize_t size, const UserOrKernelBuffer& buffer, FileDescription*)
 {
+    // For process-specific inodes, hold the process's ptrace lock across the write
+    // and refuse to write at all data if the process is not dumpable.
+    // Without this, files opened before a process went non-dumpable could still be used for dumping.
+    auto process = this->process();
+    if (process) {
+        process->ptrace_lock().lock();
+        if (!process->is_dumpable()) {
+            process->ptrace_lock().unlock();
+            return EPERM;
+        }
+    }
+    ScopeGuard guard = [&] {
+        if (process)
+            process->ptrace_lock().unlock();
+    };
+
     auto result = prepare_to_write_data();
     if (result.is_error())
         return result;
@@ -1495,7 +1484,7 @@ ssize_t ProcFSInode::write_bytes(off_t offset, ssize_t size, const UserOrKernelB
         if (to_proc_parent_directory(identifier()) == PDI_Root_sys) {
             switch (SysVariable::for_inode(identifier()).type) {
             case SysVariable::Type::Invalid:
-                ASSERT_NOT_REACHED();
+                VERIFY_NOT_REACHED();
             case SysVariable::Type::Boolean:
                 write_callback = write_sys_bool;
                 break;
@@ -1504,25 +1493,29 @@ ssize_t ProcFSInode::write_bytes(off_t offset, ssize_t size, const UserOrKernelB
                 break;
             }
         } else
-            return -EPERM;
+            return EPERM;
     } else {
         if (!directory_entry->write_callback)
-            return -EPERM;
+            return EPERM;
         write_callback = directory_entry->write_callback;
     }
 
-    ASSERT(is_persistent_inode(identifier()));
+    VERIFY(is_persistent_inode(identifier()));
     // FIXME: Being able to write into ProcFS at a non-zero offset seems like something we should maybe support..
-    ASSERT(offset == 0);
+    VERIFY(offset == 0);
     ssize_t nwritten = write_callback(identifier(), buffer, (size_t)size);
     if (nwritten < 0)
-        klog() << "ProcFS: Writing " << size << " bytes failed: " << nwritten;
+        dbgln("ProcFS: Writing {} bytes failed: {}", size, nwritten);
     return nwritten;
 }
 
 KResultOr<NonnullRefPtr<Custody>> ProcFSInode::resolve_as_link(Custody& base, RefPtr<Custody>* out_parent, int options, int symlink_recursion_level) const
 {
-    // The only links are in pid directories, so it's safe to ignore
+    if (FI_Root_self == to_proc_file_type(identifier())) {
+        return VFS::the().resolve_path(String::number(Process::current()->pid().value()), base, out_parent, options, symlink_recursion_level);
+    }
+
+    // The only other links are in pid directories, so it's safe to ignore
     // unrelated files and the thread-specific stacks/ directory.
     if (!is_process_related_file(identifier()))
         return Inode::resolve_as_link(base, out_parent, options, symlink_recursion_level);
@@ -1537,7 +1530,7 @@ KResultOr<NonnullRefPtr<Custody>> ProcFSInode::resolve_as_link(Custody& base, Re
     auto proc_file_type = to_proc_file_type(identifier());
     auto process = Process::from_pid(pid);
     if (!process)
-        return KResult(-ENOENT);
+        return ENOENT;
 
     if (to_proc_parent_directory(identifier()) == PDI_PID_fd) {
         if (out_parent)
@@ -1545,7 +1538,7 @@ KResultOr<NonnullRefPtr<Custody>> ProcFSInode::resolve_as_link(Custody& base, Re
         int fd = to_fd(identifier());
         auto description = process->file_description(fd);
         if (!description)
-            return KResult(-ENOENT);
+            return ENOENT;
         auto proxy_inode = ProcFSProxyInode::create(const_cast<ProcFS&>(fs()), *description);
         return Custody::create(&base, "", proxy_inode, base.mount_flags());
     }
@@ -1566,13 +1559,18 @@ KResultOr<NonnullRefPtr<Custody>> ProcFSInode::resolve_as_link(Custody& base, Re
         res = &process->root_directory();
         break;
     default:
-        ASSERT_NOT_REACHED();
+        VERIFY_NOT_REACHED();
     }
 
     if (!res)
-        return KResult(-ENOENT);
+        return ENOENT;
 
     return *res;
+}
+
+KResult ProcFSInode::set_mtime(time_t)
+{
+    return KSuccess;
 }
 
 ProcFSProxyInode::ProcFSProxyInode(ProcFS& fs, FileDescription& fd)
@@ -1583,6 +1581,16 @@ ProcFSProxyInode::ProcFSProxyInode(ProcFS& fs, FileDescription& fd)
 
 ProcFSProxyInode::~ProcFSProxyInode()
 {
+}
+
+KResult ProcFSProxyInode::attach(FileDescription& fd)
+{
+    return m_fd->inode()->attach(fd);
+}
+
+void ProcFSProxyInode::did_seek(FileDescription& fd, off_t new_offset)
+{
+    return m_fd->inode()->did_seek(fd, new_offset);
 }
 
 InodeMetadata ProcFSProxyInode::metadata() const
@@ -1608,21 +1616,21 @@ InodeMetadata ProcFSProxyInode::metadata() const
 KResultOr<NonnullRefPtr<Inode>> ProcFSProxyInode::create_child(const String& name, mode_t mode, dev_t dev, uid_t uid, gid_t gid)
 {
     if (!m_fd->inode())
-        return KResult(-EINVAL);
+        return EINVAL;
     return m_fd->inode()->create_child(name, mode, dev, uid, gid);
 }
 
 KResult ProcFSProxyInode::add_child(Inode& child, const StringView& name, mode_t mode)
 {
     if (!m_fd->inode())
-        return KResult(-EINVAL);
+        return EINVAL;
     return m_fd->inode()->add_child(child, name, mode);
 }
 
 KResult ProcFSProxyInode::remove_child(const StringView& name)
 {
     if (!m_fd->inode())
-        return KResult(-EINVAL);
+        return EINVAL;
     return m_fd->inode()->remove_child(name);
 }
 
@@ -1636,28 +1644,28 @@ RefPtr<Inode> ProcFSProxyInode::lookup(StringView name)
 KResultOr<size_t> ProcFSProxyInode::directory_entry_count() const
 {
     if (!m_fd->inode())
-        return KResult(-EINVAL);
+        return EINVAL;
     return m_fd->inode()->directory_entry_count();
 }
 
 KResultOr<NonnullRefPtr<Inode>> ProcFSInode::create_child(const String&, mode_t, dev_t, uid_t, gid_t)
 {
-    return KResult(-EPERM);
+    return EPERM;
 }
 
 KResult ProcFSInode::add_child(Inode&, const StringView&, mode_t)
 {
-    return KResult(-EPERM);
+    return EPERM;
 }
 
 KResult ProcFSInode::remove_child([[maybe_unused]] const StringView& name)
 {
-    return KResult(-EPERM);
+    return EPERM;
 }
 
 KResultOr<size_t> ProcFSInode::directory_entry_count() const
 {
-    ASSERT(is_directory());
+    VERIFY(is_directory());
     size_t count = 0;
     KResult result = traverse_as_directory([&count](auto&) {
         ++count;
@@ -1672,30 +1680,29 @@ KResultOr<size_t> ProcFSInode::directory_entry_count() const
 
 KResult ProcFSInode::chmod(mode_t)
 {
-    return KResult(-EPERM);
+    return EPERM;
 }
 
 ProcFS::ProcFS()
 {
-    m_root_inode = adopt(*new ProcFSInode(*this, 1));
+    m_root_inode = adopt_ref(*new ProcFSInode(*this, 1));
     m_entries.resize(FI_MaxStaticFileIndex);
-    m_entries[FI_Root_mm] = { "mm", FI_Root_mm, true, procfs$mm };
-    m_entries[FI_Root_mounts] = { "mounts", FI_Root_mounts, false, procfs$mounts };
     m_entries[FI_Root_df] = { "df", FI_Root_df, false, procfs$df };
     m_entries[FI_Root_all] = { "all", FI_Root_all, false, procfs$all };
     m_entries[FI_Root_memstat] = { "memstat", FI_Root_memstat, false, procfs$memstat };
     m_entries[FI_Root_cpuinfo] = { "cpuinfo", FI_Root_cpuinfo, false, procfs$cpuinfo };
-    m_entries[FI_Root_inodes] = { "inodes", FI_Root_inodes, true, procfs$inodes };
     m_entries[FI_Root_dmesg] = { "dmesg", FI_Root_dmesg, true, procfs$dmesg };
     m_entries[FI_Root_self] = { "self", FI_Root_self, false, procfs$self };
     m_entries[FI_Root_pci] = { "pci", FI_Root_pci, false, procfs$pci };
     m_entries[FI_Root_interrupts] = { "interrupts", FI_Root_interrupts, false, procfs$interrupts };
+    m_entries[FI_Root_dmi] = { "DMI", FI_Root_dmi, false, procfs$dmi };
+    m_entries[FI_Root_smbios_entry_point] = { "smbios_entry_point", FI_Root_smbios_entry_point, false, procfs$smbios_entry_point };
     m_entries[FI_Root_keymap] = { "keymap", FI_Root_keymap, false, procfs$keymap };
     m_entries[FI_Root_devices] = { "devices", FI_Root_devices, false, procfs$devices };
     m_entries[FI_Root_uptime] = { "uptime", FI_Root_uptime, false, procfs$uptime };
     m_entries[FI_Root_cmdline] = { "cmdline", FI_Root_cmdline, true, procfs$cmdline };
     m_entries[FI_Root_modules] = { "modules", FI_Root_modules, true, procfs$modules };
-    m_entries[FI_Root_profile] = { "profile", FI_Root_profile, false, procfs$profile };
+    m_entries[FI_Root_profile] = { "profile", FI_Root_profile, true, procfs$profile };
     m_entries[FI_Root_sys] = { "sys", FI_Root_sys, true };
     m_entries[FI_Root_net] = { "net", FI_Root_net, false };
 
@@ -1706,13 +1713,13 @@ ProcFS::ProcFS()
     m_entries[FI_Root_net_local] = { "local", FI_Root_net_local, false, procfs$net_local };
 
     m_entries[FI_PID_vm] = { "vm", FI_PID_vm, false, procfs$pid_vm };
-    m_entries[FI_PID_vmobjects] = { "vmobjects", FI_PID_vmobjects, true, procfs$pid_vmobjects };
     m_entries[FI_PID_stacks] = { "stacks", FI_PID_stacks, false };
     m_entries[FI_PID_fds] = { "fds", FI_PID_fds, false, procfs$pid_fds };
     m_entries[FI_PID_exe] = { "exe", FI_PID_exe, false, procfs$pid_exe };
     m_entries[FI_PID_cwd] = { "cwd", FI_PID_cwd, false, procfs$pid_cwd };
     m_entries[FI_PID_unveil] = { "unveil", FI_PID_unveil, false, procfs$pid_unveil };
     m_entries[FI_PID_root] = { "root", FI_PID_root, false, procfs$pid_root };
+    m_entries[FI_PID_perf_events] = { "perf_events", FI_PID_perf_events, false, procfs$pid_perf_events };
     m_entries[FI_PID_fd] = { "fd", FI_PID_fd, false };
 }
 
@@ -1726,6 +1733,6 @@ ProcFS::ProcFSDirectoryEntry* ProcFS::get_directory_entry(InodeIdentifier identi
 
 KResult ProcFSInode::chown(uid_t, gid_t)
 {
-    return KResult(-EPERM);
+    return EPERM;
 }
 }

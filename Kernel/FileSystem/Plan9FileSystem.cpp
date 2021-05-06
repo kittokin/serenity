@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Sergey Bugaev <bugaevc@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <Kernel/FileSystem/Plan9FileSystem.h>
@@ -31,7 +11,7 @@ namespace Kernel {
 
 NonnullRefPtr<Plan9FS> Plan9FS::create(FileDescription& file_description)
 {
-    return adopt(*new Plan9FS(file_description));
+    return adopt_ref(*new Plan9FS(file_description));
 }
 
 Plan9FS::Plan9FS(FileDescription& file_description)
@@ -44,7 +24,7 @@ Plan9FS::~Plan9FS()
 {
     // Make sure to destroy the root inode before the FS gets destroyed.
     if (m_root_inode) {
-        ASSERT(m_root_inode->ref_count() == 1);
+        VERIFY(m_root_inode->ref_count() == 1);
         m_root_inode = nullptr;
     }
 }
@@ -153,7 +133,7 @@ public:
         template<typename N>
         Decoder& read_number(N& number)
         {
-            ASSERT(sizeof(number) <= m_data.length());
+            VERIFY(sizeof(number) <= m_data.length());
             memcpy(&number, m_data.characters_without_null_termination(), sizeof(number));
             m_data = m_data.substring_view(sizeof(number), m_data.length() - sizeof(number));
             return *this;
@@ -170,14 +150,14 @@ public:
     template<typename T>
     Message& operator>>(T& t)
     {
-        ASSERT(m_have_been_built);
+        VERIFY(m_have_been_built);
         m_built.decoder >> t;
         return *this;
     }
 
     StringView read_data()
     {
-        ASSERT(m_have_been_built);
+        VERIFY(m_have_been_built);
         return m_built.decoder.read_data();
     }
 
@@ -197,7 +177,7 @@ private:
     template<typename N>
     Message& append_number(N number)
     {
-        ASSERT(!m_have_been_built);
+        VERIFY(!m_have_been_built);
         m_builder.append(reinterpret_cast<const char*>(&number), sizeof(number));
         return *this;
     }
@@ -229,7 +209,7 @@ bool Plan9FS::initialize()
     u32 msize;
     StringView remote_protocol_version;
     version_message >> msize >> remote_protocol_version;
-    dbg() << "Remote supports msize=" << msize << " and protocol version " << remote_protocol_version;
+    dbgln("Remote supports msize={} and protocol version {}", msize, remote_protocol_version);
     m_remote_protocol_version = parse_protocol_version(remote_protocol_version);
     m_max_message_size = min(m_max_message_size, (size_t)msize);
 
@@ -246,7 +226,7 @@ bool Plan9FS::initialize()
 
     result = post_message_and_wait_for_a_reply(attach_message);
     if (result.is_error()) {
-        dbg() << "Attaching failed";
+        dbgln("Attaching failed");
         return false;
     }
 
@@ -330,7 +310,7 @@ Plan9FS::Message::Decoder& Plan9FS::Message::Decoder::operator>>(StringView& str
 {
     u16 length;
     *this >> length;
-    ASSERT(length <= m_data.length());
+    VERIFY(length <= m_data.length());
     string = m_data.substring_view(0, length);
     m_data = m_data.substring_view_starting_after_substring(string);
     return *this;
@@ -340,7 +320,7 @@ StringView Plan9FS::Message::Decoder::read_data()
 {
     u32 length;
     *this >> length;
-    ASSERT(length <= m_data.length());
+    VERIFY(length <= m_data.length());
     auto data = m_data.substring_view(0, length);
     m_data = m_data.substring_view_starting_after_substring(data);
     return data;
@@ -401,12 +381,12 @@ Plan9FS::Message& Plan9FS::Message::operator=(Message&& message)
 
 const KBuffer& Plan9FS::Message::build()
 {
-    ASSERT(!m_have_been_built);
+    VERIFY(!m_have_been_built);
 
     auto tmp_buffer = m_builder.build();
 
     // FIXME: We should not assume success here.
-    ASSERT(tmp_buffer);
+    VERIFY(tmp_buffer);
 
     m_have_been_built = true;
     m_builder.~KBufferBuilder();
@@ -470,7 +450,7 @@ bool Plan9FS::Plan9FSBlockCondition::should_add_blocker(Thread::Blocker& b, void
 void Plan9FS::Plan9FSBlockCondition::unblock_completed(u16 tag)
 {
     unblock([&](Thread::Blocker& b, void*, bool&) {
-        ASSERT(b.blocker_type() == Thread::Blocker::Type::Plan9FS);
+        VERIFY(b.blocker_type() == Thread::Blocker::Type::Plan9FS);
         auto& blocker = static_cast<Blocker&>(b);
         return blocker.unblock(tag);
     });
@@ -479,7 +459,7 @@ void Plan9FS::Plan9FSBlockCondition::unblock_completed(u16 tag)
 void Plan9FS::Plan9FSBlockCondition::unblock_all()
 {
     unblock([&](Thread::Blocker& b, void*, bool&) {
-        ASSERT(b.blocker_type() == Thread::Blocker::Type::Plan9FS);
+        VERIFY(b.blocker_type() == Thread::Blocker::Type::Plan9FS);
         auto& blocker = static_cast<Blocker&>(b);
         return blocker.unblock();
     });
@@ -495,16 +475,16 @@ void Plan9FS::Plan9FSBlockCondition::try_unblock(Plan9FS::Blocker& blocker)
 
 bool Plan9FS::is_complete(const ReceiveCompletion& completion)
 {
-    LOCKER(m_lock);
+    Locker locker(m_lock);
     if (m_completions.contains(completion.tag)) {
         // If it's still in the map then it can't be complete
-        ASSERT(!completion.completed);
+        VERIFY(!completion.completed);
         return false;
     }
 
     // if it's not in the map anymore, it must be complete. But we MUST
     // hold m_lock to be able to check completion.completed!
-    ASSERT(completion.completed);
+    VERIFY(completion.completed);
     return true;
 }
 
@@ -515,12 +495,12 @@ KResult Plan9FS::post_message(Message& message, RefPtr<ReceiveCompletion> comple
     size_t size = buffer.size();
     auto& description = file_description();
 
-    LOCKER(m_send_lock);
+    Locker locker(m_send_lock);
 
     if (completion) {
         // Save the completion record *before* we send the message. This
         // ensures that it exists when the thread reads the response
-        LOCKER(m_lock);
+        Locker locker(m_lock);
         auto tag = completion->tag;
         m_completions.set(tag, completion.release_nonnull());
         // TODO: What if there is a collision? Do we need to wait until
@@ -531,8 +511,8 @@ KResult Plan9FS::post_message(Message& message, RefPtr<ReceiveCompletion> comple
     while (size > 0) {
         if (!description.can_write()) {
             auto unblock_flags = Thread::FileBlocker::BlockFlags::None;
-            if (Thread::current()->block<Thread::WriteBlocker>(nullptr, description, unblock_flags).was_interrupted())
-                return KResult(-EINTR);
+            if (Thread::current()->block<Thread::WriteBlocker>({}, description, unblock_flags).was_interrupted())
+                return EINTR;
         }
         auto data_buffer = UserOrKernelBuffer::for_kernel_buffer(const_cast<u8*>(data));
         auto nwritten_or_error = description.write(data_buffer, size);
@@ -552,8 +532,8 @@ KResult Plan9FS::do_read(u8* data, size_t size)
     while (size > 0) {
         if (!description.can_read()) {
             auto unblock_flags = Thread::FileBlocker::BlockFlags::None;
-            if (Thread::current()->block<Thread::ReadBlocker>(nullptr, description, unblock_flags).was_interrupted())
-                return KResult(-EINTR);
+            if (Thread::current()->block<Thread::ReadBlocker>({}, description, unblock_flags).was_interrupted())
+                return EINTR;
         }
         auto data_buffer = UserOrKernelBuffer::for_kernel_buffer(data);
         auto nread_or_error = description.read(data_buffer, size);
@@ -561,7 +541,7 @@ KResult Plan9FS::do_read(u8* data, size_t size)
             return nread_or_error.error();
         auto nread = nread_or_error.value();
         if (nread == 0)
-            return KResult(-EIO);
+            return EIO;
         data += nread;
         size -= nread;
     }
@@ -570,8 +550,7 @@ KResult Plan9FS::do_read(u8* data, size_t size)
 
 KResult Plan9FS::read_and_dispatch_one_message()
 {
-    struct [[gnu::packed]] Header
-    {
+    struct [[gnu::packed]] Header {
         u32 size;
         u8 type;
         u16 tag;
@@ -583,14 +562,14 @@ KResult Plan9FS::read_and_dispatch_one_message()
 
     auto buffer = KBuffer::try_create_with_size(header.size, Region::Access::Read | Region::Access::Write);
     if (!buffer)
-        return KResult(-ENOMEM);
+        return ENOMEM;
     // Copy the already read header into the buffer.
     memcpy(buffer->data(), &header, sizeof(header));
     result = do_read(buffer->data() + sizeof(header), header.size - sizeof(header));
     if (result.is_error())
         return result;
 
-    LOCKER(m_lock);
+    Locker locker(m_lock);
 
     auto optional_completion = m_completions.get(header.tag);
     if (optional_completion.has_value()) {
@@ -603,7 +582,7 @@ KResult Plan9FS::read_and_dispatch_one_message()
         m_completions.remove(header.tag);
         m_completion_blocker.unblock_completed(header.tag);
     } else {
-        dbg() << "Received a 9p message of type " << header.type << " with an unexpected tag " << header.tag << ", dropping";
+        dbgln("Received a 9p message of type {} with an unexpected tag {}, dropping", header.type, header.tag);
     }
 
     return KSuccess;
@@ -618,16 +597,16 @@ KResult Plan9FS::post_message_and_wait_for_a_reply(Message& message)
 {
     auto request_type = message.type();
     auto tag = message.tag();
-    auto completion = adopt(*new ReceiveCompletion(tag));
+    auto completion = adopt_ref(*new ReceiveCompletion(tag));
     auto result = post_message(message, completion);
     if (result.is_error())
         return result;
-    if (Thread::current()->block<Plan9FS::Blocker>(nullptr, *this, message, completion).was_interrupted())
-        return KResult(-EINTR);
+    if (Thread::current()->block<Plan9FS::Blocker>({}, *this, message, completion).was_interrupted())
+        return EINTR;
 
     if (completion->result.is_error()) {
-        dbg() << "Plan9FS: Message was aborted with error " << completion->result;
-        return KResult(-EIO);
+        dbgln("Plan9FS: Message was aborted with error {}", completion->result.error());
+        return EIO;
     }
 
     auto reply_type = message.type();
@@ -636,21 +615,20 @@ KResult Plan9FS::post_message_and_wait_for_a_reply(Message& message)
         // Contains a numerical Linux errno; hopefully our errno numbers match.
         u32 error_code;
         message >> error_code;
-        return KResult(-error_code);
+        return KResult((ErrnoCode)error_code);
     } else if (reply_type == Message::Type::Rerror) {
         // Contains an error message. We could attempt to parse it, but for now
         // we simply return -EIO instead. In 9P200.u, it can also contain a
         // numerical errno in an unspecified encoding; we ignore those too.
         StringView error_name;
         message >> error_name;
-        dbg() << "Plan9FS: Received error name " << error_name;
-        return KResult(-EIO);
+        dbgln("Plan9FS: Received error name {}", error_name);
+        return EIO;
     } else if ((u8)reply_type != (u8)request_type + 1) {
         // Other than those error messages. we only expect the matching reply
         // message type.
-        dbg() << "Plan9FS: Received unexpected message type " << (u8)reply_type
-              << " in response to " << (u8)request_type;
-        return KResult(-EIO);
+        dbgln("Plan9FS: Received unexpected message type {} in response to {}", (u8)reply_type, (u8)request_type);
+        return EIO;
     } else {
         return KSuccess;
     }
@@ -664,12 +642,12 @@ ssize_t Plan9FS::adjust_buffer_size(ssize_t size) const
 
 void Plan9FS::thread_main()
 {
-    dbg() << "Plan9FS: Thread running";
+    dbgln("Plan9FS: Thread running");
     do {
         auto result = read_and_dispatch_one_message();
         if (result.is_error()) {
             // If we fail to read, wake up everyone with an error.
-            LOCKER(m_lock);
+            Locker locker(m_lock);
 
             for (auto& it : m_completions) {
                 it.value->result = result;
@@ -677,11 +655,11 @@ void Plan9FS::thread_main()
             }
             m_completions.clear();
             m_completion_blocker.unblock_all();
-            dbg() << "Plan9FS: Thread terminating, error reading";
+            dbgln("Plan9FS: Thread terminating, error reading");
             return;
         }
-    } while (!m_thread_shutdown.load(AK::MemoryOrder::memory_order_relaxed));
-    dbg() << "Plan9FS: Thread terminating";
+    } while (!m_thread_shutdown);
+    dbgln("Plan9FS: Thread terminating");
 }
 
 void Plan9FS::ensure_thread()
@@ -702,7 +680,7 @@ Plan9FSInode::Plan9FSInode(Plan9FS& fs, u32 fid)
 
 NonnullRefPtr<Plan9FSInode> Plan9FSInode::create(Plan9FS& fs, u32 fid)
 {
-    return adopt(*new Plan9FSInode(fs, fid));
+    return adopt_ref(*new Plan9FSInode(fs, fid));
 }
 
 Plan9FSInode::~Plan9FSInode()
@@ -720,7 +698,7 @@ KResult Plan9FSInode::ensure_open_for_mode(int mode)
     u8 p9_mode = 0;
 
     {
-        LOCKER(m_lock);
+        Locker locker(m_lock);
 
         // If it's already open in this mode, we're done.
         if ((m_open_mode & mode) == mode)
@@ -750,7 +728,7 @@ KResult Plan9FSInode::ensure_open_for_mode(int mode)
     }
 }
 
-ssize_t Plan9FSInode::read_bytes(off_t offset, ssize_t size, UserOrKernelBuffer& buffer, FileDescription*) const
+KResultOr<ssize_t> Plan9FSInode::read_bytes(off_t offset, ssize_t size, UserOrKernelBuffer& buffer, FileDescription*) const
 {
     auto result = const_cast<Plan9FSInode&>(*this).ensure_open_for_mode(O_RDONLY);
     if (result.is_error())
@@ -784,22 +762,22 @@ ssize_t Plan9FSInode::read_bytes(off_t offset, ssize_t size, UserOrKernelBuffer&
     // Guard against the server returning more data than requested.
     size_t nread = min(data.length(), (size_t)size);
     if (!buffer.write(data.characters_without_null_termination(), nread))
-        return -EFAULT;
+        return EFAULT;
 
     return nread;
 }
 
-ssize_t Plan9FSInode::write_bytes(off_t offset, ssize_t size, const UserOrKernelBuffer& data, FileDescription*)
+KResultOr<ssize_t> Plan9FSInode::write_bytes(off_t offset, ssize_t size, const UserOrKernelBuffer& data, FileDescription*)
 {
     auto result = ensure_open_for_mode(O_WRONLY);
     if (result.is_error())
-        return result;
+        return result.error();
 
     size = fs().adjust_buffer_size(size);
 
     auto data_copy = data.copy_into_string(size); // FIXME: this seems ugly
     if (data_copy.is_null())
-        return -EFAULT;
+        return EFAULT;
 
     Plan9FS::Message message { fs(), Plan9FS::Message::Type::Twrite };
     message << fid() << (u64)offset;
@@ -946,7 +924,7 @@ KResult Plan9FSInode::traverse_as_directory(Function<bool(const FS::DirectoryEnt
         return result;
     } else {
         // TODO
-        return KResult(-ENOTIMPL);
+        return ENOTIMPL;
     }
 }
 
@@ -966,31 +944,31 @@ RefPtr<Inode> Plan9FSInode::lookup(StringView name)
 KResultOr<NonnullRefPtr<Inode>> Plan9FSInode::create_child(const String&, mode_t, dev_t, uid_t, gid_t)
 {
     // TODO
-    return KResult(-ENOTIMPL);
+    return ENOTIMPL;
 }
 
 KResult Plan9FSInode::add_child(Inode&, const StringView&, mode_t)
 {
     // TODO
-    return KResult(-ENOTIMPL);
+    return ENOTIMPL;
 }
 
 KResult Plan9FSInode::remove_child(const StringView&)
 {
     // TODO
-    return KResult(-ENOTIMPL);
+    return ENOTIMPL;
 }
 
 KResult Plan9FSInode::chmod(mode_t)
 {
     // TODO
-    return KResult(-ENOTIMPL);
+    return ENOTIMPL;
 }
 
 KResult Plan9FSInode::chown(uid_t, gid_t)
 {
     // TODO
-    return KResult(-ENOTIMPL);
+    return ENOTIMPL;
 }
 
 KResult Plan9FSInode::truncate(u64 new_size)

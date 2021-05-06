@@ -1,47 +1,13 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/TestSuite.h>
+#include <LibTest/TestCase.h>
 
 #include <AK/Array.h>
-#include <AK/LogStream.h>
 #include <AK/MemoryStream.h>
-
-static bool compare(ReadonlyBytes lhs, ReadonlyBytes rhs)
-{
-    if (lhs.size() != rhs.size())
-        return false;
-
-    for (size_t idx = 0; idx < lhs.size(); ++idx) {
-        if (lhs[idx] != rhs[idx])
-            return false;
-    }
-
-    return true;
-}
 
 TEST_CASE(read_an_integer)
 {
@@ -97,39 +63,41 @@ TEST_CASE(recoverable_error)
 
 TEST_CASE(chain_stream_operator)
 {
-    u8 expected[] { 0, 1, 2, 3 }, actual[4];
+    const Array<u8, 4> expected { 0, 1, 2, 3 };
+    Array<u8, 4> actual;
 
-    InputMemoryStream stream { { expected, sizeof(expected) } };
+    InputMemoryStream stream { expected };
 
     stream >> actual[0] >> actual[1] >> actual[2] >> actual[3];
     EXPECT(!stream.has_any_error() && stream.eof());
 
-    EXPECT(compare({ expected, sizeof(expected) }, { actual, sizeof(actual) }));
+    EXPECT_EQ(expected, actual);
 }
 
 TEST_CASE(seeking_slicing_offset)
 {
-    u8 input[] { 0, 1, 2, 3, 4, 5, 6, 7 },
-        expected0[] { 0, 1, 2, 3 },
-        expected1[] { 4, 5, 6, 7 },
-        expected2[] { 1, 2, 3, 4 },
-        actual0[4], actual1[4], actual2[4];
+    const Array<u8, 8> input { 0, 1, 2, 3, 4, 5, 6, 7 };
+    const Array<u8, 4> expected0 { 0, 1, 2, 3 };
+    const Array<u8, 4> expected1 { 4, 5, 6, 7 };
+    const Array<u8, 4> expected2 { 1, 2, 3, 4 };
 
-    InputMemoryStream stream { { input, sizeof(input) } };
+    Array<u8, 4> actual0 {}, actual1 {}, actual2 {};
 
-    stream >> Bytes { actual0, sizeof(actual0) };
+    InputMemoryStream stream { input };
+
+    stream >> actual0;
     EXPECT(!stream.has_any_error() && !stream.eof());
-    EXPECT(compare({ expected0, sizeof(expected0) }, { actual0, sizeof(actual0) }));
+    EXPECT_EQ(expected0, actual0);
 
     stream.seek(4);
-    stream >> Bytes { actual1, sizeof(actual1) };
+    stream >> actual1;
     EXPECT(!stream.has_any_error() && stream.eof());
-    EXPECT(compare({ expected1, sizeof(expected1) }, { actual1, sizeof(actual1) }));
+    EXPECT_EQ(expected1, actual1);
 
     stream.seek(1);
-    stream >> Bytes { actual2, sizeof(actual2) };
+    stream >> actual2;
     EXPECT(!stream.has_any_error() && !stream.eof());
-    EXPECT(compare({ expected2, sizeof(expected2) }, { actual2, sizeof(actual2) }));
+    EXPECT_EQ(expected2, actual2);
 }
 
 TEST_CASE(duplex_simple)
@@ -172,8 +140,8 @@ TEST_CASE(duplex_large_buffer)
 
 TEST_CASE(read_endian_values)
 {
-    const u8 input[] { 0, 1, 2, 3, 4, 5, 6, 7 };
-    InputMemoryStream stream { { input, sizeof(input) } };
+    const Array<u8, 8> input { 0, 1, 2, 3, 4, 5, 6, 7 };
+    InputMemoryStream stream { input };
 
     LittleEndian<u32> value1;
     BigEndian<u32> value2;
@@ -185,13 +153,13 @@ TEST_CASE(read_endian_values)
 
 TEST_CASE(write_endian_values)
 {
-    const u8 expected[] { 4, 3, 2, 1, 1, 2, 3, 4 };
+    const Array<u8, 8> expected { 4, 3, 2, 1, 1, 2, 3, 4 };
 
     DuplexMemoryStream stream;
     stream << LittleEndian<u32> { 0x01020304 } << BigEndian<u32> { 0x01020304 };
 
     EXPECT_EQ(stream.size(), 8u);
-    EXPECT(compare({ expected, sizeof(expected) }, stream.copy_into_contiguous_buffer()));
+    EXPECT(expected.span() == stream.copy_into_contiguous_buffer().span());
 }
 
 TEST_CASE(new_output_memory_stream)
@@ -250,10 +218,5 @@ TEST_CASE(offset_calculation_error_regression)
     stream.discard_or_error(sizeof(int));
     stream.read(output);
 
-    EXPECT(compare(input, output));
-
-    AK::dump_bytes(input);
-    AK::dump_bytes(output);
+    EXPECT_EQ(input, output);
 }
-
-TEST_MAIN(MemoryStream)

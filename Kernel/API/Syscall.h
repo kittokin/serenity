@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -99,6 +79,7 @@ namespace Kernel {
     S(setegid)                \
     S(setuid)                 \
     S(setgid)                 \
+    S(setreuid)               \
     S(setresuid)              \
     S(setresgid)              \
     S(alarm)                  \
@@ -121,15 +102,10 @@ namespace Kernel {
     S(accept)                 \
     S(listen)                 \
     S(connect)                \
-    S(shbuf_create)           \
-    S(shbuf_allow_pid)        \
-    S(shbuf_get)              \
-    S(shbuf_release)          \
     S(link)                   \
     S(chown)                  \
     S(fchmod)                 \
     S(symlink)                \
-    S(shbuf_seal)             \
     S(sendmsg)                \
     S(recvmsg)                \
     S(getsockopt)             \
@@ -145,6 +121,7 @@ namespace Kernel {
     S(beep)                   \
     S(getsockname)            \
     S(getpeername)            \
+    S(socketpair)             \
     S(sched_setparam)         \
     S(sched_getparam)         \
     S(fchown)                 \
@@ -156,12 +133,12 @@ namespace Kernel {
     S(dbgputch)               \
     S(dbgputstr)              \
     S(watch_file)             \
-    S(shbuf_allow_all)        \
     S(mprotect)               \
     S(realpath)               \
     S(get_process_name)       \
     S(fchdir)                 \
     S(getrandom)              \
+    S(getkeymap)              \
     S(setkeymap)              \
     S(clock_gettime)          \
     S(clock_settime)          \
@@ -174,12 +151,10 @@ namespace Kernel {
     S(get_thread_name)        \
     S(madvise)                \
     S(purge)                  \
-    S(shbuf_set_volatile)     \
     S(profiling_enable)       \
     S(profiling_disable)      \
+    S(profiling_free_buffer)  \
     S(futex)                  \
-    S(set_thread_boost)       \
-    S(set_process_boost)      \
     S(chroot)                 \
     S(pledge)                 \
     S(unveil)                 \
@@ -187,7 +162,6 @@ namespace Kernel {
     S(shutdown)               \
     S(get_stack_bounds)       \
     S(ptrace)                 \
-    S(minherit)               \
     S(sendfd)                 \
     S(recvfd)                 \
     S(sysconf)                \
@@ -197,7 +171,11 @@ namespace Kernel {
     S(allocate_tls)           \
     S(prctl)                  \
     S(mremap)                 \
-    S(set_coredump_metadata)
+    S(set_coredump_metadata)  \
+    S(anon_create)            \
+    S(msyscall)               \
+    S(readv)                  \
+    S(emuctl)
 
 namespace Syscall {
 
@@ -236,12 +214,6 @@ struct MutableBufferArgument {
     SizeType size { 0 };
 };
 
-template<typename DataType, typename SizeType>
-struct ImmutableBufferArgument {
-    const DataType* data { nullptr };
-    SizeType size { 0 };
-};
-
 struct StringListArgument {
     StringArgument* strings {};
     size_t length { 0 };
@@ -254,7 +226,7 @@ struct SC_mmap_params {
     int32_t prot;
     int32_t flags;
     int32_t fd;
-    ssize_t offset;
+    int64_t offset;
     StringArgument name;
 };
 
@@ -323,11 +295,23 @@ struct SC_getpeername_params {
     socklen_t* addrlen;
 };
 
+struct SC_socketpair_params {
+    int domain;
+    int type;
+    int protocol;
+    int* sv;
+};
+
 struct SC_futex_params {
-    const i32* userspace_address;
+    u32* userspace_address;
     int futex_op;
-    i32 val;
-    const timespec* timeout;
+    u32 val;
+    union {
+        const timespec* timeout;
+        uintptr_t val2;
+    };
+    u32* userspace_address2;
+    u32 val3;
 };
 
 struct SC_setkeymap_params {
@@ -335,7 +319,17 @@ struct SC_setkeymap_params {
     const u32* shift_map;
     const u32* alt_map;
     const u32* altgr_map;
+    const u32* shift_altgr_map;
     StringArgument map_name;
+};
+
+struct SC_getkeymap_params {
+    u32* map;
+    u32* shift_map;
+    u32* alt_map;
+    u32* altgr_map;
+    u32* shift_altgr_map;
+    MutableBufferArgument<char, size_t> map_name;
 };
 
 struct SC_create_thread_params {
@@ -428,7 +422,7 @@ struct SC_waitid_params {
 struct SC_stat_params {
     StringArgument path;
     struct stat* statbuf;
-    bool follow_symlinks;
+    int follow_symlinks;
 };
 
 struct SC_ptrace_params {
@@ -501,7 +495,6 @@ inline uintptr_t invoke(Function function, T1 arg1, T2 arg2, T3 arg3)
 #define __ENUMERATE_SYSCALL(x) using Syscall::SC_##x;
 ENUMERATE_SYSCALLS(__ENUMERATE_SYSCALL)
 #undef __ENUMERATE_SYSCALL
-#define syscall Syscall::invoke
 
 }
 

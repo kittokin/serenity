@@ -1,4 +1,0 @@
-endpoint LanguageClient = 8002
-{
-    AutoCompleteSuggestions(Vector<GUI::AutocompleteProvider::Entry> suggestions) =|
-}

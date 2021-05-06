@@ -1,37 +1,16 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/ScopeGuard.h>
+#include <Kernel/Debug.h>
 #include <Kernel/Process.h>
 #include <Kernel/TTY/TTY.h>
 #include <LibC/errno_numbers.h>
 #include <LibC/signal_numbers.h>
 #include <LibC/sys/ioctl_numbers.h>
-
-//#define TTY_DEBUG
 
 namespace Kernel {
 
@@ -53,12 +32,12 @@ void TTY::set_default_termios()
     memcpy(m_termios.c_cc, default_cc, sizeof(default_cc));
 }
 
-KResultOr<size_t> TTY::read(FileDescription&, size_t, UserOrKernelBuffer& buffer, size_t size)
+KResultOr<size_t> TTY::read(FileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
 {
     if (Process::current()->pgid() != pgid()) {
         // FIXME: Should we propagate this error path somehow?
         [[maybe_unused]] auto rc = Process::current()->send_signal(SIGTTIN, nullptr);
-        return KResult(-EINTR);
+        return EINTR;
     }
 
     if (m_input_buffer.size() < static_cast<size_t>(size))
@@ -89,27 +68,48 @@ KResultOr<size_t> TTY::read(FileDescription&, size_t, UserOrKernelBuffer& buffer
         });
     } else {
         nwritten = buffer.write_buffered<512>(size, [&](u8* data, size_t data_size) {
-            for (size_t i = 0; i < data_size; i++)
-                data[i] = m_input_buffer.dequeue();
+            for (size_t i = 0; i < data_size; i++) {
+                auto ch = m_input_buffer.dequeue();
+                if (ch == '\r' && m_termios.c_iflag & ICRNL)
+                    ch = '\n';
+                else if (ch == '\n' && m_termios.c_iflag & INLCR)
+                    ch = '\r';
+                data[i] = ch;
+            }
             return (ssize_t)data_size;
         });
     }
     if (nwritten < 0)
-        return KResult(nwritten);
+        return KResult((ErrnoCode)-nwritten);
     if (nwritten > 0 || need_evaluate_block_conditions)
         evaluate_block_conditions();
     return (size_t)nwritten;
 }
 
-KResultOr<size_t> TTY::write(FileDescription&, size_t, const UserOrKernelBuffer& buffer, size_t size)
+KResultOr<size_t> TTY::write(FileDescription&, u64, const UserOrKernelBuffer& buffer, size_t size)
 {
-    if (Process::current()->pgid() != pgid()) {
+    if (m_termios.c_lflag & TOSTOP && Process::current()->pgid() != pgid()) {
         [[maybe_unused]] auto rc = Process::current()->send_signal(SIGTTOU, nullptr);
-        return KResult(-EINTR);
+        return EINTR;
     }
 
-    on_tty_write(buffer, size);
-    return size;
+    const size_t num_chars = 256;
+    ssize_t nread = buffer.read_buffered<num_chars>((size_t)size, [&](const u8* data, size_t buffer_bytes) {
+        u8 modified_data[num_chars * 2];
+        size_t extra_chars = 0;
+        for (size_t i = 0; i < buffer_bytes; ++i) {
+            auto ch = data[i];
+            if (ch == '\n' && (m_termios.c_oflag & (OPOST | ONLCR))) {
+                modified_data[i + extra_chars] = '\r';
+                extra_chars++;
+            }
+            modified_data[i + extra_chars] = ch;
+        }
+        on_tty_write(UserOrKernelBuffer::for_kernel_buffer(modified_data), buffer_bytes + extra_chars);
+        return (ssize_t)buffer_bytes;
+    });
+
+    return nread;
 }
 
 bool TTY::can_read(const FileDescription&, size_t) const
@@ -154,25 +154,26 @@ void TTY::emit(u8 ch, bool do_evaluate_block_conditions)
 {
     if (should_generate_signals()) {
         if (ch == m_termios.c_cc[VINFO]) {
-            dbg() << tty_name() << ": VINFO pressed!";
+            dbgln("{}: VINFO pressed!", tty_name());
             generate_signal(SIGINFO);
             return;
         }
         if (ch == m_termios.c_cc[VINTR]) {
-            dbg() << tty_name() << ": VINTR pressed!";
+            dbgln("{}: VINTR pressed!", tty_name());
             generate_signal(SIGINT);
             return;
         }
         if (ch == m_termios.c_cc[VQUIT]) {
-            dbg() << tty_name() << ": VQUIT pressed!";
+            dbgln("{}: VQUIT pressed!", tty_name());
             generate_signal(SIGQUIT);
             return;
         }
         if (ch == m_termios.c_cc[VSUSP]) {
-            dbg() << tty_name() << ": VSUSP pressed!";
+            dbgln("{}: VSUSP pressed!", tty_name());
             generate_signal(SIGTSTP);
-            if (auto original_process_parent = m_original_process_parent.strong_ref())
+            if (auto original_process_parent = m_original_process_parent.strong_ref()) {
                 [[maybe_unused]] auto rc = original_process_parent->send_signal(SIGCHLD, nullptr);
+            }
             // TODO: Else send it to the session leader maybe?
             return;
         }
@@ -283,10 +284,10 @@ void TTY::generate_signal(int signal)
         return;
     if (should_flush_on_signal())
         flush_input();
-    dbg() << tty_name() << ": Send signal " << signal << " to everyone in pgrp " << pgid().value();
+    dbgln_if(TTY_DEBUG, "{}: Send signal {} to everyone in pgrp {}", tty_name(), signal, pgid().value());
     InterruptDisabler disabler; // FIXME: Iterate over a set of process handles instead?
     Process::for_each_in_pgrp(pgid(), [&](auto& process) {
-        dbg() << tty_name() << ": Send signal " << signal << " to " << process;
+        dbgln_if(TTY_DEBUG, "{}: Send signal {} to {}", tty_name(), signal, process);
         // FIXME: Should this error be propagated somehow?
         [[maybe_unused]] auto rc = process.send_signal(signal, nullptr);
         return IterationDecision::Continue;
@@ -303,19 +304,21 @@ void TTY::flush_input()
 void TTY::set_termios(const termios& t)
 {
     m_termios = t;
-#ifdef TTY_DEBUG
-    dbg() << tty_name() << " set_termios: "
-          << "ECHO=" << should_echo_input()
-          << ", ISIG=" << should_generate_signals()
-          << ", ICANON=" << in_canonical_mode()
-          << ", ECHOE=" << ((m_termios.c_lflag & ECHOE) != 0)
-          << ", ECHOK=" << ((m_termios.c_lflag & ECHOK) != 0)
-          << ", ECHONL=" << ((m_termios.c_lflag & ECHONL) != 0)
-          << ", ISTRIP=" << ((m_termios.c_iflag & ISTRIP) != 0)
-          << ", ICRNL=" << ((m_termios.c_iflag & ICRNL) != 0)
-          << ", INLCR=" << ((m_termios.c_iflag & INLCR) != 0)
-          << ", IGNCR=" << ((m_termios.c_iflag & IGNCR) != 0);
-#endif
+
+    dbgln_if(TTY_DEBUG, "{} set_termios: ECHO={}, ISIG={}, ICANON={}, ECHOE={}, ECHOK={}, ECHONL={}, ISTRIP={}, ICRNL={}, INLCR={}, IGNCR={}, OPOST={}, ONLCR={}",
+        tty_name(),
+        should_echo_input(),
+        should_generate_signals(),
+        in_canonical_mode(),
+        ((m_termios.c_lflag & ECHOE) != 0),
+        ((m_termios.c_lflag & ECHOK) != 0),
+        ((m_termios.c_lflag & ECHONL) != 0),
+        ((m_termios.c_iflag & ISTRIP) != 0),
+        ((m_termios.c_iflag & ICRNL) != 0),
+        ((m_termios.c_iflag & INLCR) != 0),
+        ((m_termios.c_iflag & IGNCR) != 0),
+        ((m_termios.c_oflag & OPOST) != 0),
+        ((m_termios.c_oflag & ONLCR) != 0));
 }
 
 int TTY::ioctl(FileDescription&, unsigned request, FlatPtr arg)
@@ -414,11 +417,12 @@ int TTY::ioctl(FileDescription&, unsigned request, FlatPtr arg)
     case TIOCSCTTY:
         current_process.set_tty(this);
         return 0;
+    case TIOCSTI:
+        return -EIO;
     case TIOCNOTTY:
         current_process.set_tty(nullptr);
         return 0;
     }
-    ASSERT_NOT_REACHED();
     return -EINVAL;
 }
 

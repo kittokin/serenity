@@ -1,3 +1,5 @@
+include(${CMAKE_SOURCE_DIR}/Meta/CMake/precompile-headers.cmake)
+
 function(serenity_install_headers target_name)
     file(GLOB_RECURSE headers RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.h")
     foreach(header ${headers})
@@ -26,17 +28,17 @@ endfunction()
 
 function(serenity_lib target_name fs_name)
     serenity_install_headers(${target_name})
-    serenity_install_sources("Libraries/${target_name}")
-    #add_library(${target_name} SHARED ${SOURCES} ${GENERATED_SOURCES})
+    serenity_install_sources("Userland/Libraries/${target_name}")
     add_library(${target_name} SHARED ${SOURCES} ${GENERATED_SOURCES})
     install(TARGETS ${target_name} DESTINATION usr/lib)
     set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${fs_name})
+    serenity_add_ak_precompiled_headers_to_target(${target_name})
     serenity_generated_sources(${target_name})
 endfunction()
 
 function(serenity_shared_lib target_name fs_name)
     serenity_install_headers(${target_name})
-    serenity_install_sources("Libraries/${target_name}")
+    serenity_install_sources("Userland/Libraries/${target_name}")
     add_library(${target_name} SHARED ${SOURCES} ${GENERATED_SOURCES})
     install(TARGETS ${target_name} DESTINATION usr/lib)
     set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${fs_name})
@@ -45,7 +47,7 @@ endfunction()
 
 function(serenity_libc target_name fs_name)
     serenity_install_headers("")
-    serenity_install_sources("Libraries/LibC")
+    serenity_install_sources("Userland/Libraries/LibC")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -nostdlib -fpic")
     add_library(${target_name} SHARED ${SOURCES})
     install(TARGETS ${target_name} DESTINATION usr/lib)
@@ -56,7 +58,7 @@ endfunction()
 
 function(serenity_libc_static target_name fs_name)
     serenity_install_headers("")
-    serenity_install_sources("Libraries/LibC")
+    serenity_install_sources("Userland/Libraries/LibC")
     add_library(${target_name} ${SOURCES})
     install(TARGETS ${target_name} ARCHIVE DESTINATION usr/lib)
     set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${fs_name})
@@ -67,7 +69,23 @@ endfunction()
 function(serenity_bin target_name)
     add_executable(${target_name} ${SOURCES})
     install(TARGETS ${target_name} RUNTIME DESTINATION bin)
+    serenity_add_ak_precompiled_headers_to_target(${target_name})
     serenity_generated_sources(${target_name})
+endfunction()
+
+function(serenity_test test_src sub_dir)
+    cmake_parse_arguments(SERENITY_TEST "CUSTOM_MAIN" "" "LIBS" ${ARGN})
+    set(TEST_SOURCES ${test_src})
+    if (NOT ${SERENITY_TEST_CUSTOM_MAIN})
+        list(APPEND TEST_SOURCES "${CMAKE_SOURCE_DIR}/Userland/Libraries/LibTest/TestMain.cpp")
+    endif()
+    get_filename_component(test_name ${test_src} NAME_WE)
+    add_executable(${test_name} ${TEST_SOURCES})
+    target_link_libraries(${test_name} LibTest LibCore)
+    foreach(lib ${SERENITY_TEST_LIBS})
+        target_link_libraries(${test_name} ${lib})
+    endforeach()
+    install(TARGETS ${test_name} RUNTIME DESTINATION usr/Tests/${sub_dir})
 endfunction()
 
 function(serenity_app target_name)
@@ -79,12 +97,21 @@ function(serenity_app target_name)
 
     if (EXISTS "${small_icon}")
         embed_resource("${target_name}" serenity_icon_s "${small_icon}")
-    endif()
-    if (EXISTS "${medium_icon}")
-        embed_resource("${target_name}" serenity_icon_m "${medium_icon}")
+    else()
+        message(WARNING "Missing small app icon: ${small_icon}")
     endif()
 
-    # TODO: Issue warnings if the app icons don't exist
+    if (EXISTS "${medium_icon}")
+        embed_resource("${target_name}" serenity_icon_m "${medium_icon}")
+    else()
+        # These icons are designed small only for use in applets, and thus are exempt.
+        list(APPEND allowed_missing_medium_icons "audio-volume-high")
+        list(APPEND allowed_missing_medium_icons "edit-copy")
+
+        if (NOT ${SERENITY_APP_ICON} IN_LIST allowed_missing_medium_icons)
+            message(WARNING "Missing medium app icon: ${medium_icon}")
+        endif()
+    endif()
 endfunction()
 
 function(compile_gml source output string_name)
@@ -105,7 +132,7 @@ function(compile_ipc source output)
     set(source ${CMAKE_CURRENT_SOURCE_DIR}/${source})
     add_custom_command(
         OUTPUT ${output}
-        COMMAND ${write_if_different} ${output} ${CMAKE_BINARY_DIR}/DevTools/IPCCompiler/IPCCompiler ${source}
+        COMMAND ${write_if_different} ${output} ${CMAKE_BINARY_DIR}/Userland/DevTools/IPCCompiler/IPCCompiler ${source}
         VERBATIM
         DEPENDS IPCCompiler
         MAIN_DEPENDENCY ${source}

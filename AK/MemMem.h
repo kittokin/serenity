@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -37,7 +17,7 @@ namespace AK {
 namespace {
 const static void* bitap_bitwise(const void* haystack, size_t haystack_length, const void* needle, size_t needle_length)
 {
-    ASSERT(needle_length < 32);
+    VERIFY(needle_length < 32);
 
     u64 lookup = 0xfffffffe;
 
@@ -120,28 +100,39 @@ static inline Optional<size_t> memmem(const HaystackIterT& haystack_begin, const
     return {};
 }
 
-static inline const void* memmem(const void* haystack, size_t haystack_length, const void* needle, size_t needle_length)
+static inline Optional<size_t> memmem_optional(const void* haystack, size_t haystack_length, const void* needle, size_t needle_length)
 {
     if (needle_length == 0)
-        return haystack;
+        return 0;
 
     if (haystack_length < needle_length)
-        return nullptr;
+        return {};
 
-    if (haystack_length == needle_length)
-        return __builtin_memcmp(haystack, needle, haystack_length) == 0 ? haystack : nullptr;
+    if (haystack_length == needle_length) {
+        if (__builtin_memcmp(haystack, needle, haystack_length) == 0)
+            return 0;
+        return {};
+    }
 
-    if (needle_length < 32)
-        return bitap_bitwise(haystack, haystack_length, needle, needle_length);
+    if (needle_length < 32) {
+        auto ptr = bitap_bitwise(haystack, haystack_length, needle, needle_length);
+        if (ptr)
+            return static_cast<size_t>((FlatPtr)ptr - (FlatPtr)haystack);
+        return {};
+    }
 
     // Fallback to KMP.
     Array<Span<const u8>, 1> spans { Span<const u8> { (const u8*)haystack, haystack_length } };
-    auto result = memmem(spans.begin(), spans.end(), { (const u8*)needle, needle_length });
+    return memmem(spans.begin(), spans.end(), { (const u8*)needle, needle_length });
+}
 
-    if (result.has_value())
-        return (const u8*)haystack + result.value();
+static inline const void* memmem(const void* haystack, size_t haystack_length, const void* needle, size_t needle_length)
+{
+    auto offset = memmem_optional(haystack, haystack_length, needle, needle_length);
+    if (offset.has_value())
+        return ((const u8*)haystack) + offset.value();
 
-    return {};
+    return nullptr;
 }
 
 }

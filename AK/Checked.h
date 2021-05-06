@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011-2019 Apple Inc. All rights reserved.
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -104,7 +104,7 @@ struct TypeBoundsChecker<Destination, Source, true, true, false> {
 };
 
 template<typename Destination, typename Source>
-constexpr bool is_within_range(Source value)
+[[nodiscard]] constexpr bool is_within_range(Source value)
 {
     return TypeBoundsChecker<Destination, Source>::is_within_range(value);
 }
@@ -149,20 +149,20 @@ public:
         return *this;
     }
 
-    constexpr bool has_overflow() const
+    [[nodiscard]] constexpr bool has_overflow() const
     {
         return m_overflow;
     }
 
     ALWAYS_INLINE constexpr bool operator!() const
     {
-        ASSERT(!m_overflow);
+        VERIFY(!m_overflow);
         return !m_value;
     }
 
     ALWAYS_INLINE constexpr T value() const
     {
-        ASSERT(!m_overflow);
+        VERIFY(!m_overflow);
         return m_value;
     }
 
@@ -186,9 +186,23 @@ public:
         m_value /= other;
     }
 
+    constexpr Checked& operator+=(const Checked& other)
+    {
+        m_overflow |= other.m_overflow;
+        add(other.value());
+        return *this;
+    }
+
     constexpr Checked& operator+=(T other)
     {
         add(other);
+        return *this;
+    }
+
+    constexpr Checked& operator-=(const Checked& other)
+    {
+        m_overflow |= other.m_overflow;
+        sub(other.value());
         return *this;
     }
 
@@ -198,9 +212,23 @@ public:
         return *this;
     }
 
+    constexpr Checked& operator*=(const Checked& other)
+    {
+        m_overflow |= other.m_overflow;
+        mul(other.value());
+        return *this;
+    }
+
     constexpr Checked& operator*=(T other)
     {
         mul(other);
+        return *this;
+    }
+
+    constexpr Checked& operator/=(const Checked& other)
+    {
+        m_overflow |= other.m_overflow;
+        div(other.value());
         return *this;
     }
 
@@ -223,8 +251,21 @@ public:
         return old;
     }
 
+    constexpr Checked& operator--()
+    {
+        sub(1);
+        return *this;
+    }
+
+    constexpr Checked operator--(int)
+    {
+        Checked old { *this };
+        sub(1);
+        return old;
+    }
+
     template<typename U, typename V>
-    static constexpr bool addition_would_overflow(U u, V v)
+    [[nodiscard]] static constexpr bool addition_would_overflow(U u, V v)
     {
 #ifdef __clang__
         Checked checked;
@@ -237,7 +278,7 @@ public:
     }
 
     template<typename U, typename V>
-    static constexpr bool multiplication_would_overflow(U u, V v)
+    [[nodiscard]] static constexpr bool multiplication_would_overflow(U u, V v)
     {
 #ifdef __clang__
         Checked checked;
@@ -250,7 +291,7 @@ public:
     }
 
     template<typename U, typename V, typename X>
-    static constexpr bool multiplication_would_overflow(U u, V v, X x)
+    [[nodiscard]] static constexpr bool multiplication_would_overflow(U u, V v, X x)
     {
         Checked checked;
         checked = u;

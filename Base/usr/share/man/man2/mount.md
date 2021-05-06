@@ -73,7 +73,7 @@ to use the new mount flags after remounting a filesystem, a process can call
 
 Similarly, to change the mount flags used by the root directory, a process can
 call [`chroot_with_mount_flags`(2)](chroot.md), specifying a single slash (`/`)
-as the path along with the desired flags. While is's possible to remount the
+as the path along with the desired flags. While it is possible to remount the
 root filesystem using `MS_REMOUNT`, it would only have a noticeable effect if
 the kernel was to launch more userspace processes directly, the way it does
 launch the initial userspace process.
@@ -89,6 +89,8 @@ launch the initial userspace process.
 * `EBADF`: If the `source_fd` is not valid, and either `fs_type` specifies a
   file-backed filesystem (and not a pseudo filesystem), or `MS_BIND` is
   specified in flags.
+* `ENOTBLK`: If the `source_fd` is not a block device, but one is required (i.e.
+  when `fs_type` is `Ext2FS`)
 
 All of the usual path resolution errors may also occur.
 

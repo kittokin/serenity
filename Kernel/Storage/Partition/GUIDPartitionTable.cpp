@@ -1,35 +1,13 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ByteBuffer.h>
+#include <AK/AllOf.h>
+#include <AK/Array.h>
+#include <Kernel/Debug.h>
 #include <Kernel/Storage/Partition/GUIDPartitionTable.h>
-
-#ifndef GPT_DEBUG
-#    define GPT_DEBUG
-#endif
 
 namespace Kernel {
 
@@ -37,8 +15,7 @@ namespace Kernel {
 #define GPT_SIGNATURE 0x20494645
 #define BytesPerSector 512
 
-struct [[gnu::packed]] GPTPartitionEntry
-{
+struct [[gnu::packed]] GPTPartitionEntry {
     u8 partition_guid[16];
     u8 unique_guid[16];
 
@@ -49,8 +26,7 @@ struct [[gnu::packed]] GPTPartitionEntry
     char partition_name[72];
 };
 
-struct [[gnu::packed]] GUIDPartitionHeader
-{
+struct [[gnu::packed]] GUIDPartitionHeader {
     u32 sig[2];
     u32 revision;
     u32 header_size;
@@ -83,7 +59,7 @@ GUIDPartitionTable::GUIDPartitionTable(const StorageDevice& device)
     : MBRPartitionTable(device)
 {
     m_cached_header = ByteBuffer::create_zeroed(m_device->block_size());
-    ASSERT(partitions_count() == 0);
+    VERIFY(partitions_count() == 0);
     if (!initialize())
         m_valid = false;
 }
@@ -95,7 +71,7 @@ const GUIDPartitionHeader& GUIDPartitionTable::header() const
 
 bool GUIDPartitionTable::initialize()
 {
-    ASSERT(m_cached_header.data() != nullptr);
+    VERIFY(m_cached_header.data() != nullptr);
 
     auto first_gpt_block = (m_device->block_size() == 512) ? 1 : 0;
 
@@ -104,12 +80,10 @@ bool GUIDPartitionTable::initialize()
         return false;
     }
 
-#ifdef GPT_DEBUG
-    klog() << "GUIDPartitionTable: signature - 0x" << String::format("%x", header().sig[1]) << String::format("%x", header().sig[0]);
-#endif
+    dbgln_if(GPT_DEBUG, "GUIDPartitionTable: signature - {:#08x} {:#08x}", header().sig[1], header().sig[0]);
 
     if (header().sig[0] != GPT_SIGNATURE && header().sig[1] != GPT_SIGNATURE2) {
-        klog() << "GUIDPartitionTable: bad signature 0x" << String::format("%x", header().sig[1]) << String::format("%x", header().sig[0]);
+        dbgln("GUIDPartitionTable: bad signature {:#08x} {:#08x}", header().sig[1], header().sig[0]);
         return false;
     }
 
@@ -123,31 +97,28 @@ bool GUIDPartitionTable::initialize()
         }
         auto* entries = (const GPTPartitionEntry*)entries_buffer.data();
         auto& entry = entries[entry_index % (m_device->block_size() / (size_t)header().partition_entry_size)];
-        ByteBuffer partition_type = ByteBuffer::copy(entry.partition_guid, 16);
+        Array<u8, 16> partition_type {};
+        partition_type.span().overwrite(0, entry.partition_guid, partition_type.size());
 
         if (is_unused_entry(partition_type)) {
             raw_byte_index += header().partition_entry_size;
             continue;
         }
 
-        ByteBuffer unique_guid = ByteBuffer::copy(entry.unique_guid, 16);
+        Array<u8, 16> unique_guid {};
+        unique_guid.span().overwrite(0, entry.unique_guid, unique_guid.size());
         String name = entry.partition_name;
-        dbg() << "Detected GPT partition (entry " << entry_index << ") , offset " << entry.first_lba << " , limit " << entry.last_lba;
-        m_partitions.append(DiskPartitionMetadata({ entry.first_lba, entry.last_lba, partition_type }));
+        dbgln("Detected GPT partition (entry={}), offset={}, limit={}", entry_index, entry.first_lba, entry.last_lba);
+        m_partitions.append({ entry.first_lba, entry.last_lba, partition_type, unique_guid, entry.attributes, "" });
         raw_byte_index += header().partition_entry_size;
     }
 
     return true;
 }
 
-bool GUIDPartitionTable::is_unused_entry(ByteBuffer partition_type) const
+bool GUIDPartitionTable::is_unused_entry(Array<u8, 16> partition_type) const
 {
-    ASSERT(partition_type.size() == 16);
-    for (size_t byte_index = 0; byte_index < 16; byte_index++) {
-        if (partition_type[byte_index] != 0)
-            return false;
-    }
-    return true;
+    return all_of(partition_type.begin(), partition_type.end(), [](const auto octet) { return octet == 0; });
 }
 
 }

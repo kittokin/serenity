@@ -18,7 +18,7 @@ Lagom can be used to fuzz parts of SerenityOS's code base. This requires buildli
 
     # From the root of the SerenityOS checkout:
     mkdir BuildLagom && cd BuildLagom
-    cmake -GNinja -DBUILD_LAGOM=ON -DENABLE_FUZZER_SANITIZER=ON -DENABLE_ADDRESS_SANITIZER=ON -DCMAKE_CXX_COMPILER=clang++ ..
+    cmake -GNinja -DBUILD_LAGOM=ON -DENABLE_FUZZER_SANITIZER=ON -DENABLE_ADDRESS_SANITIZER=ON -DENABLE_UNDEFINED_SANITIZER=ON -DCMAKE_CXX_COMPILER=clang++ ..
     ninja Meta/Lagom/all
     # Or as a handy rebuild-rerun line:
     ninja FuzzJs && Meta/Lagom/Fuzzers/FuzzJs
@@ -78,6 +78,18 @@ These commands will put the fuzzers in `build/out/serenity` in the oss-fuzz repo
 python3 infra/helper.py run_fuzzer serenity FUZZER_NAME
 ```
 
+To build the fuzzers using the oss-fuzz build process, but against a local serenity checkout:
+
+```
+python3 infra/helper.py build_fuzzers serenity $HOME/src/serenity/
+```
+
+To run a shell in oss-fuzz's serenity docker image:
+
+```
+docker run -it gcr.io/oss-fuzz/serenity bash
+```
+
 ### Analyzing a crash
 
 LLVM fuzzers have a weird interface. In particular, to see the help, you need to call it with `-help=1`, and it will ignore `--help` and `-help`.
@@ -91,10 +103,22 @@ $ gdb ./Meta/Lagom/Fuzzers/FuzzBMP
 <... SNIP some output ...>
 (gdb) run -handle_abrt=0 -handle_segv=0 crash-27480a219572aa5a11b285968a3632a4cf25388e
 <... SNIP some output ...>
-FuzzBMP: ../../Libraries/LibGfx/Bitmap.cpp:84: Gfx::Bitmap::Bitmap(Gfx::BitmapFormat, const Gfx::IntSize &, Gfx::Bitmap::Purgeable): Assertion `m_data && m_data != (void*)-1' failed.
+FuzzBMP: ../../Userland/Libraries/LibGfx/Bitmap.cpp:84: Gfx::Bitmap::Bitmap(Gfx::BitmapFormat, const Gfx::IntSize &, Gfx::Bitmap::Purgeable): Assertion `m_data && m_data != (void*)-1' failed.
 
 Thread 1 "FuzzBMP" received signal SIGABRT, Aborted.
 __GI_raise (sig=sig@entry=6) at ../sysdeps/unix/sysv/linux/raise.c:50
 50	../sysdeps/unix/sysv/linux/raise.c: File or directory not found.
 (gdb)
 ```
+
+UBSan doesn't always give useful information. use something like `export UBSAN_OPTIONS=print_stacktrace=1` to always print stacktraces.
+
+You may run into annoying issues with the stacktrace:
+
+```
+==123456==WARNING: invalid path to external symbolizer!
+==123456==WARNING: Failed to use and restart external symbolizer!
+```
+
+That means it couldn't find the executable `llvm-symbolizer`, which could be in your OS's package `llvm`.
+`llvm-symbolizer-11` will [not be recognized](https://stackoverflow.com/a/42845444/).
