@@ -11,8 +11,12 @@
 #include <AK/HashMap.h>
 #include <AK/Noncopyable.h>
 #include <AK/NonnullOwnPtr.h>
+#include <AK/NonnullRefPtr.h>
+#include <AK/Time.h>
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
+#include <LibCore/DeferredInvocationContext.h>
+#include <LibCore/Event.h>
 #include <LibCore/Forward.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -21,7 +25,12 @@ namespace Core {
 
 class EventLoop {
 public:
-    EventLoop();
+    enum class MakeInspectable {
+        No,
+        Yes,
+    };
+
+    explicit EventLoop(MakeInspectable = MakeInspectable::No);
     ~EventLoop();
 
     int exec();
@@ -34,6 +43,8 @@ public:
     // processe events, generally called by exec() in a loop.
     // this should really only be used for integrating with other event loops
     void pump(WaitMode = WaitMode::WaitForEvents);
+
+    void spin_until(Function<bool()>);
 
     void post_event(Object& receiver, NonnullOwnPtr<Event>&&);
 
@@ -53,7 +64,7 @@ public:
 
     void take_pending_events_from(EventLoop& other)
     {
-        m_queued_events.append(move(other.m_queued_events));
+        m_queued_events.extend(move(other.m_queued_events));
     }
 
     static void wake();
@@ -68,10 +79,17 @@ public:
     };
     static void notify_forked(ForkEvent);
 
+    static bool has_been_instantiated();
+
+    void deferred_invoke(Function<void()> invokee)
+    {
+        auto context = DeferredInvocationContext::construct();
+        post_event(context, make<Core::DeferredInvocationEvent>(context, move(invokee)));
+    }
+
 private:
-    bool start_rpc_server();
     void wait_for_event(WaitMode);
-    Optional<struct timeval> get_next_timer_expiration();
+    Optional<Time> get_next_timer_expiration();
     static void dispatch_signal(int);
     static void handle_signal(int);
 
@@ -98,5 +116,10 @@ private:
     struct Private;
     NonnullOwnPtr<Private> m_private;
 };
+
+inline void deferred_invoke(Function<void()> invokee)
+{
+    EventLoop::current().deferred_invoke(move(invokee));
+}
 
 }

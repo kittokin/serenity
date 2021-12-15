@@ -48,7 +48,7 @@ void EvaluateExpressionDialog::build(Window* parent_window)
     widget.set_layout<GUI::VerticalBoxLayout>();
     widget.set_fill_with_background_color(true);
 
-    widget.layout()->set_margins({ 6, 6, 6, 6 });
+    widget.layout()->set_margins(6);
     widget.layout()->set_spacing(6);
 
     m_text_editor = widget.add<GUI::TextBox>();
@@ -77,7 +77,7 @@ void EvaluateExpressionDialog::build(Window* parent_window)
     auto& button_container_inner = button_container_outer.add<GUI::Widget>();
     button_container_inner.set_layout<GUI::HorizontalBoxLayout>();
     button_container_inner.layout()->set_spacing(6);
-    button_container_inner.layout()->set_margins({ 4, 4, 0, 4 });
+    button_container_inner.layout()->set_margins({ 4, 0, 4 });
     button_container_inner.layout()->add_spacer();
 
     m_evaluate_button = button_container_inner.add<GUI::Button>();
@@ -138,14 +138,12 @@ void EvaluateExpressionDialog::handle_evaluation(const String& expression)
     set_output(JS::MarkupGenerator::html_from_value(m_interpreter->vm().last_value()));
 }
 
-void EvaluateExpressionDialog::set_output(const StringView& html)
+void EvaluateExpressionDialog::set_output(StringView html)
 {
     auto paragraph = m_output_container->document().create_element("p");
     paragraph->set_inner_html(html);
 
     m_output_container->append_child(paragraph);
-    m_output_container->document().invalidate_layout();
-    m_output_container->document().update_layout();
 }
 
 }

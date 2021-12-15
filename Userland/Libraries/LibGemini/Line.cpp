@@ -23,12 +23,9 @@ Text::~Text()
 
 String Heading::render_to_html() const
 {
-    StringBuilder builder;
-    builder.appendf("<h%d>", m_level);
-    builder.append(escape_html_entities(m_text.substring_view(m_level, m_text.length() - m_level)));
-    builder.appendf("</h%d>", m_level);
-    return builder.build();
+    return String::formatted("<h{}>{}</h{}>", m_level, escape_html_entities(m_text.substring_view(m_level, m_text.length() - m_level)), m_level);
 }
+
 Heading::~Heading()
 {
 }
@@ -76,7 +73,7 @@ Link::Link(String text, const Document& document)
     while (index < m_text.length() && (m_text[index] == ' ' || m_text[index] == '\t'))
         ++index;
     auto url_string = m_text.substring_view(index, m_text.length() - index);
-    auto space_offset = url_string.find_first_of(" \t");
+    auto space_offset = url_string.find_any_of(" \t");
     String url = url_string;
     if (space_offset.has_value()) {
         url = url_string.substring_view(0, space_offset.value());

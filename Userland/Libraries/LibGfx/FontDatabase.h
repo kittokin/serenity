@@ -8,6 +8,7 @@
 
 #include <AK/Function.h>
 #include <AK/HashMap.h>
+#include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <LibGfx/Forward.h>
 #include <LibGfx/Typeface.h>
@@ -34,14 +35,16 @@ public:
     static FontDatabase& the();
 
     static Font& default_font();
-    static Font& default_bold_font();
-
     static Font& default_fixed_width_font();
-    static Font& default_bold_fixed_width_font();
+
+    static String default_font_query();
+    static String fixed_width_font_query();
+    static void set_default_font_query(String);
+    static void set_fixed_width_font_query(String);
 
     RefPtr<Gfx::Font> get(const String& family, unsigned size, unsigned weight);
     RefPtr<Gfx::Font> get(const String& family, const String& variant, unsigned size);
-    RefPtr<Gfx::Font> get_by_name(const StringView&);
+    RefPtr<Gfx::Font> get_by_name(StringView);
     void for_each_font(Function<void(const Gfx::Font&)>);
     void for_each_fixed_width_font(Function<void(const Gfx::Font&)>);
 

@@ -50,6 +50,7 @@ public:
     bool handle_any_error() override;
 
     static Optional<ByteBuffer> decompress_all(ReadonlyBytes);
+    static Optional<String> describe_header(ReadonlyBytes);
     static bool is_likely_compressed(ReadonlyBytes bytes);
 
 private:
@@ -86,7 +87,7 @@ public:
     size_t write(ReadonlyBytes) override;
     bool write_or_error(ReadonlyBytes) override;
 
-    static Optional<ByteBuffer> compress_all(const ReadonlyBytes& bytes);
+    static Optional<ByteBuffer> compress_all(ReadonlyBytes bytes);
 
 private:
     OutputStream& m_output_stream;

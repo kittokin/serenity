@@ -5,13 +5,14 @@
  */
 
 #include <AK/StringBuilder.h>
+#include <LibWeb/DOM/Document.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/HTMLFormElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/SubmitEvent.h>
-#include <LibWeb/InProcessWebView.h>
-#include <LibWeb/Page/Frame.h>
-#include <LibWeb/URLEncoder.h>
+#include <LibWeb/Page/Page.h>
+#include <LibWeb/URL/URL.h>
 
 namespace Web::HTML {
 
@@ -58,7 +59,9 @@ void HTMLFormElement::submit_form(RefPtr<HTMLElement> submitter, bool from_submi
         if (submitter != this)
             submitter_button = submitter;
 
-        auto submit_event = SubmitEvent::create(EventNames::submit, submitter_button);
+        SubmitEventInit event_init {};
+        event_init.submitter = submitter_button;
+        auto submit_event = SubmitEvent::create(EventNames::submit, event_init);
         submit_event->set_bubbles(true);
         submit_event->set_cancelable(true);
         bool continue_ = dispatch_event(submit_event);
@@ -74,7 +77,7 @@ void HTMLFormElement::submit_form(RefPtr<HTMLElement> submitter, bool from_submi
             return;
     }
 
-    URL url(document().complete_url(action()));
+    AK::URL url(document().parse_url(action()));
 
     if (!url.is_valid()) {
         dbgln("Failed to submit form: Invalid URL: {}", action());
@@ -95,24 +98,23 @@ void HTMLFormElement::submit_form(RefPtr<HTMLElement> submitter, bool from_submi
         return;
     }
 
-    Vector<URLQueryParam> parameters;
+    Vector<URL::QueryParam> parameters;
 
-    for_each_in_inclusive_subtree_of_type<HTMLInputElement>([&](auto& node) {
-        auto& input = downcast<HTMLInputElement>(node);
+    for_each_in_inclusive_subtree_of_type<HTMLInputElement>([&](auto& input) {
         if (!input.name().is_null() && (input.type() != "submit" || &input == submitter))
             parameters.append({ input.name(), input.value() });
         return IterationDecision::Continue;
     });
 
     if (effective_method == "get") {
-        url.set_query(urlencode(parameters));
+        url.set_query(url_encode(parameters, AK::URL::PercentEncodeSet::ApplicationXWWWFormUrlencoded));
     }
 
     LoadRequest request;
     request.set_url(url);
 
     if (effective_method == "post") {
-        auto body = urlencode(parameters).to_byte_buffer();
+        auto body = url_encode(parameters, AK::URL::PercentEncodeSet::ApplicationXWWWFormUrlencoded).to_byte_buffer();
         request.set_method("POST");
         request.set_header("Content-Type", "application/x-www-form-urlencoded");
         request.set_header("Content-Length", String::number(body.size()));

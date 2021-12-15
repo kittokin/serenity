@@ -40,6 +40,8 @@ public:
 
     virtual ModelIndex index_at_event_position(const Gfx::IntPoint&) const override;
     virtual Gfx::IntRect content_rect(const ModelIndex&) const override;
+    virtual Gfx::IntRect editing_rect(ModelIndex const&) const override;
+    virtual Gfx::IntRect paint_invalidation_rect(ModelIndex const&) const override;
 
     virtual void select_all() override;
 
@@ -55,11 +57,13 @@ private:
     virtual void mouseup_event(MouseEvent&) override;
     virtual void did_change_hovered_index(const ModelIndex& old_index, const ModelIndex& new_index) override;
     virtual void did_change_cursor_index(const ModelIndex& old_index, const ModelIndex& new_index) override;
+    virtual void editing_widget_did_change(const ModelIndex& index) override;
 
     virtual void move_cursor(CursorMovement, SelectionUpdate) override;
 
     struct ItemData {
         Gfx::IntRect text_rect;
+        Optional<Gfx::IntRect> text_rect_wrapped;
         Gfx::IntRect icon_rect;
         int icon_offset_y;
         int text_offset_y;
@@ -77,20 +81,25 @@ private:
             text = {};
         }
 
+        Gfx::IntRect hot_icon_rect() const { return icon_rect.inflated(10, 10); }
+        Gfx::IntRect hot_text_rect() const { return text_rect.inflated(2, 2); }
+
         bool is_intersecting(const Gfx::IntRect& rect) const
         {
             VERIFY(valid);
-            return icon_rect.intersects(rect) || text_rect.intersects(rect);
+            return hot_icon_rect().intersects(rect) || hot_text_rect().intersects(rect);
         }
 
         bool is_containing(const Gfx::IntPoint& point) const
         {
             VERIFY(valid);
-            return icon_rect.contains(point) || text_rect.contains(point);
+            return hot_icon_rect().contains(point) || hot_text_rect().contains(point);
         }
 
-        Gfx::IntRect rect() const
+        Gfx::IntRect rect(bool wrapped = false) const
         {
+            if (wrapped && text_rect_wrapped.has_value())
+                return text_rect_wrapped->united(icon_rect);
             return text_rect.united(icon_rect);
         }
     };

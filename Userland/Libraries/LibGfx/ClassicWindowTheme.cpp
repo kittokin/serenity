@@ -52,22 +52,19 @@ Gfx::IntRect ClassicWindowTheme::titlebar_text_rect(WindowType window_type, cons
     };
 }
 
-void ClassicWindowTheme::paint_normal_frame(Painter& painter, WindowState window_state, const IntRect& window_rect, const StringView& window_title, const Bitmap& icon, const Palette& palette, const IntRect& leftmost_button_rect, int menu_row_count, bool window_modified) const
+void ClassicWindowTheme::paint_normal_frame(Painter& painter, WindowState window_state, const IntRect& window_rect, StringView window_title, const Bitmap& icon, const Palette& palette, const IntRect& leftmost_button_rect, int menu_row_count, [[maybe_unused]] bool window_modified) const
 {
-    String final_title = window_title;
-    final_title.replace("[*]", window_modified ? " (*)" : "");
-
     auto frame_rect = frame_rect_for_window(WindowType::Normal, window_rect, palette, menu_row_count);
     frame_rect.set_location({ 0, 0 });
     Gfx::StylePainter::paint_window_frame(painter, frame_rect, palette);
 
-    auto& title_font = FontDatabase::default_bold_font();
+    auto& title_font = FontDatabase::default_font().bold_variant();
 
     auto titlebar_rect = this->titlebar_rect(WindowType::Normal, window_rect, palette);
     auto titlebar_icon_rect = this->titlebar_icon_rect(WindowType::Normal, window_rect, palette);
     auto titlebar_inner_rect = titlebar_text_rect(WindowType::Normal, window_rect, palette);
     auto titlebar_title_rect = titlebar_inner_rect;
-    titlebar_title_rect.set_width(FontDatabase::default_bold_font().width(final_title));
+    titlebar_title_rect.set_width(title_font.width(window_title));
 
     auto [title_color, border_color, border_color2, stripes_color, shadow_color] = compute_frame_colors(window_state, palette);
 
@@ -89,26 +86,26 @@ void ClassicWindowTheme::paint_normal_frame(Painter& painter, WindowState window
     auto clipped_title_rect = titlebar_title_rect;
     clipped_title_rect.set_width(stripe_right - clipped_title_rect.x());
     if (!clipped_title_rect.is_empty()) {
-        painter.draw_text(clipped_title_rect.translated(1, 2), final_title, title_font, Gfx::TextAlignment::CenterLeft, shadow_color, Gfx::TextElision::Right);
+        painter.draw_text(clipped_title_rect.translated(1, 2), window_title, title_font, Gfx::TextAlignment::CenterLeft, shadow_color, Gfx::TextElision::Right);
         // FIXME: The translated(0, 1) wouldn't be necessary if we could center text based on its baseline.
-        painter.draw_text(clipped_title_rect.translated(0, 1), final_title, title_font, Gfx::TextAlignment::CenterLeft, title_color, Gfx::TextElision::Right);
+        painter.draw_text(clipped_title_rect.translated(0, 1), window_title, title_font, Gfx::TextAlignment::CenterLeft, title_color, Gfx::TextElision::Right);
     }
 
     painter.draw_scaled_bitmap(titlebar_icon_rect, icon, icon.rect());
 }
 
-void ClassicWindowTheme::paint_tool_window_frame(Painter& painter, WindowState window_state, const IntRect& window_rect, const StringView& title_text, const Palette& palette, const IntRect& leftmost_button_rect) const
+void ClassicWindowTheme::paint_tool_window_frame(Painter& painter, WindowState window_state, const IntRect& window_rect, StringView title_text, const Palette& palette, const IntRect& leftmost_button_rect) const
 {
     auto frame_rect = frame_rect_for_window(WindowType::ToolWindow, window_rect, palette, 0);
     frame_rect.set_location({ 0, 0 });
     Gfx::StylePainter::paint_window_frame(painter, frame_rect, palette);
 
-    auto& title_font = FontDatabase::default_bold_font();
+    auto& title_font = FontDatabase::default_font().bold_variant();
 
     auto titlebar_rect = this->titlebar_rect(WindowType::ToolWindow, window_rect, palette);
     auto titlebar_inner_rect = titlebar_text_rect(WindowType::ToolWindow, window_rect, palette);
     auto titlebar_title_rect = titlebar_inner_rect;
-    titlebar_title_rect.set_width(FontDatabase::default_bold_font().width(title_text));
+    titlebar_title_rect.set_width(title_font.width(title_text));
 
     auto [title_color, border_color, border_color2, stripes_color, shadow_color] = compute_frame_colors(window_state, palette);
 
@@ -137,7 +134,7 @@ IntRect ClassicWindowTheme::menubar_rect(WindowType window_type, const IntRect& 
 
 IntRect ClassicWindowTheme::titlebar_rect(WindowType window_type, const IntRect& window_rect, const Palette& palette) const
 {
-    auto& title_font = FontDatabase::default_bold_font();
+    auto& title_font = FontDatabase::default_font().bold_variant();
     auto window_titlebar_height = titlebar_height(window_type, palette);
     // FIXME: The top of the titlebar doesn't get redrawn properly if this padding is different
     int total_vertical_padding = title_font.glyph_height() - 1;
@@ -238,7 +235,7 @@ Vector<IntRect> ClassicWindowTheme::layout_buttons(WindowType window_type, const
 
 int ClassicWindowTheme::titlebar_height(WindowType window_type, const Palette& palette) const
 {
-    auto& title_font = FontDatabase::default_bold_font();
+    auto& title_font = FontDatabase::default_font().bold_variant();
     switch (window_type) {
     case WindowType::Normal:
     case WindowType::Notification:

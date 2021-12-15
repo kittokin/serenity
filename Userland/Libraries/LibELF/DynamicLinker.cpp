@@ -16,7 +16,7 @@
 #include <AK/Vector.h>
 #include <LibC/bits/pthread_integration.h>
 #include <LibC/link.h>
-#include <LibC/mman.h>
+#include <LibC/sys/mman.h>
 #include <LibC/unistd.h>
 #include <LibDl/dlfcn.h>
 #include <LibDl/dlfcn_integration.h>
@@ -34,12 +34,14 @@ namespace ELF {
 
 static HashMap<String, NonnullRefPtr<ELF::DynamicLoader>> s_loaders;
 static String s_main_program_name;
-static HashMap<String, NonnullRefPtr<ELF::DynamicObject>> s_global_objects;
+static OrderedHashMap<String, NonnullRefPtr<ELF::DynamicObject>> s_global_objects;
 
 using EntryPointFunction = int (*)(int, char**, char**);
 using LibCExitFunction = void (*)(int);
 using DlIteratePhdrCallbackFunction = int (*)(struct dl_phdr_info*, size_t, void*);
 using DlIteratePhdrFunction = int (*)(DlIteratePhdrCallbackFunction, void*);
+
+extern "C" [[noreturn]] void _invoke_entry(int argc, char** argv, char** envp, EntryPointFunction entry);
 
 static size_t s_current_tls_offset = 0;
 static size_t s_total_tls_size = 0;
@@ -54,8 +56,9 @@ static bool s_do_breakpoint_trap_before_entry { false };
 static Result<void, DlErrorMessage> __dlclose(void* handle);
 static Result<void*, DlErrorMessage> __dlopen(const char* filename, int flags);
 static Result<void*, DlErrorMessage> __dlsym(void* handle, const char* symbol_name);
+static Result<void, DlErrorMessage> __dladdr(void* addr, Dl_info* info);
 
-Optional<DynamicObject::SymbolLookupResult> DynamicLinker::lookup_global_symbol(const StringView& name)
+Optional<DynamicObject::SymbolLookupResult> DynamicLinker::lookup_global_symbol(StringView name)
 {
     Optional<DynamicObject::SymbolLookupResult> weak_result;
 
@@ -76,7 +79,7 @@ Optional<DynamicObject::SymbolLookupResult> DynamicLinker::lookup_global_symbol(
 
 static String get_library_name(String path)
 {
-    return LexicalPath(move(path)).basename();
+    return LexicalPath::basename(move(path));
 }
 
 static Result<NonnullRefPtr<DynamicLoader>, DlErrorMessage> map_library(const String& filename, int fd)
@@ -90,15 +93,15 @@ static Result<NonnullRefPtr<DynamicLoader>, DlErrorMessage> map_library(const St
 
     s_loaders.set(get_library_name(filename), *loader);
 
+    s_current_tls_offset -= loader->tls_size_of_current_object();
     loader->set_tls_offset(s_current_tls_offset);
-    s_current_tls_offset += loader->tls_size_of_current_object();
 
     return loader;
 }
 
 static Result<NonnullRefPtr<DynamicLoader>, DlErrorMessage> map_library(const String& name)
 {
-    if (name.contains("/")) {
+    if (name.contains("/"sv)) {
         int fd = open(name.characters(), O_RDONLY);
         if (fd < 0)
             return DlErrorMessage { String::formatted("Could not open shared library: {}", name) };
@@ -125,9 +128,8 @@ static Vector<String> get_dependencies(const String& name)
 
     lib->for_each_needed_library([&dependencies, &name](auto needed_name) {
         if (name == needed_name)
-            return IterationDecision::Continue;
+            return;
         dependencies.append(needed_name);
-        return IterationDecision::Continue;
     });
     return dependencies;
 }
@@ -167,7 +169,13 @@ static void allocate_tls()
         return;
 
     auto page_aligned_size = align_up_to(s_total_tls_size, PAGE_SIZE);
-    ByteBuffer initial_tls_data = ByteBuffer::create_zeroed(page_aligned_size);
+    auto initial_tls_data_result = ByteBuffer::create_zeroed(page_aligned_size);
+    if (!initial_tls_data_result.has_value()) {
+        dbgln("Failed to allocate initial TLS data");
+        VERIFY_NOT_REACHED();
+    }
+
+    auto& initial_tls_data = initial_tls_data_result.value();
 
     // Initialize TLS data
     for (const auto& entry : s_loaders) {
@@ -238,6 +246,10 @@ static void initialize_libc(DynamicObject& libc)
     VERIFY(res.has_value());
     *((DlSymFunction*)res.value().address.as_ptr()) = __dlsym;
 
+    res = libc.lookup_symbol("__dladdr"sv);
+    VERIFY(res.has_value());
+    *((DlAddrFunction*)res.value().address.as_ptr()) = __dladdr;
+
     res = libc.lookup_symbol("__libc_init"sv);
     VERIFY(res.has_value());
     typedef void libc_init_func();
@@ -245,9 +257,12 @@ static void initialize_libc(DynamicObject& libc)
 }
 
 template<typename Callback>
-static void for_each_unfinished_dependency_of(const String& name, HashTable<String>& seen_names, Callback callback)
+static void for_each_unfinished_dependency_of(const String& name, HashTable<String>& seen_names, bool first, bool skip_global_objects, Callback callback)
 {
     if (!s_loaders.contains(name))
+        return;
+
+    if (!first && skip_global_objects && s_global_objects.contains(name))
         return;
 
     if (seen_names.contains(name))
@@ -255,28 +270,28 @@ static void for_each_unfinished_dependency_of(const String& name, HashTable<Stri
     seen_names.set(name);
 
     for (const auto& needed_name : get_dependencies(name))
-        for_each_unfinished_dependency_of(get_library_name(needed_name), seen_names, callback);
+        for_each_unfinished_dependency_of(get_library_name(needed_name), seen_names, false, skip_global_objects, callback);
 
     callback(*s_loaders.get(name).value());
 }
 
-static NonnullRefPtrVector<DynamicLoader> collect_loaders_for_library(const String& name)
+static NonnullRefPtrVector<DynamicLoader> collect_loaders_for_library(const String& name, bool skip_global_objects)
 {
     HashTable<String> seen_names;
     NonnullRefPtrVector<DynamicLoader> loaders;
-    for_each_unfinished_dependency_of(name, seen_names, [&](auto& loader) {
+    for_each_unfinished_dependency_of(name, seen_names, true, skip_global_objects, [&](auto& loader) {
         loaders.append(loader);
     });
     return loaders;
 }
 
-static Result<NonnullRefPtr<DynamicLoader>, DlErrorMessage> load_main_library(const String& name, int flags)
+static Result<NonnullRefPtr<DynamicLoader>, DlErrorMessage> load_main_library(const String& name, int flags, bool skip_global_objects)
 {
     auto main_library_loader = *s_loaders.get(name);
     auto main_library_object = main_library_loader->map();
     s_global_objects.set(name, *main_library_object);
 
-    auto loaders = collect_loaders_for_library(name);
+    auto loaders = collect_loaders_for_library(name, skip_global_objects);
 
     for (auto& loader : loaders) {
         auto dynamic_object = loader.map();
@@ -296,13 +311,16 @@ static Result<NonnullRefPtr<DynamicLoader>, DlErrorMessage> load_main_library(co
         VERIFY(!result.is_error());
         auto& object = result.value();
 
-        if (loader.filename() == "libsystem.so") {
-            if (syscall(SC_msyscall, object->base_address().as_ptr())) {
-                VERIFY_NOT_REACHED();
+        if (loader.filename() == "libsystem.so"sv) {
+            VERIFY(!loader.text_segments().is_empty());
+            for (const auto& segment : loader.text_segments()) {
+                if (syscall(SC_msyscall, segment.address().get())) {
+                    VERIFY_NOT_REACHED();
+                }
             }
         }
 
-        if (loader.filename() == "libc.so") {
+        if (loader.filename() == "libc.so"sv) {
             initialize_libc(*object);
         }
     }
@@ -311,7 +329,7 @@ static Result<NonnullRefPtr<DynamicLoader>, DlErrorMessage> load_main_library(co
         loader.load_stage_4();
     }
 
-    return main_library_loader;
+    return NonnullRefPtr<DynamicLoader>(*main_library_loader);
 }
 
 static Result<void, DlErrorMessage> __dlclose(void* handle)
@@ -377,7 +395,8 @@ static Result<void*, DlErrorMessage> __dlopen(const char* filename, int flags)
     auto existing_elf_object = s_global_objects.get(library_name);
     if (existing_elf_object.has_value()) {
         // It's up to the caller to release the ref with dlclose().
-        return &existing_elf_object->leak_ref();
+        existing_elf_object.value()->ref();
+        return *existing_elf_object;
     }
 
     VERIFY(!library_name.is_empty());
@@ -395,7 +414,7 @@ static Result<void*, DlErrorMessage> __dlopen(const char* filename, int flags)
         return result2.error();
     }
 
-    auto result = load_main_library(library_name, flags);
+    auto result = load_main_library(library_name, flags, true);
     if (result.is_error())
         return result.error();
 
@@ -406,7 +425,8 @@ static Result<void*, DlErrorMessage> __dlopen(const char* filename, int flags)
         return DlErrorMessage { "Could not load ELF object." };
 
     // It's up to the caller to release the ref with dlclose().
-    return &object->leak_ref();
+    object.value()->ref();
+    return *object;
 }
 
 static Result<void*, DlErrorMessage> __dlsym(void* handle, const char* symbol_name)
@@ -429,10 +449,52 @@ static Result<void*, DlErrorMessage> __dlsym(void* handle, const char* symbol_na
     return symbol.value().address.as_ptr();
 }
 
+static Result<void, DlErrorMessage> __dladdr(void* addr, Dl_info* info)
+{
+    VirtualAddress user_addr { addr };
+    __pthread_mutex_lock(&s_loader_lock);
+    ScopeGuard unlock_guard = [] { __pthread_mutex_unlock(&s_loader_lock); };
+
+    RefPtr<DynamicObject> best_matching_library;
+    VirtualAddress best_library_offset;
+    for (auto& lib : s_global_objects) {
+        if (user_addr < lib.value->base_address())
+            continue;
+        auto offset = user_addr - lib.value->base_address();
+        if (!best_matching_library || offset < best_library_offset) {
+            best_matching_library = lib.value;
+            best_library_offset = offset;
+        }
+    }
+
+    if (!best_matching_library) {
+        return DlErrorMessage { "No library found which contains the specified address" };
+    }
+
+    Optional<DynamicObject::Symbol> best_matching_symbol;
+    best_matching_library->for_each_symbol([&](auto const& symbol) {
+        if (user_addr < symbol.address() || user_addr > symbol.address().offset(symbol.size()))
+            return;
+        best_matching_symbol = symbol;
+    });
+
+    info->dli_fbase = best_matching_library->base_address().as_ptr();
+    // This works because we don't support unloading objects.
+    info->dli_fname = best_matching_library->filename().characters();
+    if (best_matching_symbol.has_value()) {
+        info->dli_saddr = best_matching_symbol.value().address().as_ptr();
+        info->dli_sname = best_matching_symbol.value().raw_name();
+    } else {
+        info->dli_saddr = nullptr;
+        info->dli_sname = nullptr;
+    }
+    return {};
+}
+
 static void read_environment_variables()
 {
     for (char** env = s_envp; *env; ++env) {
-        if (StringView { *env } == "_LOADER_BREAKPOINT=1") {
+        if (StringView { *env } == "_LOADER_BREAKPOINT=1"sv) {
             s_do_breakpoint_trap_before_entry = true;
         }
     }
@@ -458,7 +520,7 @@ void ELF::DynamicLinker::linker_main(String&& main_program_name, int main_progra
         fflush(stderr);
         _exit(1);
     }
-    result1.release_value();
+    (void)result1.release_value();
 
     auto result2 = map_dependencies(library_name);
     if (result2.is_error()) {
@@ -476,7 +538,7 @@ void ELF::DynamicLinker::linker_main(String&& main_program_name, int main_progra
 
     auto entry_point_function = [&main_program_name] {
         auto library_name = get_library_name(main_program_name);
-        auto result = load_main_library(library_name, RTLD_GLOBAL | RTLD_LAZY);
+        auto result = load_main_library(library_name, RTLD_GLOBAL | RTLD_LAZY, false);
         if (result.is_error()) {
             warnln("{}", result.error().text);
             _exit(1);
@@ -499,14 +561,8 @@ void ELF::DynamicLinker::linker_main(String&& main_program_name, int main_progra
     if (s_do_breakpoint_trap_before_entry) {
         asm("int3");
     }
-    rc = entry_point_function(argc, argv, envp);
-    dbgln_if(DYNAMIC_LOAD_DEBUG, "rc: {}", rc);
-    if (s_libc_exit != nullptr) {
-        s_libc_exit(rc);
-    } else {
-        _exit(rc);
-    }
 
+    _invoke_entry(argc, argv, envp, entry_point_function);
     VERIFY_NOT_REACHED();
 }
 

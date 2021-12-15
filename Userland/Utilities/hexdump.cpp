@@ -4,16 +4,27 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ByteBuffer.h>
+#include <AK/Array.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <ctype.h>
+#include <string.h>
+
+static constexpr size_t LINE_LENGTH_BYTES = 16;
+
+enum class State {
+    Print,
+    PrintFiller,
+    SkipPrint
+};
 
 int main(int argc, char** argv)
 {
     Core::ArgsParser args_parser;
     const char* path = nullptr;
+    bool verbose = false;
     args_parser.add_positional_argument(path, "Input", "input", Core::ArgsParser::Required::No);
+    args_parser.add_option(verbose, "Display all input data", "verbose", 'v');
 
     args_parser.parse(argc, argv);
 
@@ -22,7 +33,7 @@ int main(int argc, char** argv)
     if (!path) {
         file = Core::File::standard_input();
     } else {
-        auto file_or_error = Core::File::open(path, Core::File::ReadOnly);
+        auto file_or_error = Core::File::open(path, Core::OpenMode::ReadOnly);
         if (file_or_error.is_error()) {
             warnln("Failed to open {}: {}", path, file_or_error.error());
             return 1;
@@ -30,44 +41,84 @@ int main(int argc, char** argv)
         file = file_or_error.value();
     }
 
-    auto contents = file->read_all();
-
-    Vector<u8, 16> line;
-
-    auto print_line = [&] {
-        for (size_t i = 0; i < 16; ++i) {
-            if (i < line.size())
-                printf("%02x ", line[i]);
+    auto print_line = [](u8* buf, size_t size) {
+        VERIFY(size <= LINE_LENGTH_BYTES);
+        for (size_t i = 0; i < LINE_LENGTH_BYTES; ++i) {
+            if (i < size)
+                out("{:02x} ", buf[i]);
             else
-                printf("   ");
+                out("   ");
 
             if (i == 7)
-                printf("  ");
+                out("  ");
         }
 
-        printf("  ");
+        out("  |");
 
-        for (size_t i = 0; i < 16; ++i) {
-            if (i < line.size() && isprint(line[i]))
-                putchar(line[i]);
+        for (size_t i = 0; i < size; ++i) {
+            if (isprint(buf[i]))
+                putchar(buf[i]);
             else
-                putchar(' ');
+                putchar('.');
         }
 
+        putchar('|');
         putchar('\n');
     };
 
-    for (size_t i = 0; i < contents.size(); ++i) {
-        line.append(contents[i]);
+    Array<u8, BUFSIZ> contents;
+    Span<u8> previous_line;
+    static_assert(LINE_LENGTH_BYTES * 2 <= contents.size(), "Buffer is too small?!");
+    size_t contents_size = 0;
 
-        if (line.size() == 16) {
-            print_line();
-            line.clear();
+    int nread;
+    auto state = State::Print;
+    while (true) {
+        nread = file->read(&contents[contents_size], BUFSIZ - contents_size);
+        if (nread <= 0)
+            break;
+        contents_size += nread;
+
+        size_t offset;
+        for (offset = 0; offset + LINE_LENGTH_BYTES - 1 < contents_size; offset += LINE_LENGTH_BYTES) {
+            if (verbose) {
+                print_line(&contents[offset], LINE_LENGTH_BYTES);
+                continue;
+            }
+
+            auto current_line = contents.span().slice(offset, LINE_LENGTH_BYTES);
+            bool is_same_contents = (current_line == previous_line);
+            if (!is_same_contents)
+                state = State::Print;
+            else if (is_same_contents && (state != State::SkipPrint))
+                state = State::PrintFiller;
+
+            // Coalesce repeating lines
+            switch (state) {
+            case State::Print:
+                print_line(&contents[offset], LINE_LENGTH_BYTES);
+                break;
+            case State::PrintFiller:
+                outln("*");
+                state = State::SkipPrint;
+                break;
+            case State::SkipPrint:
+                break;
+            }
+            previous_line = current_line;
+        }
+
+        contents_size -= offset;
+        VERIFY(contents_size < LINE_LENGTH_BYTES);
+        // If we managed to make the buffer exactly full, &contents[BUFSIZ] would blow up.
+        if (contents_size > 0) {
+            // Regions cannot overlap due to above static_assert.
+            memcpy(&contents[0], &contents[offset], contents_size);
         }
     }
-
-    if (!line.is_empty())
-        print_line();
+    VERIFY(contents_size <= LINE_LENGTH_BYTES - 1);
+    if (contents_size > 0)
+        print_line(&contents[0], contents_size);
 
     return 0;
 }

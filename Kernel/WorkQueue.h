@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
+ * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,6 +9,8 @@
 
 #include <AK/IntrusiveList.h>
 #include <Kernel/Forward.h>
+#include <Kernel/Heap/SlabAllocator.h>
+#include <Kernel/Locking/SpinlockProtected.h>
 
 namespace Kernel {
 
@@ -20,14 +23,14 @@ class WorkQueue {
 public:
     static void initialize();
 
-    WorkQueue(const char*);
-
     void queue(void (*function)(void*), void* data = nullptr, void (*free_data)(void*) = nullptr)
     {
         auto* item = new WorkItem; // TODO: use a pool
-        item->function = function;
-        item->data = data;
-        item->free_data = free_data;
+        item->function = [function, data, free_data] {
+            function(data);
+            if (free_data)
+                free_data(data);
+        };
         do_queue(item);
     }
 
@@ -35,39 +38,26 @@ public:
     void queue(Function function)
     {
         auto* item = new WorkItem; // TODO: use a pool
-        item->function = [](void* f) {
-            (*reinterpret_cast<Function*>(f))();
-        };
-        if constexpr (sizeof(Function) <= sizeof(item->inline_data)) {
-            item->data = new (item->inline_data) Function(move(function));
-            item->free_data = [](void* f) {
-                reinterpret_cast<Function*>(f)->~Function();
-            };
-
-        } else {
-            item->data = new Function(move(function));
-            item->free_data = [](void* f) {
-                delete reinterpret_cast<Function*>(f);
-            };
-        }
+        item->function = Function(function);
         do_queue(item);
     }
 
 private:
+    explicit WorkQueue(StringView);
+
     struct WorkItem {
+        MAKE_SLAB_ALLOCATED(WorkItem);
+
+    public:
         IntrusiveListNode<WorkItem> m_node;
-        void (*function)(void*);
-        void* data;
-        void (*free_data)(void*);
-        u8 inline_data[4 * sizeof(void*)];
+        Function<void()> function;
     };
 
     void do_queue(WorkItem*);
 
     RefPtr<Thread> m_thread;
     WaitQueue m_wait_queue;
-    IntrusiveList<WorkItem, RawPtr<WorkItem>, &WorkItem::m_node> m_items;
-    SpinLock<u8> m_lock;
+    SpinlockProtected<IntrusiveList<&WorkItem::m_node>> m_items;
 };
 
 }

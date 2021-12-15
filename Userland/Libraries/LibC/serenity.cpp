@@ -18,21 +18,9 @@ int disown(pid_t pid)
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
-int module_load(const char* path, size_t path_length)
+int profiling_enable(pid_t pid, uint64_t event_mask)
 {
-    int rc = syscall(SC_module_load, path, path_length);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
-}
-
-int module_unload(const char* name, size_t name_length)
-{
-    int rc = syscall(SC_module_unload, name, name_length);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
-}
-
-int profiling_enable(pid_t pid)
-{
-    int rc = syscall(SC_profiling_enable, pid);
+    int rc = syscall(SC_profiling_enable, pid, event_mask);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -52,8 +40,6 @@ int futex(uint32_t* userspace_address, int futex_op, uint32_t value, const struc
 {
     int rc;
     switch (futex_op & FUTEX_CMD_MASK) {
-    //case FUTEX_CMP_REQUEUE:
-    // FUTEX_CMP_REQUEUE_PI:
     case FUTEX_WAKE_OP: {
         // These interpret timeout as a u32 value for val2
         Syscall::SC_futex_params params {
@@ -92,6 +78,12 @@ int purge(int mode)
 int perf_event(int type, uintptr_t arg1, FlatPtr arg2)
 {
     int rc = syscall(SC_perf_event, type, arg1, arg2);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
+int perf_register_string(char const* string, size_t string_length)
+{
+    int rc = syscall(SC_perf_register_string, string, string_length);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -150,5 +142,10 @@ u16 internet_checksum(const void* ptr, size_t count)
     while (checksum >> 16)
         checksum = (checksum & 0xffff) + (checksum >> 16);
     return htons(~checksum);
+}
+
+int emuctl(uintptr_t command, uintptr_t arg0, uintptr_t arg1)
+{
+    return syscall(SC_emuctl, command, arg0, arg1);
 }
 }

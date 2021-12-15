@@ -8,7 +8,7 @@
 
 #include <AK/Format.h>
 #include <AK/Platform.h>
-#include <LibX86/Types.h>
+#include <AK/UFixedBigInt.h>
 #include <string.h>
 
 namespace UserspaceEmulator {
@@ -172,7 +172,7 @@ inline void ValueAndShadowReference<T>::operator=(const ValueWithShadow<T>& othe
 
 template<typename T>
 struct AK::Formatter<UserspaceEmulator::ValueWithShadow<T>> : AK::Formatter<T> {
-    void format(FormatBuilder& builder, UserspaceEmulator::ValueWithShadow<T> value)
+    ErrorOr<void> format(FormatBuilder& builder, UserspaceEmulator::ValueWithShadow<T> value)
     {
         return Formatter<T>::format(builder, value.value());
     }

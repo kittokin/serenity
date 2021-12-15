@@ -4,32 +4,35 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/MappedFile.h>
+#include <AK/Assertions.h>
 #include <AK/NumberFormat.h>
 #include <LibArchive/Zip.h>
 #include <LibCompress/Deflate.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
+#include <LibCore/MappedFile.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-static bool unpack_zip_member(Archive::ZipMember zip_member)
+static bool unpack_zip_member(Archive::ZipMember zip_member, bool quiet)
 {
     if (zip_member.is_directory) {
         if (mkdir(zip_member.name.characters(), 0755) < 0) {
             perror("mkdir");
             return false;
         }
-        outln(" extracting: {}", zip_member.name);
+        if (!quiet)
+            outln(" extracting: {}", zip_member.name);
         return true;
     }
     auto new_file = Core::File::construct(zip_member.name);
-    if (!new_file->open(Core::IODevice::WriteOnly)) {
+    if (!new_file->open(Core::OpenMode::WriteOnly)) {
         warnln("Can't write file {}: {}", zip_member.name, new_file->error_string());
         return false;
     }
 
-    outln(" extracting: {}", zip_member.name);
+    if (!quiet)
+        outln(" extracting: {}", zip_member.name);
 
     // TODO: verify CRC32s match!
     switch (zip_member.compression_method) {
@@ -72,11 +75,13 @@ int main(int argc, char** argv)
 {
     const char* path;
     int map_size_limit = 32 * MiB;
+    bool quiet { false };
     String output_directory_path;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(map_size_limit, "Maximum chunk size to map", "map-size-limit", 0, "size");
-    args_parser.add_option(output_directory_path, "Directory to receive the archive content", "output-directory", 'o', "path");
+    args_parser.add_option(output_directory_path, "Directory to receive the archive content", "output-directory", 'd', "path");
+    args_parser.add_option(quiet, "Be less verbose", "quiet", 'q');
     args_parser.add_positional_argument(path, "File to unzip", "path", Core::ArgsParser::Required::Yes);
     args_parser.parse(argc, argv);
 
@@ -99,14 +104,15 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    auto file_or_error = MappedFile::map(zip_file_path);
+    auto file_or_error = Core::MappedFile::map(zip_file_path);
     if (file_or_error.is_error()) {
         warnln("Failed to open {}: {}", zip_file_path, file_or_error.error());
         return 1;
     }
     auto& mapped_file = *file_or_error.value();
 
-    warnln("Archive: {}", zip_file_path);
+    if (!quiet)
+        warnln("Archive: {}", zip_file_path);
 
     auto zip_file = Archive::Zip::try_create(mapped_file.bytes());
     if (!zip_file.has_value()) {
@@ -129,7 +135,7 @@ int main(int argc, char** argv)
     }
 
     auto success = zip_file->for_each_member([&](auto zip_member) {
-        return unpack_zip_member(zip_member) ? IterationDecision::Continue : IterationDecision::Break;
+        return unpack_zip_member(zip_member, quiet) ? IterationDecision::Continue : IterationDecision::Break;
     });
 
     return success ? 0 : 1;

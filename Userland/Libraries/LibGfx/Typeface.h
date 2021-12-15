@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@gmx.de>
+ * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -12,7 +12,7 @@
 #include <AK/Vector.h>
 #include <LibGfx/BitmapFont.h>
 #include <LibGfx/Font.h>
-#include <LibTTF/Font.h>
+#include <LibGfx/TrueTypeFont/Font.h>
 
 namespace Gfx {
 
@@ -35,7 +35,7 @@ public:
     void add_bitmap_font(RefPtr<BitmapFont>);
     void set_ttf_font(RefPtr<TTF::Font>);
 
-    RefPtr<Font> get_font(unsigned size);
+    RefPtr<Font> get_font(unsigned size) const;
 
 private:
     String m_family;

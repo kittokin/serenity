@@ -10,6 +10,7 @@
 #include <AK/String.h>
 #include <Kernel/Net/IPv4.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -26,12 +27,13 @@ static in_addr_t* __gethostbyname_address_list_buffer[2];
 
 static hostent __gethostbyaddr_buffer;
 static in_addr_t* __gethostbyaddr_address_list_buffer[2];
-// XXX: IPCCompiler depends on LibC. Because of this, it cannot be compiled
+// IPCCompiler depends on LibC. Because of this, it cannot be compiled
 // before LibC is. However, the lookup magic can only be obtained from the
 // endpoint itself if IPCCompiler has compiled the IPC file, so this creates
 // a chicken-and-egg situation. Because of this, the LookupServer endpoint magic
 // is hardcoded here.
-static constexpr i32 lookup_server_endpoint_magic = 9001;
+// Keep the name synchronized with LookupServer/LookupServer.ipc.
+static constexpr u32 lookup_server_endpoint_magic = "LookupServer"sv.hash();
 
 // Get service entry buffers and file information for the getservent() family of functions.
 static FILE* services_file = nullptr;
@@ -113,7 +115,7 @@ hostent* gethostbyname(const char* name)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 name_length;
     } request_header = {
@@ -137,7 +139,7 @@ hostent* gethostbyname(const char* name)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 code;
         u64 addresses_count;
@@ -213,7 +215,7 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 address_length;
     } request_header = {
@@ -237,7 +239,7 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 code;
         i32 name_length;
@@ -281,7 +283,7 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 
 struct servent* getservent()
 {
-    //If the services file is not open, attempt to open it and return null if it fails.
+    // If the services file is not open, attempt to open it and return null if it fails.
     if (!services_file) {
         services_file = fopen(services_path, "r");
 
@@ -423,23 +425,21 @@ void endservent()
 // false if failure occurs.
 static bool fill_getserv_buffers(const char* line, ssize_t read)
 {
-    //Splitting the line by tab delimiter and filling the servent buffers name, port, and protocol members.
-    String string_line = String(line, read);
-    string_line.replace(" ", "\t", true);
-    auto split_line = string_line.split('\t');
+    // Splitting the line by tab delimiter and filling the servent buffers name, port, and protocol members.
+    auto split_line = StringView(line, read).replace(" ", "\t", true).split('\t');
 
     // This indicates an incorrect file format.
     // Services file entries should always at least contain
     // name and port/protocol, separated by tabs.
     if (split_line.size() < 2) {
-        fprintf(stderr, "getservent(): malformed services file\n");
+        warnln("getservent(): malformed services file");
         return false;
     }
     __getserv_name_buffer = split_line[0];
 
     auto port_protocol_split = String(split_line[1]).split('/');
     if (port_protocol_split.size() < 2) {
-        fprintf(stderr, "getservent(): malformed services file\n");
+        warnln("getservent(): malformed services file");
         return false;
     }
     auto number = port_protocol_split[0].to_int();
@@ -449,11 +449,7 @@ static bool fill_getserv_buffers(const char* line, ssize_t read)
     __getserv_port_buffer = number.value();
 
     // Remove any annoying whitespace at the end of the protocol.
-    port_protocol_split[1].replace(" ", "", true);
-    port_protocol_split[1].replace("\t", "", true);
-    port_protocol_split[1].replace("\n", "", true);
-
-    __getserv_protocol_buffer = port_protocol_split[1];
+    __getserv_protocol_buffer = port_protocol_split[1].replace(" ", "", true).replace("\t", "", true).replace("\n", "", true);
     __getserv_alias_list_buffer.clear();
 
     // If there are aliases for the service, we will fill the alias list buffer.
@@ -464,8 +460,9 @@ static bool fill_getserv_buffers(const char* line, ssize_t read)
                 break;
             }
             auto alias = split_line[i].to_byte_buffer();
-            alias.append("\0", sizeof(char));
-            __getserv_alias_list_buffer.append(alias);
+            if (alias.try_append("\0", sizeof(char)).is_error())
+                return false;
+            __getserv_alias_list_buffer.append(move(alias));
         }
     }
 
@@ -608,13 +605,12 @@ void endprotoent()
 static bool fill_getproto_buffers(const char* line, ssize_t read)
 {
     String string_line = String(line, read);
-    string_line.replace(" ", "\t", true);
-    auto split_line = string_line.split('\t');
+    auto split_line = string_line.replace(" ", "\t", true).split('\t');
 
     // This indicates an incorrect file format. Protocols file entries should
     // always have at least a name and a protocol.
     if (split_line.size() < 2) {
-        fprintf(stderr, "getprotoent(): malformed protocols file\n");
+        warnln("getprotoent(): malformed protocols file");
         return false;
     }
     __getproto_name_buffer = split_line[0];
@@ -634,8 +630,9 @@ static bool fill_getproto_buffers(const char* line, ssize_t read)
             if (split_line[i].starts_with('#'))
                 break;
             auto alias = split_line[i].to_byte_buffer();
-            alias.append("\0", sizeof(char));
-            __getproto_alias_list_buffer.append(alias);
+            if (alias.try_append("\0", sizeof(char)).is_error())
+                return false;
+            __getproto_alias_list_buffer.append(move(alias));
         }
     }
 
@@ -791,8 +788,8 @@ int getnameinfo(const struct sockaddr* __restrict addr, socklen_t addrlen, char*
     const sockaddr_in* sin = reinterpret_cast<const sockaddr_in*>(addr);
 
     if (host && hostlen > 0) {
-        if (flags & NI_NAMEREQD)
-            dbgln("getnameinfo flag NI_NAMEREQD not implemented");
+        if (flags != 0)
+            dbgln("getnameinfo flags are not implemented: {:#x}", flags);
 
         if (!inet_ntop(AF_INET, &sin->sin_addr, host, hostlen)) {
             if (errno == ENOSPC)

@@ -7,13 +7,12 @@
 #include <AK/Optional.h>
 #include <AK/String.h>
 #include <LibCore/ElapsedTimer.h>
-#include <stdio.h>
-#include <string.h>
+#include <LibMain/Main.h>
 #include <unistd.h>
 
 static void usage()
 {
-    printf("usage: allocate [number [unit (B/KiB/MiB)]]\n");
+    warnln("usage: allocate [number [unit (B/KiB/MiB)]]");
     exit(1);
 }
 
@@ -23,25 +22,25 @@ enum class Unit {
     MiB,
 };
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     int count = 50;
     auto unit = Unit::MiB;
 
-    if (argc >= 2) {
-        auto number = String(argv[1]).to_uint();
+    if (arguments.argc >= 2) {
+        auto number = arguments.strings[1].to_uint();
         if (!number.has_value()) {
             usage();
         }
         count = number.value();
     }
 
-    if (argc >= 3) {
-        if (strcmp(argv[2], "B") == 0)
+    if (arguments.argc >= 3) {
+        if (arguments.strings[2] == "B")
             unit = Unit::Bytes;
-        else if (strcmp(argv[2], "KiB") == 0)
+        else if (arguments.strings[2] == "KiB")
             unit = Unit::KiB;
-        else if (strcmp(argv[2], "MiB") == 0)
+        else if (arguments.strings[2] == "MiB")
             unit = Unit::MiB;
         else
             usage();
@@ -58,25 +57,21 @@ int main(int argc, char** argv)
         break;
     }
 
-    Core::ElapsedTimer timer;
-
-    printf("allocating memory (%d bytes)...\n", count);
-    timer.start();
+    outln("allocating memory ({} bytes)...", count);
+    auto timer = Core::ElapsedTimer::start_new();
     char* ptr = (char*)malloc(count);
     if (!ptr) {
-        printf("failed.\n");
+        outln("failed.");
         return 1;
     }
-    printf("done in %dms\n", timer.elapsed());
+    outln("done in {}ms", timer.elapsed());
 
     auto pages = count / PAGE_SIZE;
     auto step = pages / 10;
 
-    Core::ElapsedTimer timer2;
-
-    printf("writing one byte to each page of allocated memory...\n");
+    outln("writing one byte to each page of allocated memory...");
     timer.start();
-    timer2.start();
+    auto timer2 = Core::ElapsedTimer::start_new();
     for (int i = 0; i < pages; ++i) {
         ptr[i * PAGE_SIZE] = 1;
 
@@ -87,24 +82,24 @@ int main(int argc, char** argv)
 
             auto bps = double(step * PAGE_SIZE) / (double(ms) / 1000);
 
-            printf("step took %dms (%fMiB/s)\n", ms, bps / MiB);
+            outln("step took {}ms ({}MiB/s)", ms, bps / MiB);
 
             timer2.start();
         }
     }
-    printf("done in %dms\n", timer.elapsed());
+    outln("done in {}ms", timer.elapsed());
 
-    printf("sleeping for ten seconds...\n");
+    outln("sleeping for ten seconds...");
     for (int i = 0; i < 10; i++) {
-        printf("%d\n", i);
+        outln("{}", i);
         sleep(1);
     }
-    printf("done.\n");
+    outln("done.");
 
-    printf("freeing memory...\n");
+    outln("freeing memory...");
     timer.start();
     free(ptr);
-    printf("done in %dms\n", timer.elapsed());
+    outln("done in {}ms", timer.elapsed());
 
     return 0;
 }

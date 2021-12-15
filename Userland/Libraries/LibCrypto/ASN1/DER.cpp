@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Bitmap.h>
 #include <AK/Utf8View.h>
 #include <LibCrypto/ASN1/DER.h>
 
@@ -176,7 +175,7 @@ Result<const BitmapView, DecodeError> Decoder::decode_bit_string(ReadonlyBytes d
         return DecodeError::InvalidInputFormat;
 
     auto unused_bits = data[0];
-    auto total_size_in_bits = data.size() * 8;
+    auto total_size_in_bits = (data.size() - 1) * 8;
 
     if (unused_bits > total_size_in_bits)
         return DecodeError::Overflow;
@@ -396,7 +395,7 @@ void pretty_print(Decoder& decoder, OutputStream& stream, int indent)
 
 }
 
-void AK::Formatter<Crypto::ASN1::DecodeError>::format(FormatBuilder& fmtbuilder, Crypto::ASN1::DecodeError error)
+ErrorOr<void> AK::Formatter<Crypto::ASN1::DecodeError>::format(FormatBuilder& fmtbuilder, Crypto::ASN1::DecodeError error)
 {
     using Crypto::ASN1::DecodeError;
 

@@ -5,13 +5,13 @@
  */
 
 #include <AK/Debug.h>
-#include <AK/InlineLinkedList.h>
 #include <AK/ScopedValueRollback.h>
 #include <AK/Vector.h>
 #include <LibELF/AuxiliaryVector.h>
-#include <LibThread/Lock.h>
 #include <assert.h>
+#include <errno.h>
 #include <mallocdefs.h>
+#include <pthread.h>
 #include <serenity.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,19 +20,33 @@
 #include <sys/mman.h>
 #include <syscall.h>
 
-// FIXME: Thread safety.
+class PthreadMutexLocker {
+public:
+    ALWAYS_INLINE explicit PthreadMutexLocker(pthread_mutex_t& mutex)
+        : m_mutex(mutex)
+    {
+        lock();
+        __heap_is_stable = false;
+    }
+    ALWAYS_INLINE ~PthreadMutexLocker()
+    {
+        __heap_is_stable = true;
+        unlock();
+    }
+    ALWAYS_INLINE void lock() { pthread_mutex_lock(&m_mutex); }
+    ALWAYS_INLINE void unlock() { pthread_mutex_unlock(&m_mutex); }
+
+private:
+    pthread_mutex_t& m_mutex;
+};
 
 #define RECYCLE_BIG_ALLOCATIONS
 
-#define PAGE_ROUND_UP(x) ((((size_t)(x)) + PAGE_SIZE - 1) & (~(PAGE_SIZE - 1)))
+static pthread_mutex_t s_malloc_mutex = PTHREAD_MUTEX_INITIALIZER;
+bool __heap_is_stable = true;
 
-static LibThread::Lock& malloc_lock()
-{
-    static u32 lock_storage[sizeof(LibThread::Lock) / sizeof(u32)];
-    return *reinterpret_cast<LibThread::Lock*>(&lock_storage);
-}
-
-constexpr size_t number_of_chunked_blocks_to_keep_around_per_size_class = 4;
+constexpr size_t number_of_hot_chunked_blocks_to_keep_around = 16;
+constexpr size_t number_of_cold_chunked_blocks_to_keep_around = 16;
 constexpr size_t number_of_big_blocks_to_keep_around_per_size_class = 8;
 
 static bool s_log_malloc = false;
@@ -59,6 +73,25 @@ ALWAYS_INLINE static void ue_notify_realloc(const void* ptr, size_t size)
         syscall(SC_emuctl, 3, size, (FlatPtr)ptr);
 }
 
+ALWAYS_INLINE static void ue_notify_chunk_size_changed(const void* block, size_t chunk_size)
+{
+    if (s_in_userspace_emulator)
+        syscall(SC_emuctl, 4, chunk_size, (FlatPtr)block);
+}
+
+struct MemoryAuditingSuppressor {
+    ALWAYS_INLINE MemoryAuditingSuppressor()
+    {
+        if (s_in_userspace_emulator)
+            syscall(SC_emuctl, 7);
+    }
+    ALWAYS_INLINE ~MemoryAuditingSuppressor()
+    {
+        if (s_in_userspace_emulator)
+            syscall(SC_emuctl, 8);
+    }
+};
+
 struct MallocStats {
     size_t number_of_malloc_calls;
 
@@ -66,8 +99,9 @@ struct MallocStats {
     size_t number_of_big_allocator_purge_hits;
     size_t number_of_big_allocs;
 
-    size_t number_of_empty_block_hits;
-    size_t number_of_empty_block_purge_hits;
+    size_t number_of_hot_empty_block_hits;
+    size_t number_of_cold_empty_block_hits;
+    size_t number_of_cold_empty_block_purge_hits;
     size_t number_of_block_allocs;
     size_t number_of_blocks_full;
 
@@ -77,18 +111,22 @@ struct MallocStats {
     size_t number_of_big_allocator_frees;
 
     size_t number_of_freed_full_blocks;
-    size_t number_of_keeps;
+    size_t number_of_hot_keeps;
+    size_t number_of_cold_keeps;
     size_t number_of_frees;
 };
 static MallocStats g_malloc_stats = {};
 
+static size_t s_hot_empty_block_count { 0 };
+static ChunkedBlock* s_hot_empty_blocks[number_of_hot_chunked_blocks_to_keep_around] { nullptr };
+static size_t s_cold_empty_block_count { 0 };
+static ChunkedBlock* s_cold_empty_blocks[number_of_cold_chunked_blocks_to_keep_around] { nullptr };
+
 struct Allocator {
     size_t size { 0 };
     size_t block_count { 0 };
-    size_t empty_block_count { 0 };
-    ChunkedBlock* empty_blocks[number_of_chunked_blocks_to_keep_around_per_size_class] { nullptr };
-    InlineLinkedList<ChunkedBlock> usable_blocks;
-    InlineLinkedList<ChunkedBlock> full_blocks;
+    ChunkedBlock::List usable_blocks;
+    ChunkedBlock::List full_blocks;
 };
 
 struct BigAllocator {
@@ -101,8 +139,8 @@ struct BigAllocator {
 // are run. Similarly, we can not allow global destructors to destruct
 // them. We could have used AK::NeverDestoyed to prevent the latter,
 // but it would have not helped with the former.
-static u8 g_allocators_storage[sizeof(Allocator) * num_size_classes];
-static u8 g_big_allocators_storage[sizeof(BigAllocator)];
+alignas(Allocator) static u8 g_allocators_storage[sizeof(Allocator) * num_size_classes];
+alignas(BigAllocator) static u8 g_big_allocators_storage[sizeof(BigAllocator)];
 
 static inline Allocator (&allocators())[num_size_classes]
 {
@@ -139,7 +177,11 @@ extern "C" {
 
 static void* os_alloc(size_t size, const char* name)
 {
-    auto* ptr = serenity_mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0, ChunkedBlock::block_size, name);
+    int flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_PURGEABLE;
+#if ARCH(X86_64)
+    flags |= MAP_RANDOMIZED;
+#endif
+    auto* ptr = serenity_mmap(nullptr, size, PROT_READ | PROT_WRITE, flags, 0, 0, ChunkedBlock::block_size, name);
     VERIFY(ptr != MAP_FAILED);
     return ptr;
 }
@@ -157,18 +199,21 @@ enum class CallerWillInitializeMemory {
 
 static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_initialize_memory)
 {
-    LOCKER(malloc_lock());
-
     if (s_log_malloc)
         dbgln("LibC: malloc({})", size);
 
-    if (!size)
-        return nullptr;
+    if (!size) {
+        // Legally we could just return a null pointer here, but this is more
+        // compatible with existing software.
+        size = 1;
+    }
 
     g_malloc_stats.number_of_malloc_calls++;
 
     size_t good_size;
     auto* allocator = allocator_for_size(size, good_size);
+
+    PthreadMutexLocker locker(s_malloc_mutex);
 
     if (!allocator) {
         size_t real_size = round_up_to_power_of_two(sizeof(BigAllocationBlock) + size, ChunkedBlock::block_size);
@@ -205,15 +250,29 @@ static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_ini
     }
 
     ChunkedBlock* block = nullptr;
-
-    for (block = allocator->usable_blocks.head(); block; block = block->next()) {
-        if (block->free_chunks())
+    for (auto& current : allocator->usable_blocks) {
+        if (current.free_chunks()) {
+            block = &current;
             break;
+        }
     }
 
-    if (!block && allocator->empty_block_count) {
-        g_malloc_stats.number_of_empty_block_hits++;
-        block = allocator->empty_blocks[--allocator->empty_block_count];
+    if (!block && s_hot_empty_block_count) {
+        g_malloc_stats.number_of_hot_empty_block_hits++;
+        block = s_hot_empty_blocks[--s_hot_empty_block_count];
+        if (block->m_size != good_size) {
+            new (block) ChunkedBlock(good_size);
+            ue_notify_chunk_size_changed(block, good_size);
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "malloc: ChunkedBlock(%zu)", good_size);
+            set_mmap_name(block, ChunkedBlock::block_size, buffer);
+        }
+        allocator->usable_blocks.append(*block);
+    }
+
+    if (!block && s_cold_empty_block_count) {
+        g_malloc_stats.number_of_cold_empty_block_hits++;
+        block = s_cold_empty_blocks[--s_cold_empty_block_count];
         int rc = madvise(block, ChunkedBlock::block_size, MADV_SET_NONVOLATILE);
         bool this_block_was_purged = rc == 1;
         if (rc < 0) {
@@ -225,11 +284,13 @@ static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_ini
             perror("mprotect");
             VERIFY_NOT_REACHED();
         }
-        if (this_block_was_purged) {
-            g_malloc_stats.number_of_empty_block_purge_hits++;
+        if (this_block_was_purged || block->m_size != good_size) {
+            if (this_block_was_purged)
+                g_malloc_stats.number_of_cold_empty_block_purge_hits++;
             new (block) ChunkedBlock(good_size);
+            ue_notify_chunk_size_changed(block, good_size);
         }
-        allocator->usable_blocks.append(block);
+        allocator->usable_blocks.append(*block);
     }
 
     if (!block) {
@@ -238,19 +299,24 @@ static void* malloc_impl(size_t size, CallerWillInitializeMemory caller_will_ini
         snprintf(buffer, sizeof(buffer), "malloc: ChunkedBlock(%zu)", good_size);
         block = (ChunkedBlock*)os_alloc(ChunkedBlock::block_size, buffer);
         new (block) ChunkedBlock(good_size);
-        allocator->usable_blocks.append(block);
+        allocator->usable_blocks.append(*block);
         ++allocator->block_count;
     }
 
     --block->m_free_chunks;
     void* ptr = block->m_freelist;
+    if (ptr) {
+        block->m_freelist = block->m_freelist->next;
+    } else {
+        ptr = block->m_slot + block->m_next_lazy_freelist_index * block->m_size;
+        block->m_next_lazy_freelist_index++;
+    }
     VERIFY(ptr);
-    block->m_freelist = block->m_freelist->next;
     if (block->is_full()) {
         g_malloc_stats.number_of_blocks_full++;
         dbgln_if(MALLOC_DEBUG, "Block {:p} is now full in size class {}", block, good_size);
-        allocator->usable_blocks.remove(block);
-        allocator->full_blocks.append(block);
+        allocator->usable_blocks.remove(*block);
+        allocator->full_blocks.append(*block);
     }
     dbgln_if(MALLOC_DEBUG, "LibC: allocated {:p} (chunk in block {:p}, size {})", ptr, block, block->bytes_per_chunk());
 
@@ -270,10 +336,10 @@ static void free_impl(void* ptr)
 
     g_malloc_stats.number_of_free_calls++;
 
-    LOCKER(malloc_lock());
-
     void* block_base = (void*)((FlatPtr)ptr & ChunkedBlock::ChunkedBlock::block_mask);
     size_t magic = *(size_t*)block_base;
+
+    PthreadMutexLocker locker(s_malloc_mutex);
 
     if (magic == MAGIC_BIGALLOC_HEADER) {
         auto* block = (BigAllocationBlock*)block_base;
@@ -317,8 +383,8 @@ static void free_impl(void* ptr)
         auto* allocator = allocator_for_size(block->m_size, good_size);
         dbgln_if(MALLOC_DEBUG, "Block {:p} no longer full in size class {}", block, good_size);
         g_malloc_stats.number_of_freed_full_blocks++;
-        allocator->full_blocks.remove(block);
-        allocator->usable_blocks.prepend(block);
+        allocator->full_blocks.remove(*block);
+        allocator->usable_blocks.prepend(*block);
     }
 
     ++block->m_free_chunks;
@@ -326,41 +392,92 @@ static void free_impl(void* ptr)
     if (!block->used_chunks()) {
         size_t good_size;
         auto* allocator = allocator_for_size(block->m_size, good_size);
-        if (allocator->block_count < number_of_chunked_blocks_to_keep_around_per_size_class) {
-            dbgln_if(MALLOC_DEBUG, "Keeping block {:p} around for size class {}", block, good_size);
-            g_malloc_stats.number_of_keeps++;
-            allocator->usable_blocks.remove(block);
-            allocator->empty_blocks[allocator->empty_block_count++] = block;
+        if (s_hot_empty_block_count < number_of_hot_chunked_blocks_to_keep_around) {
+            dbgln_if(MALLOC_DEBUG, "Keeping hot block {:p} around", block);
+            g_malloc_stats.number_of_hot_keeps++;
+            allocator->usable_blocks.remove(*block);
+            s_hot_empty_blocks[s_hot_empty_block_count++] = block;
+            return;
+        }
+        if (s_cold_empty_block_count < number_of_cold_chunked_blocks_to_keep_around) {
+            dbgln_if(MALLOC_DEBUG, "Keeping cold block {:p} around", block);
+            g_malloc_stats.number_of_cold_keeps++;
+            allocator->usable_blocks.remove(*block);
+            s_cold_empty_blocks[s_cold_empty_block_count++] = block;
             mprotect(block, ChunkedBlock::block_size, PROT_NONE);
             madvise(block, ChunkedBlock::block_size, MADV_SET_VOLATILE);
             return;
         }
         dbgln_if(MALLOC_DEBUG, "Releasing block {:p} for size class {}", block, good_size);
         g_malloc_stats.number_of_frees++;
-        allocator->usable_blocks.remove(block);
+        allocator->usable_blocks.remove(*block);
         --allocator->block_count;
         os_free(block, ChunkedBlock::block_size);
     }
 }
 
-[[gnu::flatten]] void* malloc(size_t size)
+void* malloc(size_t size)
 {
+    MemoryAuditingSuppressor suppressor;
     void* ptr = malloc_impl(size, CallerWillInitializeMemory::No);
     if (s_profiling)
         perf_event(PERF_EVENT_MALLOC, size, reinterpret_cast<FlatPtr>(ptr));
     return ptr;
 }
 
-[[gnu::flatten]] void free(void* ptr)
+// This is a Microsoft extension, and is not found on other Unix-like systems.
+// FIXME: Implement aligned_alloc() instead
+//
+// This is used in libc++ to implement C++17 aligned new/delete.
+//
+// Both Unix-y alternatives to _aligned_malloc(), the C11 aligned_alloc() and
+// posix_memalign() say that the resulting pointer can be deallocated with
+// regular free(), which means that the allocator has to keep track of the
+// requested alignments. By contrast, _aligned_malloc() is paired with
+// _aligned_free(), so it can be easily implemented on top of malloc().
+void* _aligned_malloc(size_t size, size_t alignment)
 {
+    if (__builtin_popcount(alignment) != 1) {
+        errno = EINVAL;
+        return nullptr;
+    }
+    alignment = max(alignment, sizeof(void*));
+    if (Checked<size_t>::addition_would_overflow(size, alignment)) {
+        errno = ENOMEM;
+        return nullptr;
+    }
+    void* ptr = malloc(size + alignment);
+    if (!ptr) {
+        errno = ENOMEM;
+        return nullptr;
+    }
+    auto aligned_ptr = (void*)(((FlatPtr)ptr + alignment) & ~(alignment - 1));
+    ((void**)aligned_ptr)[-1] = ptr;
+    return aligned_ptr;
+}
+
+void free(void* ptr)
+{
+    MemoryAuditingSuppressor suppressor;
     if (s_profiling)
         perf_event(PERF_EVENT_FREE, reinterpret_cast<FlatPtr>(ptr), 0);
     ue_notify_free(ptr);
     free_impl(ptr);
 }
 
+void _aligned_free(void* ptr)
+{
+    if (ptr)
+        free(((void**)ptr)[-1]);
+}
+
 void* calloc(size_t count, size_t size)
 {
+    MemoryAuditingSuppressor suppressor;
+    if (Checked<size_t>::multiplication_would_overflow(count, size)) {
+        errno = ENOMEM;
+        return nullptr;
+    }
     size_t new_size = count * size;
     auto* ptr = malloc_impl(new_size, CallerWillInitializeMemory::Yes);
     if (ptr)
@@ -370,9 +487,9 @@ void* calloc(size_t count, size_t size)
 
 size_t malloc_size(void* ptr)
 {
+    MemoryAuditingSuppressor suppressor;
     if (!ptr)
         return 0;
-    LOCKER(malloc_lock());
     void* page_base = (void*)((FlatPtr)ptr & ChunkedBlock::block_mask);
     auto* header = (const CommonHeader*)page_base;
     auto size = header->m_size;
@@ -383,14 +500,23 @@ size_t malloc_size(void* ptr)
     return size;
 }
 
+size_t malloc_good_size(size_t size)
+{
+    size_t good_size;
+    allocator_for_size(size, good_size);
+    return good_size;
+}
+
 void* realloc(void* ptr, size_t size)
 {
+    MemoryAuditingSuppressor suppressor;
     if (!ptr)
         return malloc(size);
-    if (!size)
+    if (!size) {
+        free(ptr);
         return nullptr;
+    }
 
-    LOCKER(malloc_lock());
     auto existing_allocation_size = malloc_size(ptr);
 
     if (size <= existing_allocation_size) {
@@ -407,8 +533,6 @@ void* realloc(void* ptr, size_t size)
 
 void __malloc_init()
 {
-    new (&malloc_lock()) LibThread::Lock();
-
     s_in_userspace_emulator = (int)syscall(SC_emuctl, 0) != -ENOSYS;
     if (s_in_userspace_emulator) {
         // Don't bother scrubbing memory if we're running in UE since it
@@ -442,8 +566,9 @@ void serenity_dump_malloc_stats()
     dbgln("big alloc hits that were purged: {}", g_malloc_stats.number_of_big_allocator_purge_hits);
     dbgln("big allocs: {}", g_malloc_stats.number_of_big_allocs);
     dbgln();
-    dbgln("empty block hits: {}", g_malloc_stats.number_of_empty_block_hits);
-    dbgln("empty block hits that were purged: {}", g_malloc_stats.number_of_empty_block_purge_hits);
+    dbgln("empty hot block hits: {}", g_malloc_stats.number_of_hot_empty_block_hits);
+    dbgln("empty cold block hits: {}", g_malloc_stats.number_of_cold_empty_block_hits);
+    dbgln("empty cold block hits that were purged: {}", g_malloc_stats.number_of_cold_empty_block_purge_hits);
     dbgln("block allocs: {}", g_malloc_stats.number_of_block_allocs);
     dbgln("filled blocks: {}", g_malloc_stats.number_of_blocks_full);
     dbgln();
@@ -453,7 +578,8 @@ void serenity_dump_malloc_stats()
     dbgln("big alloc frees: {}", g_malloc_stats.number_of_big_allocator_frees);
     dbgln();
     dbgln("full block frees: {}", g_malloc_stats.number_of_freed_full_blocks);
-    dbgln("number of keeps: {}", g_malloc_stats.number_of_keeps);
+    dbgln("number of hot keeps: {}", g_malloc_stats.number_of_hot_keeps);
+    dbgln("number of cold keeps: {}", g_malloc_stats.number_of_cold_keeps);
     dbgln("number of frees: {}", g_malloc_stats.number_of_frees);
 }
 }

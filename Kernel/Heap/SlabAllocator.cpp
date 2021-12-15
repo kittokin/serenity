@@ -8,8 +8,8 @@
 #include <AK/Memory.h>
 #include <Kernel/Heap/SlabAllocator.h>
 #include <Kernel/Heap/kmalloc.h>
-#include <Kernel/SpinLock.h>
-#include <Kernel/VM/Region.h>
+#include <Kernel/Memory/Region.h>
+#include <Kernel/Sections.h>
 
 #define SANITIZE_SLABS
 
@@ -97,30 +97,33 @@ private:
     };
 
     Atomic<FreeSlab*> m_freelist { nullptr };
-    Atomic<ssize_t, AK::MemoryOrder::memory_order_relaxed> m_num_allocated;
-    size_t m_slab_count;
+    Atomic<size_t, AK::MemoryOrder::memory_order_relaxed> m_num_allocated { 0 };
+    size_t m_slab_count { 0 };
     void* m_base { nullptr };
     void* m_end { nullptr };
 
-    static_assert(sizeof(FreeSlab) == templated_slab_size);
+    static_assert(AssertSize<FreeSlab, templated_slab_size>());
 };
 
 static SlabAllocator<16> s_slab_allocator_16;
 static SlabAllocator<32> s_slab_allocator_32;
 static SlabAllocator<64> s_slab_allocator_64;
 static SlabAllocator<128> s_slab_allocator_128;
+static SlabAllocator<256> s_slab_allocator_256;
 
 #if ARCH(I386)
-static_assert(sizeof(Region) <= s_slab_allocator_128.slab_size());
+static_assert(sizeof(Memory::Region) <= s_slab_allocator_128.slab_size());
 #endif
 
 template<typename Callback>
-void for_each_allocator(Callback callback)
+ErrorOr<void> for_each_allocator(Callback callback)
 {
-    callback(s_slab_allocator_16);
-    callback(s_slab_allocator_32);
-    callback(s_slab_allocator_64);
-    callback(s_slab_allocator_128);
+    TRY(callback(s_slab_allocator_16));
+    TRY(callback(s_slab_allocator_32));
+    TRY(callback(s_slab_allocator_64));
+    TRY(callback(s_slab_allocator_128));
+    TRY(callback(s_slab_allocator_256));
+    return {};
 }
 
 UNMAP_AFTER_INIT void slab_alloc_init()
@@ -129,6 +132,7 @@ UNMAP_AFTER_INIT void slab_alloc_init()
     s_slab_allocator_32.init(128 * KiB);
     s_slab_allocator_64.init(512 * KiB);
     s_slab_allocator_128.init(512 * KiB);
+    s_slab_allocator_256.init(128 * KiB);
 }
 
 void* slab_alloc(size_t slab_size)
@@ -141,6 +145,8 @@ void* slab_alloc(size_t slab_size)
         return s_slab_allocator_64.alloc();
     if (slab_size <= 128)
         return s_slab_allocator_128.alloc();
+    if (slab_size <= 256)
+        return s_slab_allocator_256.alloc();
     VERIFY_NOT_REACHED();
 }
 
@@ -154,16 +160,21 @@ void slab_dealloc(void* ptr, size_t slab_size)
         return s_slab_allocator_64.dealloc(ptr);
     if (slab_size <= 128)
         return s_slab_allocator_128.dealloc(ptr);
+    if (slab_size <= 256)
+        return s_slab_allocator_256.dealloc(ptr);
     VERIFY_NOT_REACHED();
 }
 
-void slab_alloc_stats(Function<void(size_t slab_size, size_t allocated, size_t free)> callback)
+ErrorOr<void> slab_alloc_stats(Function<ErrorOr<void>(size_t slab_size, size_t allocated, size_t free)> callback)
 {
-    for_each_allocator([&](auto& allocator) {
+    TRY(for_each_allocator([&](auto& allocator) -> ErrorOr<void> {
         auto num_allocated = allocator.num_allocated();
         auto num_free = allocator.slab_count() - num_allocated;
-        callback(allocator.slab_size(), num_allocated, num_free);
-    });
+        TRY(callback(allocator.slab_size(), num_allocated, num_free));
+        return {};
+    }));
+
+    return {};
 }
 
 }

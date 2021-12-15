@@ -14,10 +14,10 @@ namespace LanguageServers {
 
 static HashMap<int, RefPtr<ClientConnection>> s_connections;
 
-ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket, int client_id)
-    : IPC::ClientConnection<LanguageClientEndpoint, LanguageServerEndpoint>(*this, move(socket), client_id)
+ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket)
+    : IPC::ClientConnection<LanguageClientEndpoint, LanguageServerEndpoint>(*this, move(socket), 1)
 {
-    s_connections.set(client_id, *this);
+    s_connections.set(1, *this);
 }
 
 ClientConnection::~ClientConnection()
@@ -118,9 +118,29 @@ void ClientConnection::find_declaration(GUI::AutocompleteProvider::ProjectLocati
     async_declaration_location(GUI::AutocompleteProvider::ProjectLocation { decl_location.value().file, decl_location.value().line, decl_location.value().column });
 }
 
-void ClientConnection::set_declarations_of_document_callback(ClientConnection& instance, const String& filename, Vector<GUI::AutocompleteProvider::Declaration>&& declarations)
+void ClientConnection::get_parameters_hint(GUI::AutocompleteProvider::ProjectLocation const& location)
 {
-    instance.async_declarations_in_document(filename, move(declarations));
+    dbgln_if(LANGUAGE_SERVER_DEBUG, "GetFunctionParams: {} {}:{}", location.file, location.line, location.column);
+    auto document = m_filedb.get(location.file);
+    if (!document) {
+        dbgln("file {} has not been opened", location.file);
+        return;
+    }
+
+    GUI::TextPosition identifier_position = { (size_t)location.line, (size_t)location.column };
+    auto params = m_autocomplete_engine->get_function_params_hint(location.file, identifier_position);
+    if (!params.has_value()) {
+        dbgln("could not get parameters hint");
+        return;
+    }
+
+    dbgln_if(LANGUAGE_SERVER_DEBUG, "parameters hint:");
+    for (auto& param : params->params) {
+        dbgln_if(LANGUAGE_SERVER_DEBUG, "{}", param);
+    }
+    dbgln_if(LANGUAGE_SERVER_DEBUG, "Parameter index: {}", params->current_index);
+
+    async_parameters_hint_result(params->params, params->current_index);
 }
 
 }

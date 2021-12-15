@@ -6,16 +6,18 @@
 
 #pragma once
 
+#include "EventSerialNumber.h"
 #include <AK/HashMap.h>
-#include <AK/MappedFile.h>
 #include <AK/OwnPtr.h>
 #include <AK/Vector.h>
+#include <LibCore/MappedFile.h>
+#include <LibDebug/DebugInfo.h>
 #include <LibELF/Image.h>
 
 namespace Profiler {
 
 struct MappedObject {
-    NonnullRefPtr<MappedFile> file;
+    NonnullRefPtr<Core::MappedFile> file;
     ELF::Image elf;
 };
 
@@ -27,10 +29,12 @@ public:
         FlatPtr base;
         size_t size;
         String name;
-        FlatPtr text_base;
         MappedObject* object { nullptr };
+        // This is loaded lazily because we only need it in disassembly view
+        mutable OwnPtr<Debug::DebugInfo> debug_info;
 
         String symbolicate(FlatPtr, u32* offset) const;
+        const Debug::DebugInfo& load_debug_info(FlatPtr base_address) const;
     };
 
     void handle_mmap(FlatPtr base, size_t size, const String& name);
@@ -42,30 +46,31 @@ private:
 
 struct Thread {
     pid_t tid;
-    u64 start_valid;
-    u64 end_valid { 0 };
+    EventSerialNumber start_valid;
+    EventSerialNumber end_valid;
 
-    bool valid_at(u64 timestamp) const
+    bool valid_at(EventSerialNumber serial) const
     {
-        return timestamp >= start_valid && (end_valid == 0 || timestamp <= end_valid);
+        return serial >= start_valid && (end_valid == EventSerialNumber {} || serial <= end_valid);
     }
 };
 
 struct Process {
     pid_t pid {};
     String executable;
+    String basename;
     HashMap<int, Vector<Thread>> threads {};
     LibraryMetadata library_metadata {};
-    u64 start_valid;
-    u64 end_valid { 0 };
+    EventSerialNumber start_valid;
+    EventSerialNumber end_valid;
 
-    Thread* find_thread(pid_t tid, u64 timestamp);
-    void handle_thread_create(pid_t tid, u64 timestamp);
-    void handle_thread_exit(pid_t tid, u64 timestamp);
+    Thread* find_thread(pid_t tid, EventSerialNumber serial);
+    void handle_thread_create(pid_t tid, EventSerialNumber serial);
+    void handle_thread_exit(pid_t tid, EventSerialNumber serial);
 
-    bool valid_at(u64 timestamp) const
+    bool valid_at(EventSerialNumber serial) const
     {
-        return timestamp >= start_valid && (end_valid == 0 || timestamp <= end_valid);
+        return serial >= start_valid && (end_valid == EventSerialNumber {} || serial <= end_valid);
     }
 };
 

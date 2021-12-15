@@ -1,3 +1,9 @@
+serenity_component(
+    LaunchServer
+    REQUIRED
+    TARGETS LaunchServer
+)
+
 compile_ipc(LaunchServer.ipc LaunchServerEndpoint.h)
 compile_ipc(LaunchClient.ipc LaunchClientEndpoint.h)
 
@@ -10,4 +16,4 @@ set(SOURCES
 )
 
 serenity_bin(LaunchServer)
-target_link_libraries(LaunchServer LibCore LibIPC LibDesktop)
+target_link_libraries(LaunchServer LibCore LibIPC LibDesktop LibMain)

@@ -8,7 +8,6 @@
 
 #include <AK/OwnPtr.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/x86/CPU.h>
 #include <Kernel/Interrupts/GenericInterruptHandler.h>
 #include <Kernel/Interrupts/IRQController.h>
 
@@ -18,7 +17,7 @@ class SpuriousInterruptHandler final : public GenericInterruptHandler {
 public:
     static void initialize(u8 interrupt_number);
     virtual ~SpuriousInterruptHandler();
-    virtual void handle_interrupt(const RegisterState& regs) override;
+    virtual bool handle_interrupt(const RegisterState& regs) override;
 
     void register_handler(GenericInterruptHandler&);
     void unregister_handler(GenericInterruptHandler&);
@@ -30,8 +29,8 @@ public:
     virtual bool is_sharing_with_others() const override { return false; }
 
     virtual HandlerType type() const override { return HandlerType::SpuriousInterruptHandler; }
-    virtual const char* purpose() const override;
-    virtual const char* controller() const override;
+    virtual StringView purpose() const override;
+    virtual StringView controller() const override;
 
 private:
     void enable_interrupt_vector();

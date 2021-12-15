@@ -10,21 +10,20 @@
 
 namespace GUI {
 
-void JsonArrayModel::update()
+void JsonArrayModel::invalidate()
 {
     auto file = Core::File::construct(m_json_path);
-    if (!file->open(Core::IODevice::ReadOnly)) {
+    if (!file->open(Core::OpenMode::ReadOnly)) {
         dbgln("Unable to open {}", file->filename());
         m_array.clear();
         did_update();
         return;
     }
 
-    auto json = JsonValue::from_string(file->read_all());
+    auto json = JsonValue::from_string(file->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    VERIFY(json.has_value());
-    VERIFY(json.value().is_array());
-    m_array = json.value().as_array();
+    VERIFY(json.is_array());
+    m_array = json.as_array();
 
     did_update();
 }
@@ -32,7 +31,7 @@ void JsonArrayModel::update()
 bool JsonArrayModel::store()
 {
     auto file = Core::File::construct(m_json_path);
-    if (!file->open(Core::IODevice::WriteOnly)) {
+    if (!file->open(Core::OpenMode::WriteOnly)) {
         dbgln("Unable to open {}", file->filename());
         return false;
     }
@@ -59,7 +58,7 @@ bool JsonArrayModel::set(int row, Vector<JsonValue>&& values)
 {
     VERIFY(values.size() == m_fields.size());
 
-    if (row >= m_array.size())
+    if ((size_t)row >= m_array.size())
         return false;
 
     JsonObject obj;
@@ -76,12 +75,12 @@ bool JsonArrayModel::set(int row, Vector<JsonValue>&& values)
 
 bool JsonArrayModel::remove(int row)
 {
-    if (row >= m_array.size())
+    if ((size_t)row >= m_array.size())
         return false;
 
     JsonArray new_array;
-    for (int i = 0; i < m_array.size(); ++i)
-        if (i != row)
+    for (size_t i = 0; i < m_array.size(); ++i)
+        if (i != (size_t)row)
             new_array.append(m_array.at(i));
 
     m_array = new_array;
@@ -131,7 +130,7 @@ void JsonArrayModel::set_json_path(const String& json_path)
         return;
 
     m_json_path = json_path;
-    update();
+    invalidate();
 }
 
 }

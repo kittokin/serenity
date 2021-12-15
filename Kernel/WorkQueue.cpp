@@ -1,11 +1,12 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
+ * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <Kernel/Process.h>
-#include <Kernel/SpinLock.h>
+#include <Kernel/Sections.h>
 #include <Kernel/WaitQueue.h>
 #include <Kernel/WorkQueue.h>
 
@@ -13,27 +14,27 @@ namespace Kernel {
 
 WorkQueue* g_io_work;
 
-void WorkQueue::initialize()
+UNMAP_AFTER_INIT void WorkQueue::initialize()
 {
     g_io_work = new WorkQueue("IO WorkQueue");
 }
 
-WorkQueue::WorkQueue(const char* name)
+UNMAP_AFTER_INIT WorkQueue::WorkQueue(StringView name)
 {
     RefPtr<Thread> thread;
-    Process::create_kernel_process(thread, name, [this] {
+    auto name_kstring = KString::try_create(name);
+    if (name_kstring.is_error())
+        TODO();
+    (void)Process::create_kernel_process(thread, name_kstring.release_value(), [this] {
         for (;;) {
             WorkItem* item;
             bool have_more;
-            {
-                ScopedSpinLock lock(m_lock);
-                item = m_items.take_first();
-                have_more = !m_items.is_empty();
-            }
+            m_items.with([&](auto& items) {
+                item = items.take_first();
+                have_more = !items.is_empty();
+            });
             if (item) {
-                item->function(item->data);
-                if (item->free_data)
-                    item->free_data(item->data);
+                item->function();
                 delete item;
 
                 if (have_more)
@@ -48,10 +49,9 @@ WorkQueue::WorkQueue(const char* name)
 
 void WorkQueue::do_queue(WorkItem* item)
 {
-    {
-        ScopedSpinLock lock(m_lock);
-        m_items.append(*item);
-    }
+    m_items.with([&](auto& items) {
+        items.append(*item);
+    });
     m_wait_queue.wake_one();
 }
 

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/Badge.h>
 #include <AK/Forward.h>
 #include <AK/RefPtr.h>
 #include <LibGUI/Forward.h>
@@ -49,6 +50,8 @@ public:
 
     void set_menu_id(Badge<Menu>, unsigned menu_id);
     void set_identifier(Badge<Menu>, unsigned identifier);
+
+    void update_from_action(Badge<Action>) { update_window_server(); }
 
 private:
     void update_window_server();

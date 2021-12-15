@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/StringBuilder.h>
 #include <AK/Vector.h>
 #include <LibGUI/AbstractTableView.h>
 #include <LibGUI/Action.h>
@@ -13,7 +12,6 @@
 #include <LibGUI/Menu.h>
 #include <LibGUI/Model.h>
 #include <LibGUI/Painter.h>
-#include <LibGUI/Scrollbar.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Palette.h>
 
@@ -108,7 +106,8 @@ void AbstractTableView::update_column_sizes()
             auto cell_data = model.index(row, column).data();
             int cell_width = 0;
             if (cell_data.is_icon()) {
-                cell_width = cell_data.as_icon().bitmap_for_size(16)->width();
+                if (auto bitmap = cell_data.as_icon().bitmap_for_size(16))
+                    cell_width = bitmap->width();
             } else if (cell_data.is_bitmap()) {
                 cell_width = cell_data.as_bitmap().width();
             } else if (cell_data.is_valid()) {
@@ -129,7 +128,7 @@ void AbstractTableView::update_row_sizes()
     int row_count = model.row_count();
 
     for (int row = 0; row < row_count; ++row) {
-        if (!column_header().is_section_visible(row))
+        if (!row_header().is_section_visible(row))
             continue;
         row_header().set_section_size(row, row_height());
     }
@@ -180,6 +179,16 @@ void AbstractTableView::set_column_width(int column, int width)
     column_header().set_section_size(column, width);
 }
 
+int AbstractTableView::minimum_column_width(int)
+{
+    return 2;
+}
+
+int AbstractTableView::minimum_row_height(int)
+{
+    return 2;
+}
+
 Gfx::TextAlignment AbstractTableView::column_header_alignment(int column_index) const
 {
     if (!model())
@@ -194,10 +203,11 @@ void AbstractTableView::set_column_header_alignment(int column, Gfx::TextAlignme
 
 void AbstractTableView::mousedown_event(MouseEvent& event)
 {
+    m_tab_moves = 0;
     if (!model())
         return AbstractView::mousedown_event(event);
 
-    if (event.button() != MouseButton::Left)
+    if (event.button() != MouseButton::Primary)
         return AbstractView::mousedown_event(event);
 
     bool is_toggle;
@@ -290,6 +300,13 @@ void AbstractTableView::context_menu_event(ContextMenuEvent& event)
     }
     if (on_context_menu_request)
         on_context_menu_request(index, event);
+}
+
+Gfx::IntRect AbstractTableView::paint_invalidation_rect(ModelIndex const& index) const
+{
+    if (!index.is_valid())
+        return {};
+    return row_rect(index.row());
 }
 
 Gfx::IntRect AbstractTableView::content_rect(int row, int column) const
@@ -403,19 +420,54 @@ void AbstractTableView::layout_headers()
 void AbstractTableView::keydown_event(KeyEvent& event)
 {
     if (is_tab_key_navigation_enabled()) {
-        if (event.modifiers() == KeyModifier::Mod_Shift && event.key() == KeyCode::Key_Tab) {
-            move_cursor(CursorMovement::Left, SelectionUpdate::Set);
-            event.accept();
-            return;
-        }
         if (!event.modifiers() && event.key() == KeyCode::Key_Tab) {
             move_cursor(CursorMovement::Right, SelectionUpdate::Set);
+            event.accept();
+            ++m_tab_moves;
+            return;
+        } else if (is_navigation(event)) {
+            if (event.key() == KeyCode::Key_Return) {
+                move_cursor_relative(0, -m_tab_moves, SelectionUpdate::Set);
+            }
+            m_tab_moves = 0;
+        }
+
+        if (event.modifiers() == KeyModifier::Mod_Shift && event.key() == KeyCode::Key_Tab) {
+            move_cursor(CursorMovement::Left, SelectionUpdate::Set);
             event.accept();
             return;
         }
     }
 
     AbstractView::keydown_event(event);
+}
+
+bool AbstractTableView::is_navigation(GUI::KeyEvent& event)
+{
+    switch (event.key()) {
+    case KeyCode::Key_Tab:
+    case KeyCode::Key_Left:
+    case KeyCode::Key_Right:
+    case KeyCode::Key_Up:
+    case KeyCode::Key_Down:
+    case KeyCode::Key_Return:
+    case KeyCode::Key_Home:
+    case KeyCode::Key_End:
+    case KeyCode::Key_PageUp:
+    case KeyCode::Key_PageDown:
+        return true;
+    default:
+        return false;
+    }
+}
+
+Gfx::IntPoint AbstractTableView::automatic_scroll_delta_from_position(const Gfx::IntPoint& pos) const
+{
+    if (pos.y() > column_header().height() + autoscroll_threshold())
+        return AbstractScrollableWidget::automatic_scroll_delta_from_position(pos);
+
+    Gfx::IntPoint position_excluding_header = { pos.x(), pos.y() - column_header().height() };
+    return AbstractScrollableWidget::automatic_scroll_delta_from_position(position_excluding_header);
 }
 
 }

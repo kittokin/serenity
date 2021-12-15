@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
-#include <LibCore/File.h>
+#include <errno.h>
+#include <string.h>
 #include <unistd.h>
 
 int main(int argc, char** argv)
@@ -16,32 +16,67 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    const char* path = nullptr;
+    Vector<StringView> paths;
+
     Core::ArgsParser args_parser;
     args_parser.set_general_help("Concatenate files or pipes to stdout, last line first.");
-    args_parser.add_positional_argument(path, "File path", "path", Core::ArgsParser::Required::No);
+    args_parser.add_positional_argument(paths, "File path(s)", "path", Core::ArgsParser::Required::No);
     args_parser.parse(argc, argv);
 
-    RefPtr<Core::File> file;
-    if (path == nullptr) {
-        file = Core::File::standard_input();
-    } else {
-        auto file_or_error = Core::File::open(path, Core::File::ReadOnly);
-        if (file_or_error.is_error()) {
-            warnln("Failed to open {}: {}", path, file_or_error.error());
-            return 1;
+    Vector<FILE*> streams;
+    auto num_paths = paths.size();
+    streams.ensure_capacity(num_paths ? num_paths : 1);
+
+    if (!paths.is_empty()) {
+        for (auto const& path : paths) {
+            FILE* stream = nullptr;
+            if (path == "-"sv) {
+                stream = stdin;
+            } else {
+                stream = fopen(String(path).characters(), "r");
+                if (!stream) {
+                    warnln("Failed to open {}: {}", path, strerror(errno));
+                    continue;
+                }
+            }
+            streams.append(stream);
         }
-        file = file_or_error.value();
+    } else {
+        streams.append(stdin);
     }
 
-    Vector<String> lines;
-    while (file->can_read_line()) {
-        auto line = file->read_line();
-        lines.append(line);
+    char* buffer = nullptr;
+    ScopeGuard guard = [&] {
+        free(buffer);
+        for (auto* stream : streams) {
+            if (fclose(stream))
+                perror("fclose");
+        }
+    };
+
+    if (pledge("stdio", nullptr) < 0) {
+        perror("pledge");
+        return 1;
     }
 
-    for (int i = lines.size() - 1; i >= 0; --i)
-        outln("{}", lines[i]);
+    for (auto* stream : streams) {
+        Vector<String> lines;
+        for (;;) {
+            size_t n = 0;
+            errno = 0;
+            ssize_t buflen = getline(&buffer, &n, stream);
+            if (buflen == -1) {
+                if (errno != 0) {
+                    perror("getline");
+                    return 1;
+                }
+                break;
+            }
+            lines.append({ buffer, Chomp });
+        }
+        for (int i = lines.size() - 1; i >= 0; --i)
+            outln("{}", lines[i]);
+    }
 
     return 0;
 }

@@ -105,7 +105,9 @@ void ColumnsView::paint_event(PaintEvent& event)
             }
 
             Gfx::IntRect row_rect { column_x, row * item_height(), column.width, item_height() };
-            painter.fill_rect(row_rect, background_color);
+
+            if (m_edit_index.row() != row)
+                painter.fill_rect(row_rect, background_color);
 
             auto icon = index.data(ModelRole::Icon);
             Gfx::IntRect icon_rect = { column_x + icon_spacing(), 0, icon_size(), icon_size() };
@@ -118,7 +120,8 @@ void ColumnsView::paint_event(PaintEvent& event)
                     } else if (m_hovered_index.is_valid() && m_hovered_index.parent() == index.parent() && m_hovered_index.row() == index.row()) {
                         painter.blit_brightened(icon_rect.location(), *bitmap, bitmap->rect());
                     } else {
-                        painter.blit(icon_rect.location(), *bitmap, bitmap->rect());
+                        auto opacity = index.data(ModelRole::IconOpacity).as_float_or(1.0f);
+                        painter.blit(icon_rect.location(), *bitmap, bitmap->rect(), opacity);
                     }
                 }
             }
@@ -243,7 +246,7 @@ void ColumnsView::mousedown_event(MouseEvent& event)
     if (!model())
         return;
 
-    if (event.button() != MouseButton::Left)
+    if (event.button() != MouseButton::Primary)
         return;
 
     auto index = index_at_event_position(event.position());
@@ -258,7 +261,6 @@ void ColumnsView::model_did_update(unsigned flags)
     AbstractView::model_did_update(flags);
 
     // FIXME: Don't drop the columns on minor updates.
-    dbgln("Model was updated; dropping columns :(");
     m_columns.clear();
     m_columns.append({ {}, 0 });
 
@@ -295,12 +297,12 @@ void ColumnsView::move_cursor(CursorMovement movement, SelectionUpdate selection
         break;
     case CursorMovement::Right:
         new_index = model.index(0, m_model_column, cursor_index());
-        if (model.is_valid(new_index)) {
-            if (model.is_valid(cursor_index()))
+        if (model.is_within_range(new_index)) {
+            if (model.is_within_range(cursor_index()))
                 push_column(cursor_index());
             update();
-            break;
         }
+        break;
     default:
         break;
     }
@@ -322,6 +324,14 @@ Gfx::IntRect ColumnsView::content_rect(const ModelIndex& index) const
     }
 
     return {};
+}
+
+Gfx::IntRect ColumnsView::paint_invalidation_rect(ModelIndex const& index) const
+{
+    auto rect = content_rect(index);
+    rect.translate_by(-icon_size(), 0);
+    rect.set_width(rect.width() + icon_size());
+    return rect;
 }
 
 }

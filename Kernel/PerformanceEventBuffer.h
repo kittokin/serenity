@@ -6,12 +6,13 @@
 
 #pragma once
 
+#include <AK/Error.h>
 #include <Kernel/KBuffer.h>
-#include <Kernel/KResult.h>
 
 namespace Kernel {
 
 class KBufferBuilder;
+struct RegisterState;
 
 struct [[gnu::packed]] MallocPerformanceEvent {
     size_t size;
@@ -47,12 +48,33 @@ struct [[gnu::packed]] ThreadCreatePerformanceEvent {
     pid_t parent_tid;
 };
 
+struct [[gnu::packed]] ContextSwitchPerformanceEvent {
+    pid_t next_pid;
+    u32 next_tid;
+};
+
+struct [[gnu::packed]] KMallocPerformanceEvent {
+    size_t size;
+    FlatPtr ptr;
+};
+
+struct [[gnu::packed]] KFreePerformanceEvent {
+    size_t size;
+    FlatPtr ptr;
+};
+
+struct [[gnu::packed]] SignpostPerformanceEvent {
+    FlatPtr arg1;
+    FlatPtr arg2;
+};
+
 struct [[gnu::packed]] PerformanceEvent {
-    u8 type { 0 };
+    u16 type { 0 };
     u8 stack_size { 0 };
     u32 pid { 0 };
     u32 tid { 0 };
     u64 timestamp;
+    u32 lost_samples;
     union {
         MallocPerformanceEvent malloc;
         FreePerformanceEvent free;
@@ -61,6 +83,10 @@ struct [[gnu::packed]] PerformanceEvent {
         ProcessCreatePerformanceEvent process_create;
         ProcessExecPerformanceEvent process_exec;
         ThreadCreatePerformanceEvent thread_create;
+        ContextSwitchPerformanceEvent context_switch;
+        KMallocPerformanceEvent kmalloc;
+        KFreePerformanceEvent kfree;
+        SignpostPerformanceEvent signpost;
     } data;
     static constexpr size_t max_stack_frame_count = 64;
     FlatPtr stack[max_stack_frame_count];
@@ -75,9 +101,11 @@ class PerformanceEventBuffer {
 public:
     static OwnPtr<PerformanceEventBuffer> try_create_with_size(size_t buffer_size);
 
-    KResult append(int type, FlatPtr arg1, FlatPtr arg2, const StringView& arg3);
-    KResult append_with_eip_and_ebp(ProcessID pid, ThreadID tid, u32 eip, u32 ebp,
-        int type, FlatPtr arg1, FlatPtr arg2, const StringView& arg3);
+    ErrorOr<void> append(int type, FlatPtr arg1, FlatPtr arg2, StringView arg3, Thread* current_thread = Thread::current());
+    ErrorOr<void> append_with_ip_and_bp(ProcessID pid, ThreadID tid, FlatPtr eip, FlatPtr ebp,
+        int type, u32 lost_samples, FlatPtr arg1, FlatPtr arg2, StringView arg3);
+    ErrorOr<void> append_with_ip_and_bp(ProcessID pid, ThreadID tid, const RegisterState& regs,
+        int type, u32 lost_samples, FlatPtr arg1, FlatPtr arg2, StringView arg3);
 
     void clear()
     {
@@ -91,23 +119,28 @@ public:
         return const_cast<PerformanceEventBuffer&>(*this).at(index);
     }
 
-    bool to_json(KBufferBuilder&) const;
+    ErrorOr<void> to_json(KBufferBuilder&) const;
 
     void add_process(const Process&, ProcessEventType event_type);
+
+    ErrorOr<FlatPtr> register_string(NonnullOwnPtr<KString>);
 
 private:
     explicit PerformanceEventBuffer(NonnullOwnPtr<KBuffer>);
 
     template<typename Serializer>
-    bool to_json_impl(Serializer&) const;
+    ErrorOr<void> to_json_impl(Serializer&) const;
 
     PerformanceEvent& at(size_t index);
 
     size_t m_count { 0 };
     NonnullOwnPtr<KBuffer> m_buffer;
+
+    HashTable<NonnullOwnPtr<KString>> m_strings;
 };
 
 extern bool g_profiling_all_threads;
 extern PerformanceEventBuffer* g_global_perf_events;
+extern u64 g_profiling_event_mask;
 
 }

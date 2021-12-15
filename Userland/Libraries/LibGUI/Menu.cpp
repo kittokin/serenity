@@ -6,6 +6,7 @@
 
 #include <AK/Debug.h>
 #include <AK/HashMap.h>
+#include <AK/IDAllocator.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/ActionGroup.h>
 #include <LibGUI/Menu.h>
@@ -14,6 +15,8 @@
 #include <LibGfx/Bitmap.h>
 
 namespace GUI {
+
+static IDAllocator s_menu_id_allocator;
 
 static HashMap<int, Menu*>& all_menus()
 {
@@ -46,26 +49,64 @@ void Menu::set_icon(const Gfx::Bitmap* icon)
     m_icon = icon;
 }
 
-void Menu::add_action(NonnullRefPtr<Action> action)
+ErrorOr<void> Menu::try_add_action(NonnullRefPtr<Action> action)
 {
-    m_items.append(make<MenuItem>(m_menu_id, move(action)));
+    // NOTE: We grow the vector first, to get allocation failure handled immediately.
+    TRY(m_items.try_ensure_capacity(m_items.size() + 1));
+
+    auto item = TRY(adopt_nonnull_own_or_enomem(new (nothrow) MenuItem(m_menu_id, move(action))));
+    if (m_menu_id != -1)
+        realize_menu_item(*item, m_items.size());
+    m_items.unchecked_append(move(item));
+    return {};
 }
 
-Menu& Menu::add_submenu(const String& name)
+void Menu::add_action(NonnullRefPtr<Action> action)
 {
-    auto submenu = Menu::construct(name);
-    m_items.append(make<MenuItem>(m_menu_id, submenu));
+    MUST(try_add_action(move(action)));
+}
+
+ErrorOr<NonnullRefPtr<Menu>> Menu::try_add_submenu(String name)
+{
+    // NOTE: We grow the vector first, to get allocation failure handled immediately.
+    TRY(m_items.try_ensure_capacity(m_items.size() + 1));
+
+    auto submenu = TRY(Menu::try_create(name));
+
+    auto item = TRY(adopt_nonnull_own_or_enomem(new (nothrow) MenuItem(m_menu_id, submenu)));
+    if (m_menu_id != -1)
+        realize_menu_item(*item, m_items.size());
+
+    m_items.unchecked_append(move(item));
     return submenu;
+}
+
+Menu& Menu::add_submenu(String name)
+{
+    auto menu = MUST(try_add_submenu(move(name)));
+    return menu;
+}
+
+ErrorOr<void> Menu::try_add_separator()
+{
+    // NOTE: We grow the vector first, to get allocation failure handled immediately.
+    TRY(m_items.try_ensure_capacity(m_items.size() + 1));
+
+    auto item = TRY(adopt_nonnull_own_or_enomem(new (nothrow) MenuItem(m_menu_id, MenuItem::Type::Separator)));
+    if (m_menu_id != -1)
+        realize_menu_item(*item, m_items.size());
+    m_items.unchecked_append(move(item));
+    return {};
 }
 
 void Menu::add_separator()
 {
-    m_items.append(make<MenuItem>(m_menu_id, MenuItem::Type::Separator));
+    MUST(try_add_separator());
 }
 
 void Menu::realize_if_needed(const RefPtr<Action>& default_action)
 {
-    if (m_menu_id == -1 || m_last_default_action.ptr() != default_action)
+    if (m_menu_id == -1 || m_current_default_action.ptr() != default_action)
         realize_menu(default_action);
 }
 
@@ -85,36 +126,19 @@ void Menu::dismiss()
 int Menu::realize_menu(RefPtr<Action> default_action)
 {
     unrealize_menu();
-    m_menu_id = WindowServerConnection::the().create_menu(m_name);
+    m_menu_id = s_menu_id_allocator.allocate();
+
+    WindowServerConnection::the().async_create_menu(m_menu_id, m_name);
 
     dbgln_if(MENU_DEBUG, "GUI::Menu::realize_menu(): New menu ID: {}", m_menu_id);
     VERIFY(m_menu_id > 0);
+    m_current_default_action = default_action;
+
     for (size_t i = 0; i < m_items.size(); ++i) {
-        auto& item = m_items[i];
-        item.set_menu_id({}, m_menu_id);
-        item.set_identifier({}, i);
-        if (item.type() == MenuItem::Type::Separator) {
-            WindowServerConnection::the().async_add_menu_separator(m_menu_id);
-            continue;
-        }
-        if (item.type() == MenuItem::Type::Submenu) {
-            auto& submenu = *item.submenu();
-            submenu.realize_if_needed(default_action);
-            auto icon = submenu.icon() ? submenu.icon()->to_shareable_bitmap() : Gfx::ShareableBitmap();
-            WindowServerConnection::the().async_add_menu_item(m_menu_id, i, submenu.menu_id(), submenu.name(), true, false, false, false, "", icon, false);
-            continue;
-        }
-        if (item.type() == MenuItem::Type::Action) {
-            auto& action = *item.action();
-            auto shortcut_text = action.shortcut().is_valid() ? action.shortcut().to_string() : String();
-            bool exclusive = action.group() && action.group()->is_exclusive() && action.is_checkable();
-            bool is_default = (default_action.ptr() == &action);
-            auto icon = action.icon() ? action.icon()->to_shareable_bitmap() : Gfx::ShareableBitmap();
-            WindowServerConnection::the().async_add_menu_item(m_menu_id, i, -1, action.text(), action.is_enabled(), action.is_checkable(), action.is_checkable() ? action.is_checked() : false, is_default, shortcut_text, icon, exclusive);
-        }
+        realize_menu_item(m_items[i], i);
     }
+
     all_menus().set(m_menu_id, this);
-    m_last_default_action = default_action;
     return m_menu_id;
 }
 
@@ -123,7 +147,7 @@ void Menu::unrealize_menu()
     if (m_menu_id == -1)
         return;
     all_menus().remove(m_menu_id);
-    WindowServerConnection::the().destroy_menu(m_menu_id);
+    WindowServerConnection::the().async_destroy_menu(m_menu_id);
     m_menu_id = -1;
 }
 
@@ -147,6 +171,36 @@ void Menu::visibility_did_change(Badge<WindowServerConnection>, bool visible)
     m_visible = visible;
     if (on_visibility_change)
         on_visibility_change(visible);
+}
+
+void Menu::realize_menu_item(MenuItem& item, int item_id)
+{
+    item.set_menu_id({}, m_menu_id);
+    item.set_identifier({}, item_id);
+    switch (item.type()) {
+    case MenuItem::Type::Separator:
+        WindowServerConnection::the().async_add_menu_separator(m_menu_id);
+        break;
+    case MenuItem::Type::Action: {
+        auto& action = *item.action();
+        auto shortcut_text = action.shortcut().is_valid() ? action.shortcut().to_string() : String();
+        bool exclusive = action.group() && action.group()->is_exclusive() && action.is_checkable();
+        bool is_default = (m_current_default_action.ptr() == &action);
+        auto icon = action.icon() ? action.icon()->to_shareable_bitmap() : Gfx::ShareableBitmap();
+        WindowServerConnection::the().async_add_menu_item(m_menu_id, item_id, -1, action.text(), action.is_enabled(), action.is_checkable(), action.is_checkable() ? action.is_checked() : false, is_default, shortcut_text, icon, exclusive);
+        break;
+    }
+    case MenuItem::Type::Submenu: {
+        auto& submenu = *item.submenu();
+        submenu.realize_if_needed(m_current_default_action.strong_ref());
+        auto icon = submenu.icon() ? submenu.icon()->to_shareable_bitmap() : Gfx::ShareableBitmap();
+        WindowServerConnection::the().async_add_menu_item(m_menu_id, item_id, submenu.menu_id(), submenu.name(), true, false, false, false, "", icon, false);
+        break;
+    }
+    case MenuItem::Type::Invalid:
+    default:
+        VERIFY_NOT_REACHED();
+    }
 }
 
 }

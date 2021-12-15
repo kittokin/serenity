@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@gmx.de>
+ * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -35,10 +35,10 @@ void Typeface::add_bitmap_font(RefPtr<BitmapFont> font)
 
 void Typeface::set_ttf_font(RefPtr<TTF::Font> font)
 {
-    m_ttf_font = font;
+    m_ttf_font = move(font);
 }
 
-RefPtr<Font> Typeface::get_font(unsigned size)
+RefPtr<Font> Typeface::get_font(unsigned size) const
 {
     for (auto font : m_bitmap_fonts) {
         if (font->presentation_size() == size)

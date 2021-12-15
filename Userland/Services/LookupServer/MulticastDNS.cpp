@@ -12,6 +12,7 @@
 #include <AK/JsonValue.h>
 #include <AK/String.h>
 #include <LibCore/File.h>
+#include <limits.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -23,24 +24,21 @@ MulticastDNS::MulticastDNS(Object* parent)
     , m_hostname("courage.local")
 {
     char buffer[HOST_NAME_MAX];
-    int rc = gethostname(buffer, sizeof(buffer));
-    if (rc < 0) {
+    if (gethostname(buffer, sizeof(buffer)) < 0) {
         perror("gethostname");
     } else {
         m_hostname = String::formatted("{}.local", buffer);
     }
 
     u8 zero = 0;
-    rc = setsockopt(fd(), IPPROTO_IP, IP_MULTICAST_LOOP, &zero, 1);
-    if (rc < 0)
+    if (setsockopt(fd(), IPPROTO_IP, IP_MULTICAST_LOOP, &zero, 1) < 0)
         perror("setsockopt(IP_MULTICAST_LOOP)");
     ip_mreq mreq = {
         mdns_addr.sin_addr,
         { htonl(INADDR_ANY) },
     };
-    rc = setsockopt(fd(), IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
-    if (rc < 0)
-        perror("setsockopt(IP_ADD_MEMBESHIP)");
+    if (setsockopt(fd(), IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0)
+        perror("setsockopt(IP_ADD_MEMBERSHIP)");
 
     bind(IPv4Address(), 5353);
 
@@ -85,21 +83,24 @@ void MulticastDNS::announce()
     DNSPacket response;
     response.set_is_response();
     response.set_code(DNSPacket::Code::NOERROR);
+    response.set_authoritative_answer(true);
+    response.set_recursion_desired(false);
+    response.set_recursion_available(false);
 
     for (auto& address : local_addresses()) {
         auto raw_addr = address.to_in_addr_t();
         DNSAnswer answer {
             m_hostname,
-            T_A,
-            C_IN | 0x8000,
+            DNSRecordType::A,
+            DNSRecordClass::IN,
             120,
-            String { (const char*)&raw_addr, sizeof(raw_addr) }
+            String { (const char*)&raw_addr, sizeof(raw_addr) },
+            true,
         };
         response.add_answer(answer);
     }
 
-    int rc = emit_packet(response);
-    if (rc < 0)
+    if (emit_packet(response) < 0)
         perror("Failed to emit response packet");
 }
 
@@ -114,18 +115,17 @@ ssize_t MulticastDNS::emit_packet(const DNSPacket& packet, const sockaddr_in* de
 Vector<IPv4Address> MulticastDNS::local_addresses() const
 {
     auto file = Core::File::construct("/proc/net/adapters");
-    if (!file->open(Core::IODevice::ReadOnly)) {
+    if (!file->open(Core::OpenMode::ReadOnly)) {
         dbgln("Failed to open /proc/net/adapters: {}", file->error_string());
         return {};
     }
 
     auto file_contents = file->read_all();
-    auto json = JsonValue::from_string(file_contents);
-    VERIFY(json.has_value());
+    auto json = JsonValue::from_string(file_contents).release_value_but_fixme_should_propagate_errors();
 
     Vector<IPv4Address> addresses;
 
-    json.value().as_array().for_each([&addresses](auto& value) {
+    json.as_array().for_each([&addresses](auto& value) {
         auto if_object = value.as_object();
         auto address = if_object.get("ipv4_address").to_string();
         auto ipv4_address = IPv4Address::from_string(address);
@@ -141,14 +141,14 @@ Vector<IPv4Address> MulticastDNS::local_addresses() const
     return addresses;
 }
 
-Vector<DNSAnswer> MulticastDNS::lookup(const DNSName& name, unsigned short record_type)
+Vector<DNSAnswer> MulticastDNS::lookup(const DNSName& name, DNSRecordType record_type)
 {
     DNSPacket request;
     request.set_is_query();
-    request.add_question({ name, record_type, C_IN });
+    request.set_recursion_desired(false);
+    request.add_question({ name, record_type, DNSRecordClass::IN, false });
 
-    int rc = emit_packet(request);
-    if (rc < 0) {
+    if (emit_packet(request) < 0) {
         perror("failed to emit request packet");
         return {};
     }
@@ -159,7 +159,7 @@ Vector<DNSAnswer> MulticastDNS::lookup(const DNSName& name, unsigned short recor
     // the main loop while we wait for a response.
     while (true) {
         pollfd pfd { fd(), POLLIN, 0 };
-        rc = poll(&pfd, 1, 1000);
+        auto rc = poll(&pfd, 1, 1000);
         if (rc < 0) {
             perror("poll");
         } else if (rc == 0) {
@@ -168,7 +168,7 @@ Vector<DNSAnswer> MulticastDNS::lookup(const DNSName& name, unsigned short recor
         }
 
         auto buffer = receive(1024);
-        if (!buffer)
+        if (buffer.is_empty())
             return {};
         auto optional_packet = DNSPacket::from_raw_packet(buffer.data(), buffer.size());
         if (!optional_packet.has_value()) {

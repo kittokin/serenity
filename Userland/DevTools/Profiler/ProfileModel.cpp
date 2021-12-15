@@ -6,8 +6,8 @@
 
 #include "ProfileModel.h"
 #include "Profile.h"
-#include <AK/StringBuilder.h>
-#include <ctype.h>
+#include <LibGUI/FileIconProvider.h>
+#include <LibSymbolication/Symbolication.h>
 #include <stdio.h>
 
 namespace Profiler {
@@ -15,8 +15,8 @@ namespace Profiler {
 ProfileModel::ProfileModel(Profile& profile)
     : m_profile(profile)
 {
-    m_user_frame_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/inspector-object.png"));
-    m_kernel_frame_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/inspector-object-red.png"));
+    m_user_frame_icon.set_bitmap_for_size(16, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/inspector-object.png").release_value_but_fixme_should_propagate_errors());
+    m_kernel_frame_icon.set_bitmap_for_size(16, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/inspector-object-red.png").release_value_but_fixme_should_propagate_errors());
 }
 
 ProfileModel::~ProfileModel()
@@ -86,6 +86,8 @@ String ProfileModel::column_name(int column) const
         return "Object";
     case Column::StackFrame:
         return "Stack Frame";
+    case Column::SymbolAddress:
+        return "Symbol Address";
     default:
         VERIFY_NOT_REACHED();
         return {};
@@ -101,7 +103,11 @@ GUI::Variant ProfileModel::data(const GUI::ModelIndex& index, GUI::ModelRole rol
     }
     if (role == GUI::ModelRole::Icon) {
         if (index.column() == Column::StackFrame) {
-            if (node->address() >= 0xc0000000)
+            if (node->is_root()) {
+                return GUI::FileIconProvider::icon_for_executable(node->process().executable);
+            }
+            auto maybe_kernel_base = Symbolication::kernel_base();
+            if (maybe_kernel_base.has_value() && node->address() >= maybe_kernel_base.value())
                 return m_kernel_frame_icon;
             return m_user_frame_icon;
         }
@@ -120,16 +126,48 @@ GUI::Variant ProfileModel::data(const GUI::ModelIndex& index, GUI::ModelRole rol
         }
         if (index.column() == Column::ObjectName)
             return node->object_name();
-        if (index.column() == Column::StackFrame)
+        if (index.column() == Column::StackFrame) {
+            if (node->is_root()) {
+                return String::formatted("{} ({})", node->process().basename, node->process().pid);
+            }
             return node->symbol();
+        }
+        if (index.column() == Column::SymbolAddress) {
+            if (node->is_root())
+                return "";
+            auto library = node->process().library_metadata.library_containing(node->address());
+            if (!library)
+                return "";
+            return String::formatted("{:p} (offset {:p})", node->address(), node->address() - library->base);
+        }
         return {};
     }
     return {};
 }
 
-void ProfileModel::update()
+Vector<GUI::ModelIndex> ProfileModel::matches(StringView searching, unsigned flags, GUI::ModelIndex const& parent)
 {
-    did_update(Model::InvalidateAllIndices);
+    RemoveReference<decltype(m_profile.roots())>* nodes { nullptr };
+
+    if (!parent.is_valid())
+        nodes = &m_profile.roots();
+    else
+        nodes = &static_cast<ProfileNode*>(parent.internal_data())->children();
+
+    if (!nodes)
+        return {};
+
+    Vector<GUI::ModelIndex> found_indices;
+    for (auto it = nodes->begin(); !it.is_end(); ++it) {
+        GUI::ModelIndex index = this->index(it.index(), StackFrame, parent);
+        if (!string_matches(data(index, GUI::ModelRole::Display).as_string(), searching, flags))
+            continue;
+
+        found_indices.append(index);
+        if (flags & FirstMatchOnly)
+            break;
+    }
+    return found_indices;
 }
 
 }

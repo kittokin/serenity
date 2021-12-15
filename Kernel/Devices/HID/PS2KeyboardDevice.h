@@ -21,13 +21,14 @@ namespace Kernel {
 class PS2KeyboardDevice final : public IRQHandler
     , public KeyboardDevice
     , public I8042Device {
-    AK_MAKE_ETERNAL
+    friend class DeviceManagement;
+
 public:
     static RefPtr<PS2KeyboardDevice> try_to_initialize(const I8042Controller&);
     virtual ~PS2KeyboardDevice() override;
     bool initialize();
 
-    virtual const char* purpose() const override { return class_name(); }
+    virtual StringView purpose() const override { return class_name(); }
 
     // ^I8042Device
     virtual void irq_handle_byte_read(u8 byte) override;
@@ -40,10 +41,10 @@ private:
     explicit PS2KeyboardDevice(const I8042Controller&);
 
     // ^IRQHandler
-    virtual void handle_irq(const RegisterState&) override;
+    virtual bool handle_irq(const RegisterState&) override;
 
     // ^CharacterDevice
-    virtual const char* class_name() const override { return "KeyboardDevice"; }
+    virtual StringView class_name() const override { return "KeyboardDevice"sv; }
 };
 
 }

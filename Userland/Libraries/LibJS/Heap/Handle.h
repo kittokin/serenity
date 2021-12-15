@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/Badge.h>
+#include <AK/IntrusiveList.h>
 #include <AK/Noncopyable.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
@@ -30,12 +31,17 @@ private:
 
     explicit HandleImpl(Cell*);
     Cell* m_cell { nullptr };
+
+    IntrusiveListNode<HandleImpl> m_list_node;
+
+public:
+    using List = IntrusiveList<&HandleImpl::m_list_node>;
 };
 
 template<class T>
 class Handle {
 public:
-    Handle() { }
+    Handle() = default;
 
     static Handle create(T* cell)
     {
@@ -46,6 +52,9 @@ public:
     const T* cell() const { return static_cast<const T*>(m_impl->cell()); }
 
     bool is_null() const { return m_impl.is_null(); }
+
+    T* operator->() { return cell(); }
+    T const* operator->() const { return cell(); }
 
 private:
     explicit Handle(NonnullRefPtr<HandleImpl> impl)

@@ -60,10 +60,10 @@ void LineProgram::parse_path_entries(Function<void(PathEntry& entry)> callback, 
                 auto value = m_dwarf_info.get_attribute_value(format_description.form, 0, m_stream);
                 switch (format_description.type) {
                 case ContentType::Path:
-                    entry.path = value.data.as_string;
+                    entry.path = value.as_string();
                     break;
                 case ContentType::DirectoryIndex:
-                    entry.directory_index = value.data.as_u32;
+                    entry.directory_index = value.as_unsigned();
                     break;
                 default:
                     dbgln_if(DWARF_DEBUG, "Unhandled path list attribute: {}", (int)format_description.type);
@@ -130,14 +130,14 @@ void LineProgram::append_to_line_info()
     if (m_file_index >= m_source_files.size())
         return;
 
-    String directory = m_source_directories[m_source_files[m_file_index].directory_index];
+    auto const& directory = m_source_directories[m_source_files[m_file_index].directory_index];
 
     StringBuilder full_path(directory.length() + m_source_files[m_file_index].name.length() + 1);
     full_path.append(directory);
     full_path.append('/');
     full_path.append(m_source_files[m_file_index].name);
 
-    m_lines.append({ m_address, full_path.to_string(), m_line });
+    m_lines.append({ m_address, FlyString { full_path.string_view() }, m_line });
 }
 
 void LineProgram::reset_registers()
@@ -174,7 +174,7 @@ void LineProgram::handle_extended_opcode()
         break;
     }
     default:
-        dbgln_if(DWARF_DEBUG, "offset: {:p}", m_stream.offset());
+        dbgln("Encountered unknown sub opcode {} at stream offset {:p}", sub_opcode, m_stream.offset());
         VERIFY_NOT_REACHED();
     }
 }
@@ -246,6 +246,10 @@ void LineProgram::handle_standard_opcode(u8 opcode)
         m_basic_block = true;
         break;
     }
+    case StandardOpcodes::SetProlougeEnd: {
+        m_prologue_end = true;
+        break;
+    }
     default:
         dbgln("Unhandled LineProgram opcode {}", opcode);
         VERIFY_NOT_REACHED();
@@ -268,6 +272,7 @@ void LineProgram::handle_special_opcode(u8 opcode)
     append_to_line_info();
 
     m_basic_block = false;
+    m_prologue_end = false;
 }
 
 void LineProgram::run_program()
@@ -288,6 +293,15 @@ void LineProgram::run_program()
             handle_special_opcode(opcode);
         }
     }
+}
+
+LineProgram::DirectoryAndFile LineProgram::get_directory_and_file(size_t file_index) const
+{
+    VERIFY(file_index < m_source_files.size());
+    auto file_entry = m_source_files[file_index];
+    VERIFY(file_entry.directory_index < m_source_directories.size());
+    auto directory_entry = m_source_directories[file_entry.directory_index];
+    return { directory_entry, file_entry.name };
 }
 
 }

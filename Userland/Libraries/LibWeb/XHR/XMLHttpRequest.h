@@ -52,16 +52,19 @@ public:
     String response_text() const;
 
     DOM::ExceptionOr<void> open(const String& method, const String& url);
-    DOM::ExceptionOr<void> send();
+    DOM::ExceptionOr<void> send(String body);
 
     DOM::ExceptionOr<void> set_request_header(const String& header, const String& value);
 
     String get_response_header(const String& name) { return m_response_headers.get(name).value_or({}); }
+    String get_all_response_headers() const;
+
+    HTML::EventHandler onreadystatechange();
+    void set_onreadystatechange(HTML::EventHandler);
 
 private:
     virtual void ref_event_target() override { ref(); }
     virtual void unref_event_target() override { unref(); }
-    virtual bool dispatch_event(NonnullRefPtr<DOM::Event>) override;
     virtual JS::Object* create_wrapper(JS::GlobalObject&) override;
 
     void set_ready_state(ReadyState);
@@ -77,7 +80,7 @@ private:
     bool m_send { false };
 
     String m_method;
-    URL m_url;
+    AK::URL m_url;
 
     HashMap<String, String, CaseInsensitiveStringTraits> m_request_headers;
     HashMap<String, String, CaseInsensitiveStringTraits> m_response_headers;

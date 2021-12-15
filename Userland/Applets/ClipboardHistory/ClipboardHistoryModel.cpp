@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
+ * Copyright (c) 2021, Mustafa Quraish <mustafa@cs.toronto.edu>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,10 +8,16 @@
 #include "ClipboardHistoryModel.h"
 #include <AK/NumberFormat.h>
 #include <AK/StringBuilder.h>
+#include <LibConfig/Client.h>
 
 NonnullRefPtr<ClipboardHistoryModel> ClipboardHistoryModel::create()
 {
     return adopt_ref(*new ClipboardHistoryModel());
+}
+
+ClipboardHistoryModel::ClipboardHistoryModel()
+    : m_history_limit(Config::read_i32("ClipboardHistory", "ClipboardHistory", "NumHistoryItems", 20))
+{
 }
 
 ClipboardHistoryModel::~ClipboardHistoryModel()
@@ -70,7 +77,7 @@ GUI::Variant ClipboardHistoryModel::data(const GUI::ModelIndex& index, GUI::Mode
             builder.append('x');
             builder.append(data_and_type.metadata.get("height").value_or("?"));
             builder.append('x');
-            builder.append(bpp_for_format_resilient(data_and_type.metadata.get("height").value_or("0")));
+            builder.append(bpp_for_format_resilient(data_and_type.metadata.get("format").value_or("0")));
             builder.append(" bitmap");
             builder.append("]");
             return builder.to_string();
@@ -97,11 +104,6 @@ GUI::Variant ClipboardHistoryModel::data(const GUI::ModelIndex& index, GUI::Mode
     }
 }
 
-void ClipboardHistoryModel::update()
-{
-    did_update();
-}
-
 void ClipboardHistoryModel::add_item(const GUI::Clipboard::DataAndType& item)
 {
     m_history_items.remove_first_matching([&](GUI::Clipboard::DataAndType& existing) {
@@ -112,10 +114,30 @@ void ClipboardHistoryModel::add_item(const GUI::Clipboard::DataAndType& item)
         m_history_items.take_last();
 
     m_history_items.prepend(item);
-    update();
+    invalidate();
 }
 
 void ClipboardHistoryModel::remove_item(int index)
 {
     m_history_items.remove(index);
+}
+
+void ClipboardHistoryModel::config_string_did_change(String const& domain, String const& group, String const& key, String const& value_string)
+{
+    if (domain != "ClipboardHistory" || group != "ClipboardHistory")
+        return;
+
+    // FIXME: Once we can get notified for `i32` changes, we can use that instead of this hack.
+    if (key == "NumHistoryItems") {
+        auto value_or_error = value_string.to_int();
+        if (!value_or_error.has_value())
+            return;
+        auto value = value_or_error.value();
+        if (value < (int)m_history_items.size()) {
+            m_history_items.remove(value, m_history_items.size() - value);
+            invalidate();
+        }
+        m_history_limit = value;
+        return;
+    }
 }

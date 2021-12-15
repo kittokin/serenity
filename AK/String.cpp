@@ -15,11 +15,6 @@
 
 namespace AK {
 
-String::String(const StringView& view)
-{
-    m_impl = StringImpl::create(view.characters_without_null_termination(), view.length());
-}
-
 bool String::operator==(const FlyString& fly_string) const
 {
     return *this == String(fly_string.impl());
@@ -36,7 +31,7 @@ bool String::operator==(const String& other) const
     return *m_impl == *other.m_impl;
 }
 
-bool String::operator==(const StringView& other) const
+bool String::operator==(StringView other) const
 {
     if (!m_impl)
         return !other.m_characters;
@@ -72,11 +67,6 @@ bool String::operator>(const String& other) const
     return strcmp(characters(), other.characters()) > 0;
 }
 
-String String::empty()
-{
-    return StringImpl::the_empty_stringimpl();
-}
-
 bool String::copy_characters_to_buffer(char* buffer, size_t buffer_size) const
 {
     // We must fit at least the NUL-terminator.
@@ -101,6 +91,16 @@ String String::isolated_copy() const
     return String(move(*impl));
 }
 
+String String::substring(size_t start, size_t length) const
+{
+    if (!length)
+        return String::empty();
+    VERIFY(m_impl);
+    VERIFY(!Checked<size_t>::addition_would_overflow(start, length));
+    VERIFY(start + length <= m_impl->length());
+    return { characters() + start, length };
+}
+
 String String::substring(size_t start) const
 {
     VERIFY(m_impl);
@@ -108,21 +108,11 @@ String String::substring(size_t start) const
     return { characters() + start, length() - start };
 }
 
-String String::substring(size_t start, size_t length) const
-{
-    if (!length)
-        return "";
-    VERIFY(m_impl);
-    VERIFY(start + length <= m_impl->length());
-    // FIXME: This needs some input bounds checking.
-    return { characters() + start, length };
-}
-
 StringView String::substring_view(size_t start, size_t length) const
 {
     VERIFY(m_impl);
+    VERIFY(!Checked<size_t>::addition_would_overflow(start, length));
     VERIFY(start + length <= m_impl->length());
-    // FIXME: This needs some input bounds checking.
     return { characters() + start, length };
 }
 
@@ -186,32 +176,33 @@ ByteBuffer String::to_byte_buffer() const
 {
     if (!m_impl)
         return {};
-    return ByteBuffer::copy(reinterpret_cast<const u8*>(characters()), length());
+    // FIXME: Handle OOM failure.
+    return ByteBuffer::copy(bytes()).release_value();
 }
 
 template<typename T>
-Optional<T> String::to_int() const
+Optional<T> String::to_int(TrimWhitespace trim_whitespace) const
 {
-    return StringUtils::convert_to_int<T>(view());
+    return StringUtils::convert_to_int<T>(view(), trim_whitespace);
 }
 
-template Optional<i8> String::to_int() const;
-template Optional<i16> String::to_int() const;
-template Optional<i32> String::to_int() const;
-template Optional<i64> String::to_int() const;
+template Optional<i8> String::to_int(TrimWhitespace) const;
+template Optional<i16> String::to_int(TrimWhitespace) const;
+template Optional<i32> String::to_int(TrimWhitespace) const;
+template Optional<i64> String::to_int(TrimWhitespace) const;
 
 template<typename T>
-Optional<T> String::to_uint() const
+Optional<T> String::to_uint(TrimWhitespace trim_whitespace) const
 {
-    return StringUtils::convert_to_uint<T>(view());
+    return StringUtils::convert_to_uint<T>(view(), trim_whitespace);
 }
 
-template Optional<u8> String::to_uint() const;
-template Optional<u16> String::to_uint() const;
-template Optional<u32> String::to_uint() const;
-template Optional<u64> String::to_uint() const;
+template Optional<u8> String::to_uint(TrimWhitespace) const;
+template Optional<u16> String::to_uint(TrimWhitespace) const;
+template Optional<u32> String::to_uint(TrimWhitespace) const;
+template Optional<u64> String::to_uint(TrimWhitespace) const;
 
-bool String::starts_with(const StringView& str, CaseSensitivity case_sensitivity) const
+bool String::starts_with(StringView str, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::starts_with(*this, str, case_sensitivity);
 }
@@ -223,7 +214,7 @@ bool String::starts_with(char ch) const
     return characters()[0] == ch;
 }
 
-bool String::ends_with(const StringView& str, CaseSensitivity case_sensitivity) const
+bool String::ends_with(StringView str, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::ends_with(*this, str, case_sensitivity);
 }
@@ -234,6 +225,7 @@ bool String::ends_with(char ch) const
         return false;
     return characters()[length() - 1] == ch;
 }
+
 String String::repeated(char ch, size_t count)
 {
     if (!count)
@@ -241,6 +233,17 @@ String String::repeated(char ch, size_t count)
     char* buffer;
     auto impl = StringImpl::create_uninitialized(count, buffer);
     memset(buffer, ch, count);
+    return *impl;
+}
+
+String String::repeated(StringView string, size_t count)
+{
+    if (!count || string.is_empty())
+        return empty();
+    char* buffer;
+    auto impl = StringImpl::create_uninitialized(count * string.length(), buffer);
+    for (size_t i = 0; i < count; i++)
+        __builtin_memcpy(buffer + i * string.length(), string.characters_without_null_termination(), string.length());
     return *impl;
 }
 
@@ -271,83 +274,94 @@ String String::bijective_base_from(size_t value, unsigned base, StringView map)
     return String { ReadonlyBytes(buffer.data(), i) };
 }
 
-bool String::matches(const StringView& mask, Vector<MaskSpan>& mask_spans, CaseSensitivity case_sensitivity) const
+String String::roman_number_from(size_t value)
+{
+    if (value > 3999)
+        return String::number(value);
+
+    StringBuilder builder;
+
+    while (value > 0) {
+        if (value >= 1000) {
+            builder.append('M');
+            value -= 1000;
+        } else if (value >= 900) {
+            builder.append("CM"sv);
+            value -= 900;
+        } else if (value >= 500) {
+            builder.append('D');
+            value -= 500;
+        } else if (value >= 400) {
+            builder.append("CD"sv);
+            value -= 400;
+        } else if (value >= 100) {
+            builder.append('C');
+            value -= 100;
+        } else if (value >= 90) {
+            builder.append("XC"sv);
+            value -= 90;
+        } else if (value >= 50) {
+            builder.append('L');
+            value -= 50;
+        } else if (value >= 40) {
+            builder.append("XL"sv);
+            value -= 40;
+        } else if (value >= 10) {
+            builder.append('X');
+            value -= 10;
+        } else if (value == 9) {
+            builder.append("IX"sv);
+            value -= 9;
+        } else if (value >= 5 && value <= 8) {
+            builder.append('V');
+            value -= 5;
+        } else if (value == 4) {
+            builder.append("IV"sv);
+            value -= 4;
+        } else if (value <= 3) {
+            builder.append('I');
+            value -= 1;
+        }
+    }
+
+    return builder.to_string();
+}
+
+bool String::matches(StringView mask, Vector<MaskSpan>& mask_spans, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::matches(*this, mask, case_sensitivity, &mask_spans);
 }
 
-bool String::matches(const StringView& mask, CaseSensitivity case_sensitivity) const
+bool String::matches(StringView mask, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::matches(*this, mask, case_sensitivity);
 }
 
-bool String::contains(const StringView& needle, CaseSensitivity case_sensitivity) const
+bool String::contains(StringView needle, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::contains(*this, needle, case_sensitivity);
 }
 
-Optional<size_t> String::index_of(const String& needle, size_t start) const
+bool String::contains(char needle, CaseSensitivity case_sensitivity) const
 {
-    if (is_null() || needle.is_null())
-        return {};
-
-    const char* self_characters = characters();
-    const char* result = strstr(self_characters + start, needle.characters());
-    if (!result)
-        return {};
-    return Optional<size_t> { result - self_characters };
+    return StringUtils::contains(*this, StringView(&needle, 1), case_sensitivity);
 }
 
-bool String::equals_ignoring_case(const StringView& other) const
+bool String::equals_ignoring_case(StringView other) const
 {
     return StringUtils::equals_ignoring_case(view(), other);
 }
 
-int String::replace(const String& needle, const String& replacement, bool all_occurrences)
-{
-    if (is_empty())
-        return 0;
-
-    Vector<size_t> positions;
-    size_t start = 0, pos;
-    for (;;) {
-        const char* ptr = strstr(characters() + start, needle.characters());
-        if (!ptr)
-            break;
-
-        pos = ptr - characters();
-        positions.append(pos);
-        if (!all_occurrences)
-            break;
-
-        start = pos + 1;
-    }
-
-    if (!positions.size())
-        return 0;
-
-    StringBuilder b;
-    size_t lastpos = 0;
-    for (auto& pos : positions) {
-        b.append(substring_view(lastpos, pos - lastpos));
-        b.append(replacement);
-        lastpos = pos + needle.length();
-    }
-    b.append(substring_view(lastpos, length() - lastpos));
-    m_impl = StringImpl::create(b.build().characters());
-    return positions.size();
-}
-
 String String::reverse() const
 {
-    StringBuilder reversed_string;
+    StringBuilder reversed_string(length());
     for (size_t i = length(); i-- > 0;) {
         reversed_string.append(characters()[i]);
     }
     return reversed_string.to_string();
 }
 
-String escape_html_entities(const StringView& html)
+String escape_html_entities(StringView html)
 {
     StringBuilder builder;
     for (size_t i = 0; i < html.length(); ++i) {
@@ -357,6 +371,8 @@ String escape_html_entities(const StringView& html)
             builder.append("&gt;");
         else if (html[i] == '&')
             builder.append("&amp;");
+        else if (html[i] == '"')
+            builder.append("&quot;");
         else
             builder.append(html[i]);
     }
@@ -385,6 +401,11 @@ String String::to_uppercase() const
 String String::to_snakecase() const
 {
     return StringUtils::to_snakecase(*this);
+}
+
+String String::to_titlecase() const
+{
+    return StringUtils::to_titlecase(*this);
 }
 
 bool operator<(const char* characters, const String& string)
@@ -428,11 +449,6 @@ bool String::operator==(const char* cstring) const
     return !__builtin_strcmp(characters(), cstring);
 }
 
-StringView String::view() const
-{
-    return { characters(), length() };
-}
-
 InputStream& operator>>(InputStream& stream, String& string)
 {
     StringBuilder builder;
@@ -456,21 +472,16 @@ InputStream& operator>>(InputStream& stream, String& string)
     }
 }
 
-String String::vformatted(StringView fmtstr, TypeErasedFormatParams params)
+String String::vformatted(StringView fmtstr, TypeErasedFormatParams& params)
 {
     StringBuilder builder;
-    vformat(builder, fmtstr, params);
+    MUST(vformat(builder, fmtstr, params));
     return builder.to_string();
 }
 
-Optional<size_t> String::find(char c) const
+Vector<size_t> String::find_all(StringView needle) const
 {
-    return find(StringView { &c, 1 });
-}
-
-Optional<size_t> String::find(const StringView& view) const
-{
-    return StringUtils::find(*this, view);
+    return StringUtils::find_all(*this, needle);
 }
 
 }

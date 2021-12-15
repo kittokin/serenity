@@ -59,47 +59,53 @@ public:
 
 class CSSNumber {
 public:
-    String value;
+    String string;
+    double value { 0 };
     Token::NumberType type {};
 };
 
 class Tokenizer {
 
 public:
-    explicit Tokenizer(const StringView& input, const String& encoding);
+    explicit Tokenizer(StringView input, const String& encoding);
 
     [[nodiscard]] Vector<Token> parse();
 
-private:
-    [[nodiscard]] Optional<u32> next_codepoint();
-    [[nodiscard]] Optional<u32> peek_codepoint(size_t offset = 0) const;
-    [[nodiscard]] Optional<U32Twin> peek_twin() const;
-    [[nodiscard]] Optional<U32Triplet> peek_triplet() const;
+    [[nodiscard]] static Token create_eof_token();
 
-    [[nodiscard]] static Token create_new_token(Token::TokenType);
-    [[nodiscard]] static Token create_value_token(Token::TokenType, String value);
-    [[nodiscard]] static Token create_value_token(Token::TokenType, u32 value);
+private:
+    [[nodiscard]] u32 next_code_point();
+    [[nodiscard]] u32 peek_code_point(size_t offset = 0) const;
+    [[nodiscard]] U32Twin peek_twin() const;
+    [[nodiscard]] U32Triplet peek_triplet() const;
+
+    [[nodiscard]] static Token create_new_token(Token::Type);
+    [[nodiscard]] static Token create_value_token(Token::Type, String value);
+    [[nodiscard]] static Token create_value_token(Token::Type, u32 value);
     [[nodiscard]] Token consume_a_token();
-    [[nodiscard]] Token consume_string_token(u32 ending_codepoint);
+    [[nodiscard]] Token consume_string_token(u32 ending_code_point);
     [[nodiscard]] Token consume_a_numeric_token();
     [[nodiscard]] Token consume_an_ident_like_token();
     [[nodiscard]] CSSNumber consume_a_number();
+    [[nodiscard]] double convert_a_string_to_a_number(StringView);
     [[nodiscard]] String consume_a_name();
-    [[nodiscard]] u32 consume_escaped_codepoint();
+    [[nodiscard]] u32 consume_escaped_code_point();
     [[nodiscard]] Token consume_a_url_token();
     void consume_the_remnants_of_a_bad_url();
     void consume_comments();
-    void reconsume_current_input_codepoint();
-    [[nodiscard]] bool is_valid_escape_sequence();
+    void consume_as_much_whitespace_as_possible();
+    void reconsume_current_input_code_point();
     [[nodiscard]] static bool is_valid_escape_sequence(U32Twin);
     [[nodiscard]] bool would_start_an_identifier();
     [[nodiscard]] bool would_start_an_identifier(U32Triplet);
-    [[nodiscard]] bool starts_with_a_number() const;
-    [[nodiscard]] static bool starts_with_a_number(U32Triplet);
+    [[nodiscard]] bool would_start_a_number() const;
+    [[nodiscard]] static bool would_start_a_number(U32Triplet);
 
     String m_decoded_input;
     Utf8View m_utf8_view;
-    AK::Utf8CodepointIterator m_utf8_iterator;
-    AK::Utf8CodepointIterator m_prev_utf8_iterator;
+    AK::Utf8CodePointIterator m_utf8_iterator;
+    AK::Utf8CodePointIterator m_prev_utf8_iterator;
+    Token::Position m_position;
+    Token::Position m_prev_position;
 };
 }

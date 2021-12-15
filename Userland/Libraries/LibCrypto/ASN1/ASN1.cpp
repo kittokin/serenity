@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/GenericLexer.h>
 #include <LibCrypto/ASN1/ASN1.h>
 
 namespace Crypto::ASN1 {
@@ -72,7 +73,7 @@ String type_name(Type type)
     return "InvalidType";
 }
 
-Optional<Core::DateTime> parse_utc_time(const StringView& time)
+Optional<Core::DateTime> parse_utc_time(StringView time)
 {
     // YYMMDDhhmm[ss]Z or YYMMDDhhmm[ss](+|-)hhmm
     GenericLexer lexer(time);
@@ -119,7 +120,7 @@ Optional<Core::DateTime> parse_utc_time(const StringView& time)
     return Core::DateTime::create(full_year, month.value(), day.value(), hour.value(), minute.value(), full_seconds);
 }
 
-Optional<Core::DateTime> parse_generalized_time(const StringView& time)
+Optional<Core::DateTime> parse_generalized_time(StringView time)
 {
     // YYYYMMDDhh[mm[ss[.fff]]] or YYYYMMDDhh[mm[ss[.fff]]]Z or YYYYMMDDhh[mm[ss[.fff]]](+|-)hhmm
     GenericLexer lexer(time);
@@ -127,7 +128,7 @@ Optional<Core::DateTime> parse_generalized_time(const StringView& time)
     auto month = lexer.consume(2).to_uint();
     auto day = lexer.consume(2).to_uint();
     auto hour = lexer.consume(2).to_uint();
-    Optional<unsigned> minute, seconds, miliseconds, offset_hours, offset_minutes;
+    Optional<unsigned> minute, seconds, milliseconds, offset_hours, offset_minutes;
     [[maybe_unused]] bool negative_offset = false;
     if (!lexer.is_eof()) {
         if (lexer.consume_specific('Z'))
@@ -152,8 +153,8 @@ Optional<Core::DateTime> parse_generalized_time(const StringView& time)
         }
 
         if (lexer.consume_specific('.')) {
-            miliseconds = lexer.consume(3).to_uint();
-            if (!miliseconds.has_value()) {
+            milliseconds = lexer.consume(3).to_uint();
+            if (!milliseconds.has_value()) {
                 return {};
             }
             if (lexer.consume_specific('Z'))
@@ -182,7 +183,7 @@ done_parsing:;
     if (offset_hours.has_value() || offset_minutes.has_value())
         dbgln("FIXME: Implement GeneralizedTime with offset!");
 
-    // Unceremonially drop the miliseconds on the floor.
+    // Unceremonially drop the milliseconds on the floor.
     return Core::DateTime::create(year.value(), month.value(), day.value(), hour.value(), minute.value_or(0), seconds.value_or(0));
 }
 

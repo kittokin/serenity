@@ -16,12 +16,14 @@
 extern "C" {
 
 extern bool __stdio_is_initialized;
-#ifdef DEBUG
+#ifndef NDEBUG
 void __assertion_failed(const char* msg)
 {
-    dbgln("USERSPACE({}) ASSERTION FAILED: {}", getpid(), msg);
-    if (__stdio_is_initialized)
-        warnln("ASSERTION FAILED: {}", msg);
+    if (__heap_is_stable) {
+        dbgln("ASSERTION FAILED: {}", msg);
+        if (__stdio_is_initialized)
+            warnln("ASSERTION FAILED: {}", msg);
+    }
 
     Syscall::SC_set_coredump_metadata_params params {
         { "assertion", strlen("assertion") },

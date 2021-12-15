@@ -19,8 +19,8 @@ class SpreadsheetWidget final : public GUI::Widget {
 public:
     ~SpreadsheetWidget();
 
-    void save(const StringView& filename);
-    void load(const StringView& filename);
+    void save(StringView filename);
+    void load(StringView filename);
     bool request_close();
     void add_sheet();
     void add_sheet(NonnullRefPtr<Sheet>&&);
@@ -39,6 +39,8 @@ public:
 
         return m_selected_view->cursor();
     }
+
+    void initialize_menubar(GUI::Window&);
 
 private:
     virtual void resize_event(GUI::ResizeEvent&) override;
@@ -60,6 +62,19 @@ private:
     bool m_should_change_selected_cells { false };
 
     OwnPtr<Workbook> m_workbook;
+
+    void clipboard_action(bool is_cut);
+    RefPtr<GUI::Action> m_new_action;
+    RefPtr<GUI::Action> m_open_action;
+    RefPtr<GUI::Action> m_save_action;
+    RefPtr<GUI::Action> m_save_as_action;
+    RefPtr<GUI::Action> m_quit_action;
+    RefPtr<GUI::Action> m_cut_action;
+    RefPtr<GUI::Action> m_copy_action;
+    RefPtr<GUI::Action> m_paste_action;
+    RefPtr<GUI::Action> m_functions_help_action;
+    RefPtr<GUI::Action> m_about_action;
+    RefPtr<GUI::Action> m_rename_action;
 };
 
 }

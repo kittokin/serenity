@@ -1,3 +1,9 @@
+serenity_component(
+    Help
+    RECOMMENDED
+    TARGETS Help
+)
+
 set(SOURCES
     History.cpp
     main.cpp
@@ -7,4 +13,4 @@ set(SOURCES
 )
 
 serenity_app(Help ICON app-help)
-target_link_libraries(Help LibWeb LibMarkdown LibGUI LibDesktop)
+target_link_libraries(Help LibWeb LibMarkdown LibGUI LibDesktop LibMain)

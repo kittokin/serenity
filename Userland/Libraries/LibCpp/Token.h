@@ -84,6 +84,7 @@ struct Position {
     size_t column { 0 };
 
     bool operator<(const Position&) const;
+    bool operator<=(const Position&) const;
     bool operator>(const Position&) const;
     bool operator==(const Position&) const;
 };
@@ -95,7 +96,7 @@ struct Token {
 #undef __TOKEN
     };
 
-    Token(Type type, const Position& start, const Position& end, const StringView& text)
+    Token(Type type, const Position& start, const Position& end, StringView text)
         : m_type(type)
         , m_start(start)
         , m_end(end)
@@ -115,17 +116,16 @@ struct Token {
         VERIFY_NOT_REACHED();
     }
 
-    const char* to_string() const
-    {
-        return type_to_string(m_type);
-    }
+    String to_string() const;
+    String type_as_string() const;
+
     const Position& start() const { return m_start; }
     const Position& end() const { return m_end; }
 
     void set_start(const Position& other) { m_start = other; }
     void set_end(const Position& other) { m_end = other; }
     Type type() const { return m_type; }
-    const StringView& text() const { return m_text; }
+    StringView text() const { return m_text; }
 
 private:
     Type m_type { Type::Unknown };

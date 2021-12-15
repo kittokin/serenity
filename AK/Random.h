@@ -17,7 +17,7 @@
 #    include <unistd.h>
 #endif
 
-#if defined(__APPLE__)
+#if defined(AK_OS_MACOS)
 #    include <sys/random.h>
 #endif
 
@@ -28,7 +28,7 @@ inline void fill_with_random([[maybe_unused]] void* buffer, [[maybe_unused]] siz
 #if defined(__serenity__)
     arc4random_buf(buffer, length);
 #elif defined(OSS_FUZZ)
-#elif defined(__unix__) or defined(__APPLE__)
+#elif defined(__unix__) or defined(AK_OS_MACOS)
     [[maybe_unused]] int rc = getentropy(buffer, length);
 #endif
 }
@@ -41,7 +41,10 @@ inline T get_random()
     return t;
 }
 
+u32 get_random_uniform(u32 max_bounds);
+
 }
 
 using AK::fill_with_random;
 using AK::get_random;
+using AK::get_random_uniform;

@@ -40,6 +40,12 @@ private:
         Yes,
         No,
     };
+
+    enum class StringEndCondition {
+        DoubleQuote,
+        Heredoc,
+    };
+
     struct SequenceParseResult {
         NonnullRefPtrVector<AST::Node> entries;
         Vector<AST::Position, 1> separator_positions;
@@ -76,10 +82,10 @@ private:
     RefPtr<AST::Node> parse_expression();
     RefPtr<AST::Node> parse_string_composite();
     RefPtr<AST::Node> parse_string();
-    RefPtr<AST::Node> parse_doublequoted_string_inner();
+    RefPtr<AST::Node> parse_string_inner(StringEndCondition);
     RefPtr<AST::Node> parse_variable();
     RefPtr<AST::Node> parse_variable_ref();
-    RefPtr<AST::Node> parse_slice();
+    RefPtr<AST::Slice> parse_slice();
     RefPtr<AST::Node> parse_evaluate();
     RefPtr<AST::Node> parse_history_designator();
     RefPtr<AST::Node> parse_comment();
@@ -94,18 +100,18 @@ private:
     template<typename A, typename... Args>
     NonnullRefPtr<A> create(Args... args);
 
-    void set_end_condition(Function<bool()> condition) { m_end_condition = move(condition); }
+    void set_end_condition(OwnPtr<Function<bool()>> condition) { m_end_condition = move(condition); }
     bool at_end() const
     {
-        if (m_end_condition && m_end_condition())
+        if (m_end_condition && (*m_end_condition)())
             return true;
         return m_input.length() <= m_offset;
     }
     char peek();
     char consume();
     bool expect(char);
-    bool expect(const StringView&);
-    bool next_is(const StringView&);
+    bool expect(StringView);
+    bool next_is(StringView);
 
     void restore_to(size_t offset, AST::Position::Line line)
     {
@@ -159,7 +165,7 @@ private:
     Vector<size_t> m_rule_start_offsets;
     Vector<AST::Position::Line> m_rule_start_lines;
 
-    Function<bool()> m_end_condition;
+    OwnPtr<Function<bool()>> m_end_condition;
     Vector<HeredocInitiationRecord> m_heredoc_initiations;
     Vector<char> m_extra_chars_not_allowed_in_barewords;
     bool m_is_in_brace_expansion_spec { false };
@@ -245,7 +251,7 @@ expression :: evaluate expression?
             | '(' list_expression ')' expression?
 
 evaluate :: '$' '(' pipe_sequence ')'
-          | '$' expression          {eval / dynamic resolve}
+          | '$' [lookahead != '('] expression          {eval / dynamic resolve}
 
 string_composite :: string string_composite?
                   | variable string_composite?
@@ -265,8 +271,9 @@ string :: '"' dquoted_string_inner '"'
 dquoted_string_inner :: '\' . dquoted_string_inner?       {concat}
                       | variable dquoted_string_inner?    {compose}
                       | . dquoted_string_inner?
-                      | '\' 'x' digit digit dquoted_string_inner?
-                      | '\' [abefrn] dquoted_string_inner?
+                      | '\' 'x' xdigit*2 dquoted_string_inner?
+                      | '\' 'u' xdigit*8 dquoted_string_inner?
+                      | '\' [abefrnt] dquoted_string_inner?
 
 variable :: variable_ref slice?
 

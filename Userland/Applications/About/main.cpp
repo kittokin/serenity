@@ -7,20 +7,19 @@
 #include <LibGUI/AboutDialog.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Icon.h>
-#include <LibGfx/Bitmap.h>
 #include <stdio.h>
 #include <unistd.h>
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio recvfd sendfd accept rpath unix cpath fattr", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd rpath unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
     auto app = GUI::Application::construct(argc, argv);
 
-    if (pledge("stdio recvfd sendfd accept rpath", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd rpath", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -33,6 +32,6 @@ int main(int argc, char** argv)
     unveil(nullptr, nullptr);
 
     auto app_icon = GUI::Icon::default_icon("ladyball");
-    GUI::AboutDialog::show("SerenityOS", app_icon.bitmap_for_size(32), nullptr, app_icon.bitmap_for_size(16));
+    GUI::AboutDialog::show("SerenityOS", app_icon.bitmap_for_size(32), nullptr, app_icon.bitmap_for_size(16), Core::Version::read_long_version_string());
     return app->exec();
 }

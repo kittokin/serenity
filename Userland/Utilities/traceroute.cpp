@@ -4,10 +4,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Assertions.h>
 #include <AK/String.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/ElapsedTimer.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/ip_icmp.h>
@@ -112,7 +114,7 @@ int main(int argc, char** argv)
             size_t peer_address_size = sizeof(peer_address);
             int result = recvfrom(fd, &response, sizeof(response), 0, (sockaddr*)&peer_address, (socklen_t*)&peer_address_size);
             if (result < 0) {
-                if (result == EAGAIN)
+                if (errno == EAGAIN)
                     return -1;
                 continue;
             }

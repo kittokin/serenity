@@ -7,9 +7,9 @@
 #pragma once
 
 #include "DHCPv4.h"
+#include <AK/Error.h>
 #include <AK/HashMap.h>
 #include <AK/OwnPtr.h>
-#include <AK/Result.h>
 #include <AK/String.h>
 #include <AK/Vector.h>
 #include <LibCore/UDPServer.h>
@@ -19,9 +19,9 @@
 #include <sys/socket.h>
 
 struct InterfaceDescriptor {
-    String m_ifname;
-    MACAddress m_mac_address;
-    IPv4Address m_current_ip_address { 0, 0, 0, 0 };
+    String ifname;
+    MACAddress mac_address;
+    IPv4Address current_ip_address;
 };
 
 struct DHCPv4Transaction {
@@ -40,7 +40,6 @@ class DHCPv4Client final : public Core::Object {
     C_OBJECT(DHCPv4Client)
 
 public:
-    explicit DHCPv4Client(Vector<InterfaceDescriptor> ifnames_for_immediate_discover, Vector<InterfaceDescriptor> ifnames_for_later);
     virtual ~DHCPv4Client() override;
 
     void dhcp_discover(const InterfaceDescriptor& ifname);
@@ -54,16 +53,16 @@ public:
         Vector<InterfaceDescriptor> ready;
         Vector<InterfaceDescriptor> not_ready;
     };
-    static Result<Interfaces, String> get_discoverable_interfaces();
+    static ErrorOr<Interfaces> get_discoverable_interfaces();
 
 private:
-    void try_discover_deferred_ifs();
+    explicit DHCPv4Client();
+
+    void try_discover_ifs();
 
     HashMap<u32, OwnPtr<DHCPv4Transaction>> m_ongoing_transactions;
-    Vector<InterfaceDescriptor> m_ifnames_for_immediate_discover;
-    Vector<InterfaceDescriptor> m_ifnames_for_later;
     RefPtr<Core::UDPServer> m_server;
-    RefPtr<Core::Timer> m_fail_check_timer;
+    RefPtr<Core::Timer> m_check_timer;
     int m_max_timer_backoff_interval { 600000 }; // 10 minutes
 
     void handle_offer(const DHCPv4Packet&, const ParsedDHCPv4Options&);

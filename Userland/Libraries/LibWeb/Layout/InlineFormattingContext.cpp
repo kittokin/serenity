@@ -7,7 +7,7 @@
 #include <LibWeb/CSS/Length.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/BlockFormattingContext.h>
 #include <LibWeb/Layout/Box.h>
 #include <LibWeb/Layout/InlineFormattingContext.h>
@@ -15,8 +15,8 @@
 
 namespace Web::Layout {
 
-InlineFormattingContext::InlineFormattingContext(Box& containing_block, FormattingContext* parent)
-    : FormattingContext(containing_block, parent)
+InlineFormattingContext::InlineFormattingContext(BlockContainer& containing_block, FormattingContext* parent)
+    : FormattingContext(Type::Inline, containing_block, parent)
 {
 }
 
@@ -31,6 +31,9 @@ struct AvailableSpaceForLineInfo {
 
 static AvailableSpaceForLineInfo available_space_for_line(const InlineFormattingContext& context, size_t line_index)
 {
+    if (!context.parent()->is_block_formatting_context())
+        return { 0, context.context_box().width() };
+
     AvailableSpaceForLineInfo info;
 
     // FIXME: This is a total hack guess since we don't actually know the final y position of lines here!
@@ -75,7 +78,7 @@ void InlineFormattingContext::run(Box&, LayoutMode layout_mode)
     containing_block().for_each_child([&](auto& child) {
         VERIFY(child.is_inline());
         if (is<Box>(child) && child.is_absolutely_positioned()) {
-            layout_absolutely_positioned_element(downcast<Box>(child));
+            layout_absolutely_positioned_element(verify_cast<Box>(child));
             return;
         }
 
@@ -138,8 +141,6 @@ void InlineFormattingContext::run(Box&, LayoutMode layout_mode)
 
             if (fragment.type() == LineBoxFragment::Type::Leading || fragment.type() == LineBoxFragment::Type::Trailing) {
                 fragment.set_height(max_height);
-            } else {
-                fragment.set_height(max(min_line_height, fragment.height()));
             }
 
             // Vertically align everyone's bottom to the line.
@@ -181,14 +182,14 @@ void InlineFormattingContext::run(Box&, LayoutMode layout_mode)
 void InlineFormattingContext::dimension_box_on_line(Box& box, LayoutMode layout_mode)
 {
     if (is<ReplacedBox>(box)) {
-        auto& replaced = downcast<ReplacedBox>(box);
+        auto& replaced = verify_cast<ReplacedBox>(box);
         replaced.set_width(compute_width_for_replaced_element(replaced));
         replaced.set_height(compute_height_for_replaced_element(replaced));
         return;
     }
 
     if (box.is_inline_block()) {
-        auto& inline_block = const_cast<BlockBox&>(downcast<BlockBox>(box));
+        auto& inline_block = const_cast<BlockContainer&>(verify_cast<BlockContainer>(box));
 
         if (inline_block.computed_values().width().is_undefined_or_auto()) {
             auto result = calculate_shrink_to_fit_widths(inline_block);
@@ -214,7 +215,7 @@ void InlineFormattingContext::dimension_box_on_line(Box& box, LayoutMode layout_
         } else {
             inline_block.set_width(inline_block.computed_values().width().resolved_or_zero(inline_block, containing_block().width()).to_px(inline_block));
         }
-        layout_inside(inline_block, layout_mode);
+        (void)layout_inside(inline_block, layout_mode);
 
         if (inline_block.computed_values().height().is_undefined_or_auto()) {
             // FIXME: (10.6.6) If 'height' is 'auto', the height depends on the element's descendants per 10.6.7.

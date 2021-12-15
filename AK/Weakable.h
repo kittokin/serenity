@@ -12,7 +12,8 @@
 #include "RefPtr.h"
 #include "StdLibExtras.h"
 #ifdef KERNEL
-#    include <Kernel/Arch/x86/CPU.h>
+#    include <Kernel/Arch/Processor.h>
+#    include <Kernel/Arch/ScopedCritical.h>
 #endif
 
 namespace AK {
@@ -65,7 +66,7 @@ public:
 
     bool is_null() const
     {
-        return !unsafe_ptr<void>();
+        return unsafe_ptr<void>() == nullptr;
     }
 
     void revoke()

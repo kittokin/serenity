@@ -12,12 +12,9 @@
 
 namespace ImageDecoder {
 
-static HashMap<int, RefPtr<ClientConnection>> s_connections;
-
-ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket, int client_id)
-    : IPC::ClientConnection<ImageDecoderClientEndpoint, ImageDecoderServerEndpoint>(*this, move(socket), client_id)
+ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket)
+    : IPC::ClientConnection<ImageDecoderClientEndpoint, ImageDecoderServerEndpoint>(*this, move(socket), 1)
 {
-    s_connections.set(client_id, *this);
 }
 
 ClientConnection::~ClientConnection()
@@ -26,12 +23,7 @@ ClientConnection::~ClientConnection()
 
 void ClientConnection::die()
 {
-    s_connections.remove(client_id());
-    exit(0);
-}
-
-void ClientConnection::greet()
-{
+    Core::EventLoop::current().quit(0);
 }
 
 Messages::ImageDecoderServer::DecodeImageResponse ClientConnection::decode_image(Core::AnonymousBuffer const& encoded_buffer)
@@ -41,7 +33,12 @@ Messages::ImageDecoderServer::DecodeImageResponse ClientConnection::decode_image
         return nullptr;
     }
 
-    auto decoder = Gfx::ImageDecoder::create(encoded_buffer.data<u8>(), encoded_buffer.size());
+    auto decoder = Gfx::ImageDecoder::try_create(ReadonlyBytes { encoded_buffer.data<u8>(), encoded_buffer.size() });
+
+    if (!decoder) {
+        dbgln_if(IMAGE_DECODER_DEBUG, "Could not find suitable image decoder plugin for data");
+        return { false, 0, Vector<Gfx::ShareableBitmap> {}, Vector<u32> {} };
+    }
 
     if (!decoder->frame_count()) {
         dbgln_if(IMAGE_DECODER_DEBUG, "Could not decode image from encoded data");
@@ -51,22 +48,18 @@ Messages::ImageDecoderServer::DecodeImageResponse ClientConnection::decode_image
     Vector<Gfx::ShareableBitmap> bitmaps;
     Vector<u32> durations;
     for (size_t i = 0; i < decoder->frame_count(); ++i) {
-        // FIXME: All image decoder plugins should be rewritten to return frame() instead of bitmap().
-        //        Non-animated images can simply return 1 frame.
-        Gfx::ImageFrameDescriptor frame;
-        if (decoder->is_animated()) {
-            frame = decoder->frame(i);
-        } else {
-            frame.image = decoder->bitmap();
-        }
-        if (frame.image)
-            bitmaps.append(frame.image->to_shareable_bitmap());
-        else
+        auto frame_or_error = decoder->frame(i);
+        if (frame_or_error.is_error()) {
             bitmaps.append(Gfx::ShareableBitmap {});
-        durations.append(frame.duration);
+            durations.append(0);
+        } else {
+            auto frame = frame_or_error.release_value();
+            bitmaps.append(frame.image->to_shareable_bitmap());
+            durations.append(frame.duration);
+        }
     }
 
-    return { decoder->is_animated(), decoder->loop_count(), bitmaps, durations };
+    return { decoder->is_animated(), static_cast<u32>(decoder->loop_count()), bitmaps, durations };
 }
 
 }

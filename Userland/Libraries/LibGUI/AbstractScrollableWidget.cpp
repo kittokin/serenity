@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/Timer.h>
 #include <LibGUI/AbstractScrollableWidget.h>
 #include <LibGUI/Scrollbar.h>
 
@@ -28,6 +29,12 @@ AbstractScrollableWidget::AbstractScrollableWidget()
 
     m_corner_widget = add<Widget>();
     m_corner_widget->set_fill_with_background_color(true);
+
+    m_automatic_scrolling_timer = add<Core::Timer>();
+    m_automatic_scrolling_timer->set_interval(50);
+    m_automatic_scrolling_timer->on_timeout = [this] {
+        on_automatic_scrolling_timer_fired();
+    };
 }
 
 AbstractScrollableWidget::~AbstractScrollableWidget()
@@ -86,8 +93,9 @@ void AbstractScrollableWidget::resize_event(ResizeEvent& event)
 
 Gfx::IntSize AbstractScrollableWidget::available_size() const
 {
-    unsigned available_width = max(frame_inner_rect().width() - m_size_occupied_by_fixed_elements.width() - width_occupied_by_vertical_scrollbar(), 0);
-    unsigned available_height = max(frame_inner_rect().height() - m_size_occupied_by_fixed_elements.height() - height_occupied_by_horizontal_scrollbar(), 0);
+    auto inner_size = Widget::content_size();
+    unsigned available_width = max(inner_size.width() - m_size_occupied_by_fixed_elements.width(), 0);
+    unsigned available_height = max(inner_size.height() - m_size_occupied_by_fixed_elements.height(), 0);
     return { available_width, available_height };
 }
 
@@ -152,13 +160,19 @@ int AbstractScrollableWidget::width_occupied_by_vertical_scrollbar() const
     return m_vertical_scrollbar->is_visible() ? m_vertical_scrollbar->width() : 0;
 }
 
+Margins AbstractScrollableWidget::content_margins() const
+{
+    return Frame::content_margins() + Margins { 0, width_occupied_by_vertical_scrollbar(), height_occupied_by_horizontal_scrollbar(), 0 };
+}
+
 Gfx::IntRect AbstractScrollableWidget::visible_content_rect() const
 {
+    auto inner_size = Widget::content_size();
     Gfx::IntRect rect {
         m_horizontal_scrollbar->value(),
         m_vertical_scrollbar->value(),
-        min(m_content_size.width(), frame_inner_rect().width() - width_occupied_by_vertical_scrollbar() - m_size_occupied_by_fixed_elements.width()),
-        min(m_content_size.height(), frame_inner_rect().height() - height_occupied_by_horizontal_scrollbar() - m_size_occupied_by_fixed_elements.height())
+        min(m_content_size.width(), inner_size.width() - m_size_occupied_by_fixed_elements.width()),
+        min(m_content_size.height(), inner_size.height() - m_size_occupied_by_fixed_elements.height())
     };
     if (rect.is_empty())
         return {};
@@ -212,6 +226,38 @@ void AbstractScrollableWidget::scroll_to_top()
 void AbstractScrollableWidget::scroll_to_bottom()
 {
     scroll_into_view({ 0, content_height(), 0, 0 }, Orientation::Vertical);
+}
+
+void AbstractScrollableWidget::set_automatic_scrolling_timer(bool active)
+{
+    if (active == m_active_scrolling_enabled)
+        return;
+
+    m_active_scrolling_enabled = active;
+
+    if (active) {
+        on_automatic_scrolling_timer_fired();
+        m_automatic_scrolling_timer->start();
+    } else {
+        m_automatic_scrolling_timer->stop();
+    }
+}
+
+Gfx::IntPoint AbstractScrollableWidget::automatic_scroll_delta_from_position(const Gfx::IntPoint& pos) const
+{
+    Gfx::IntPoint delta { 0, 0 };
+
+    if (pos.y() < m_autoscroll_threshold)
+        delta.set_y(clamp(-(m_autoscroll_threshold - pos.y()), -m_autoscroll_threshold, 0));
+    else if (pos.y() > widget_inner_rect().height() - m_autoscroll_threshold)
+        delta.set_y(clamp(m_autoscroll_threshold - (widget_inner_rect().height() - pos.y()), 0, m_autoscroll_threshold));
+
+    if (pos.x() < m_autoscroll_threshold)
+        delta.set_x(clamp(-(m_autoscroll_threshold - pos.x()), -m_autoscroll_threshold, 0));
+    else if (pos.x() > widget_inner_rect().width() - m_autoscroll_threshold)
+        delta.set_x(clamp(m_autoscroll_threshold - (widget_inner_rect().width() - pos.x()), 0, m_autoscroll_threshold));
+
+    return delta;
 }
 
 Gfx::IntRect AbstractScrollableWidget::widget_inner_rect() const

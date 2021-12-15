@@ -7,22 +7,30 @@
 #pragma once
 
 #include <AK/Function.h>
+#include <AK/Optional.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/Object.h>
 
 namespace JS {
 
-// Common iterator operations defined in ECMA262 7.4
-// https://tc39.es/ecma262/#sec-operations-on-iterator-objects
+// 7.4 Operations on Iterator Objects, https://tc39.es/ecma262/#sec-operations-on-iterator-objects
 
-Object* get_iterator(GlobalObject&, Value value, String hint = "sync", Value method = {});
-bool is_iterator_complete(Object& iterator_result);
-Value create_iterator_result_object(GlobalObject&, Value value, bool done);
+enum class IteratorHint {
+    Sync,
+    Async,
+};
 
-Object* iterator_next(Object& iterator, Value value = {});
-void iterator_close(Object& iterator);
+ThrowCompletionOr<Object*> get_iterator(GlobalObject&, Value value, IteratorHint hint = IteratorHint::Sync, Value method = {});
+ThrowCompletionOr<Object*> iterator_next(Object& iterator, Value value = {});
+ThrowCompletionOr<Object*> iterator_step(GlobalObject&, Object& iterator);
+ThrowCompletionOr<bool> iterator_complete(GlobalObject&, Object& iterator_result);
+ThrowCompletionOr<Value> iterator_value(GlobalObject&, Object& iterator_result);
+Completion iterator_close(Object& iterator, Completion completion);
+Completion async_iterator_close(Object& iterator, Completion completion);
+Object* create_iterator_result_object(GlobalObject&, Value value, bool done);
+ThrowCompletionOr<MarkedValueList> iterable_to_list(GlobalObject&, Value iterable, Value method = {});
 
-MarkedValueList iterable_to_list(GlobalObject&, Value iterable, Value method = {});
-
-void get_iterator_values(GlobalObject&, Value value, AK::Function<IterationDecision(Value)> callback, Value method = {});
+using IteratorValueCallback = Function<Optional<Completion>(Value)>;
+Completion get_iterator_values(GlobalObject& global_object, Value iterable, IteratorValueCallback callback, Value method = {});
 
 }

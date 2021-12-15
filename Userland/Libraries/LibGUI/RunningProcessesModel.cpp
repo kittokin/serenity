@@ -27,15 +27,14 @@ void RunningProcessesModel::update()
 {
     m_processes.clear();
 
-    Core::ProcessStatisticsReader reader;
-    auto processes = reader.get_all();
-    if (processes.has_value()) {
-        for (auto& it : processes.value()) {
+    auto all_processes = Core::ProcessStatisticsReader::get_all();
+    if (all_processes.has_value()) {
+        for (auto& it : all_processes.value().processes) {
             Process process;
-            process.pid = it.value.pid;
-            process.uid = it.value.uid;
-            process.icon = FileIconProvider::icon_for_executable(it.value.executable).bitmap_for_size(16);
-            process.name = it.value.name;
+            process.pid = it.pid;
+            process.uid = it.uid;
+            process.icon = FileIconProvider::icon_for_executable(it.executable).bitmap_for_size(16);
+            process.name = it.name;
             m_processes.append(move(process));
         }
     }

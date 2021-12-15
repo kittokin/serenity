@@ -9,8 +9,9 @@
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$beep()
+ErrorOr<FlatPtr> Process::sys$beep()
 {
+    VERIFY_NO_PROCESS_BIG_LOCK(this);
     PCSpeaker::tone_on(440);
     auto result = Thread::current()->sleep(Time::from_nanoseconds(200'000'000));
     PCSpeaker::tone_off();

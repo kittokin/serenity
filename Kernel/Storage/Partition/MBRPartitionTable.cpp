@@ -47,7 +47,7 @@ bool MBRPartitionTable::read_boot_record()
 MBRPartitionTable::MBRPartitionTable(const StorageDevice& device, u32 start_lba)
     : PartitionTable(device)
     , m_start_lba(start_lba)
-    , m_cached_header(ByteBuffer::create_zeroed(m_device->block_size()))
+    , m_cached_header(ByteBuffer::create_zeroed(m_device->block_size()).release_value()) // FIXME: Do something sensible if this fails because of OOM.
 {
     if (!read_boot_record() || !initialize())
         return;
@@ -60,9 +60,7 @@ MBRPartitionTable::MBRPartitionTable(const StorageDevice& device, u32 start_lba)
         if (entry.offset == 0x00) {
             continue;
         }
-        auto partition_type = ByteBuffer::create_zeroed(sizeof(u8));
-        partition_type.data()[0] = entry.type;
-        m_partitions.append(DiskPartitionMetadata({ entry.offset, (entry.offset + entry.length), partition_type }));
+        m_partitions.empend(entry.offset, (entry.offset + entry.length), entry.type);
     }
     m_valid = true;
 }
@@ -70,7 +68,7 @@ MBRPartitionTable::MBRPartitionTable(const StorageDevice& device, u32 start_lba)
 MBRPartitionTable::MBRPartitionTable(const StorageDevice& device)
     : PartitionTable(device)
     , m_start_lba(0)
-    , m_cached_header(ByteBuffer::create_zeroed(m_device->block_size()))
+    , m_cached_header(ByteBuffer::create_zeroed(m_device->block_size()).release_value()) // FIXME: Do something sensible if this fails because of OOM.
 {
     if (!read_boot_record() || contains_ebr() || is_protective_mbr() || !initialize())
         return;
@@ -81,9 +79,7 @@ MBRPartitionTable::MBRPartitionTable(const StorageDevice& device)
         if (entry.offset == 0x00) {
             continue;
         }
-        auto partition_type = ByteBuffer::create_zeroed(sizeof(u8));
-        partition_type.data()[0] = entry.type;
-        m_partitions.append(DiskPartitionMetadata({ entry.offset, (entry.offset + entry.length), partition_type }));
+        m_partitions.empend(entry.offset, (entry.offset + entry.length), entry.type);
     }
     m_valid = true;
 }

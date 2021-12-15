@@ -8,6 +8,7 @@
 
 #include <LibGfx/Bitmap.h>
 #include <LibWeb/SVG/SVGGraphicsElement.h>
+#include <LibWeb/SVG/ViewBox.h>
 
 namespace Web::SVG {
 
@@ -22,8 +23,15 @@ public:
     unsigned width() const;
     unsigned height() const;
 
+    virtual bool requires_svg_container() const override { return false; }
+    virtual bool is_svg_container() const override { return true; }
+
+    Optional<ViewBox> const& view_box() { return m_view_box; }
+
 private:
-    RefPtr<Gfx::Bitmap> m_bitmap;
+    virtual void parse_attribute(FlyString const& name, String const& value) override;
+
+    Optional<ViewBox> m_view_box;
 };
 
 }

@@ -15,6 +15,7 @@
 #include <AK/Types.h>
 #include <LibHTTP/HttpRequest.h>
 #include <RequestServer/ClientConnection.h>
+#include <RequestServer/ConnectionCache.h>
 #include <RequestServer/Request.h>
 
 namespace RequestServer::Detail {
@@ -29,6 +30,9 @@ void init(TSelf* self, TJob job)
     };
 
     job->on_finish = [self](bool success) {
+        Core::deferred_invoke([url = self->job().url(), socket = self->job().socket()] {
+            ConnectionCache::request_did_finish(url, socket);
+        });
         if (auto* response = self->job().response()) {
             self->set_status_code(response->code());
             self->set_response_headers(response->headers());
@@ -55,8 +59,8 @@ void init(TSelf* self, TJob job)
 template<typename TBadgedProtocol, typename TPipeResult>
 OwnPtr<Request> start_request(TBadgedProtocol&& protocol, ClientConnection& client, const String& method, const URL& url, const HashMap<String, String>& headers, ReadonlyBytes body, TPipeResult&& pipe_result)
 {
-    using TJob = TBadgedProtocol::Type::JobType;
-    using TRequest = TBadgedProtocol::Type::RequestType;
+    using TJob = typename TBadgedProtocol::Type::JobType;
+    using TRequest = typename TBadgedProtocol::Type::RequestType;
 
     if (pipe_result.is_error()) {
         return {};
@@ -69,14 +73,23 @@ OwnPtr<Request> start_request(TBadgedProtocol&& protocol, ClientConnection& clie
         request.set_method(HTTP::HttpRequest::Method::GET);
     request.set_url(url);
     request.set_headers(headers);
-    request.set_body(body);
+
+    auto allocated_body_result = ByteBuffer::copy(body);
+    if (!allocated_body_result.has_value())
+        return {};
+    request.set_body(allocated_body_result.release_value());
 
     auto output_stream = make<OutputFileStream>(pipe_result.value().write_fd);
     output_stream->make_unbuffered();
-    auto job = TJob::construct(request, *output_stream);
+    auto job = TJob::construct(move(request), *output_stream);
     auto protocol_request = TRequest::create_with_job(forward<TBadgedProtocol>(protocol), client, (TJob&)*job, move(output_stream));
     protocol_request->set_request_fd(pipe_result.value().read_fd);
-    job->start();
+
+    if constexpr (IsSame<typename TBadgedProtocol::Type, HttpsProtocol>)
+        ConnectionCache::get_or_create_connection(ConnectionCache::g_tls_connection_cache, url, *job);
+    else
+        ConnectionCache::get_or_create_connection(ConnectionCache::g_tcp_connection_cache, url, *job);
+
     return protocol_request;
 }
 

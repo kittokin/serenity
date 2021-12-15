@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Badge.h>
 #include <Clipboard/ClientConnection.h>
 #include <Clipboard/ClipboardClientEndpoint.h>
 #include <Clipboard/Storage.h>
@@ -33,10 +32,6 @@ ClientConnection::~ClientConnection()
 void ClientConnection::die()
 {
     s_connections.remove(client_id());
-}
-
-void ClientConnection::greet()
-{
 }
 
 void ClientConnection::set_clipboard_data(Core::AnonymousBuffer const& data, String const& mime_type, IPC::Dictionary const& metadata)

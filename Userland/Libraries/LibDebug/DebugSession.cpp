@@ -9,6 +9,7 @@
 #include <AK/JsonValue.h>
 #include <AK/LexicalPath.h>
 #include <AK/Optional.h>
+#include <AK/Platform.h>
 #include <LibCore/File.h>
 #include <LibRegex/Regex.h>
 #include <stdlib.h>
@@ -43,7 +44,16 @@ DebugSession::~DebugSession()
     }
 }
 
-OwnPtr<DebugSession> DebugSession::exec_and_attach(const String& command, String source_root)
+void DebugSession::for_each_loaded_library(Function<IterationDecision(LoadedLibrary const&)> func) const
+{
+    for (const auto& lib_name : m_loaded_libraries.keys()) {
+        const auto& lib = *m_loaded_libraries.get(lib_name).value();
+        if (func(lib) == IterationDecision::Break)
+            break;
+    }
+}
+
+OwnPtr<DebugSession> DebugSession::exec_and_attach(String const& command, String source_root)
 {
     auto pid = fork();
 
@@ -109,39 +119,39 @@ OwnPtr<DebugSession> DebugSession::exec_and_attach(const String& command, String
     return debug_session;
 }
 
-bool DebugSession::poke(u32* address, u32 data)
+bool DebugSession::poke(void* address, FlatPtr data)
 {
-    if (ptrace(PT_POKE, m_debuggee_pid, (void*)address, data) < 0) {
+    if (ptrace(PT_POKE, m_debuggee_pid, (void*)address, (void*)data) < 0) {
         perror("PT_POKE");
         return false;
     }
     return true;
 }
 
-Optional<u32> DebugSession::peek(u32* address) const
+Optional<FlatPtr> DebugSession::peek(void* address) const
 {
-    Optional<u32> result;
-    int rc = ptrace(PT_PEEK, m_debuggee_pid, (void*)address, 0);
+    Optional<FlatPtr> result;
+    auto rc = ptrace(PT_PEEK, m_debuggee_pid, address, nullptr);
     if (errno == 0)
-        result = static_cast<u32>(rc);
+        result = static_cast<FlatPtr>(rc);
     return result;
 }
 
-bool DebugSession::poke_debug(u32 register_index, u32 data)
+bool DebugSession::poke_debug(u32 register_index, FlatPtr data)
 {
-    if (ptrace(PT_POKEDEBUG, m_debuggee_pid, reinterpret_cast<u32*>(register_index), data) < 0) {
+    if (ptrace(PT_POKEDEBUG, m_debuggee_pid, reinterpret_cast<void*>(register_index), (void*)data) < 0) {
         perror("PT_POKEDEBUG");
         return false;
     }
     return true;
 }
 
-Optional<u32> DebugSession::peek_debug(u32 register_index) const
+Optional<FlatPtr> DebugSession::peek_debug(u32 register_index) const
 {
-    Optional<u32> result;
-    int rc = ptrace(PT_PEEKDEBUG, m_debuggee_pid, reinterpret_cast<u32*>(register_index), 0);
+    Optional<FlatPtr> result;
+    int rc = ptrace(PT_PEEKDEBUG, m_debuggee_pid, reinterpret_cast<FlatPtr*>(register_index), nullptr);
     if (errno == 0)
-        result = static_cast<u32>(rc);
+        result = static_cast<FlatPtr>(rc);
     return result;
 }
 
@@ -154,7 +164,7 @@ bool DebugSession::insert_breakpoint(void* address)
     if (m_breakpoints.contains(address))
         return false;
 
-    auto original_bytes = peek(reinterpret_cast<u32*>(address));
+    auto original_bytes = peek(reinterpret_cast<FlatPtr*>(address));
 
     if (!original_bytes.has_value())
         return false;
@@ -174,7 +184,7 @@ bool DebugSession::disable_breakpoint(void* address)
 {
     auto breakpoint = m_breakpoints.get(address);
     VERIFY(breakpoint.has_value());
-    if (!poke(reinterpret_cast<u32*>(reinterpret_cast<char*>(breakpoint.value().address)), breakpoint.value().original_first_word))
+    if (!poke(reinterpret_cast<FlatPtr*>(reinterpret_cast<char*>(breakpoint.value().address)), breakpoint.value().original_first_word))
         return false;
 
     auto bp = m_breakpoints.get(breakpoint.value().address).value();
@@ -190,7 +200,7 @@ bool DebugSession::enable_breakpoint(void* address)
 
     VERIFY(breakpoint.value().state == BreakPointState::Disabled);
 
-    if (!poke(reinterpret_cast<u32*>(breakpoint.value().address), (breakpoint.value().original_first_word & ~(uint32_t)0xff) | BREAKPOINT_INSTRUCTION))
+    if (!poke(reinterpret_cast<FlatPtr*>(breakpoint.value().address), (breakpoint.value().original_first_word & ~(FlatPtr)0xff) | BREAKPOINT_INSTRUCTION))
         return false;
 
     auto bp = m_breakpoints.get(breakpoint.value().address).value();
@@ -218,7 +228,8 @@ bool DebugSession::insert_watchpoint(void* address, u32 ebp)
     auto current_register_status = peek_debug(DEBUG_CONTROL_REGISTER);
     if (!current_register_status.has_value())
         return false;
-    u32 dr7_value = current_register_status.value();
+    // FIXME: 64 bit support
+    u32 dr7_value = static_cast<u32>(current_register_status.value());
     u32 next_available_index;
     for (next_available_index = 0; next_available_index < 4; next_available_index++) {
         auto bitmask = 1 << (next_available_index * 2);
@@ -285,7 +296,7 @@ PtraceRegisters DebugSession::get_registers() const
     return regs;
 }
 
-void DebugSession::set_registers(const PtraceRegisters& regs)
+void DebugSession::set_registers(PtraceRegisters const& regs)
 {
     if (ptrace(PT_SETREGS, m_debuggee_pid, reinterpret_cast<void*>(&const_cast<PtraceRegisters&>(regs)), 0) < 0) {
         perror("PT_SETREGS");
@@ -323,7 +334,11 @@ void* DebugSession::single_step()
 
     auto regs = get_registers();
     constexpr u32 TRAP_FLAG = 0x100;
+#if ARCH(I386)
     regs.eflags |= TRAP_FLAG;
+#else
+    regs.rflags |= TRAP_FLAG;
+#endif
     set_registers(regs);
 
     continue_debuggee();
@@ -334,9 +349,13 @@ void* DebugSession::single_step()
     }
 
     regs = get_registers();
+#if ARCH(I386)
     regs.eflags &= ~(TRAP_FLAG);
+#else
+    regs.rflags &= ~(TRAP_FLAG);
+#endif
     set_registers(regs);
-    return (void*)regs.eip;
+    return (void*)regs.ip();
 }
 
 void DebugSession::detach()
@@ -349,7 +368,7 @@ void DebugSession::detach()
     continue_debuggee();
 }
 
-Optional<DebugSession::InsertBreakpointAtSymbolResult> DebugSession::insert_breakpoint(const String& symbol_name)
+Optional<DebugSession::InsertBreakpointAtSymbolResult> DebugSession::insert_breakpoint(String const& symbol_name)
 {
     Optional<InsertBreakpointAtSymbolResult> result;
     for_each_loaded_library([this, symbol_name, &result](auto& lib) {
@@ -372,7 +391,7 @@ Optional<DebugSession::InsertBreakpointAtSymbolResult> DebugSession::insert_brea
     return result;
 }
 
-Optional<DebugSession::InsertBreakpointAtSourcePositionResult> DebugSession::insert_breakpoint(const String& filename, size_t line_number)
+Optional<DebugSession::InsertBreakpointAtSourcePositionResult> DebugSession::insert_breakpoint(String const& filename, size_t line_number)
 {
     auto address_and_source_position = get_address_from_source_position(filename, line_number);
     if (!address_and_source_position.has_value())
@@ -392,24 +411,23 @@ Optional<DebugSession::InsertBreakpointAtSourcePositionResult> DebugSession::ins
 void DebugSession::update_loaded_libs()
 {
     auto file = Core::File::construct(String::formatted("/proc/{}/vm", m_debuggee_pid));
-    bool rc = file->open(Core::IODevice::ReadOnly);
+    bool rc = file->open(Core::OpenMode::ReadOnly);
     VERIFY(rc);
 
     auto file_contents = file->read_all();
-    auto json = JsonValue::from_string(file_contents);
-    VERIFY(json.has_value());
+    auto json = JsonValue::from_string(file_contents).release_value_but_fixme_should_propagate_errors();
 
-    auto vm_entries = json.value().as_array();
-    Regex<PosixExtended> re("(.+): \\.text");
+    auto const& vm_entries = json.as_array();
+    Regex<PosixExtended> segment_name_re("(.+): ");
 
-    auto get_path_to_object = [&re](const String& vm_name) -> Optional<String> {
+    auto get_path_to_object = [&segment_name_re](String const& vm_name) -> Optional<String> {
         if (vm_name == "/usr/lib/Loader.so")
             return vm_name;
         RegexResult result;
-        auto rc = re.search(vm_name, result);
+        auto rc = segment_name_re.search(vm_name, result);
         if (!rc)
             return {};
-        auto lib_name = result.capture_group_matches.at(0).at(0).view.u8view().to_string();
+        auto lib_name = result.capture_group_matches.at(0).at(0).view.string_view().to_string();
         if (lib_name.starts_with("/"))
             return lib_name;
         return String::formatted("/usr/lib/{}", lib_name);
@@ -424,77 +442,27 @@ void DebugSession::update_loaded_libs()
             return IterationDecision::Continue;
 
         String lib_name = object_path.value();
-        if (lib_name.ends_with(".so"))
-            lib_name = LexicalPath(object_path.value()).basename();
+        if (Core::File::looks_like_shared_library(lib_name))
+            lib_name = LexicalPath::basename(object_path.value());
 
-        // FIXME: DebugInfo currently cannot parse the debug information of libgcc_s.so
-        if (lib_name == "libgcc_s.so")
+        FlatPtr base_address = entry.as_object().get("address").to_addr();
+        if (auto it = m_loaded_libraries.find(lib_name); it != m_loaded_libraries.end()) {
+            // We expect the VM regions to be sorted by address.
+            VERIFY(base_address >= it->value->base_address);
             return IterationDecision::Continue;
+        }
 
-        if (m_loaded_libraries.contains(lib_name))
-            return IterationDecision::Continue;
-
-        auto file_or_error = MappedFile ::map(object_path.value());
+        auto file_or_error = Core::MappedFile::map(object_path.value());
         if (file_or_error.is_error())
             return IterationDecision::Continue;
 
-        FlatPtr base_address = entry.as_object().get("address").as_u32();
-        auto debug_info = make<DebugInfo>(make<ELF::Image>(file_or_error.value()->bytes()), m_source_root, base_address);
-        auto lib = make<LoadedLibrary>(lib_name, file_or_error.release_value(), move(debug_info), base_address);
+        auto image = make<ELF::Image>(file_or_error.value()->bytes());
+        auto debug_info = make<DebugInfo>(*image, m_source_root, base_address);
+        auto lib = make<LoadedLibrary>(lib_name, file_or_error.release_value(), move(image), move(debug_info), base_address);
         m_loaded_libraries.set(lib_name, move(lib));
 
         return IterationDecision::Continue;
     });
-}
-
-const DebugSession::LoadedLibrary* DebugSession::library_at(FlatPtr address) const
-{
-    const LoadedLibrary* result = nullptr;
-    for_each_loaded_library([&result, address](const auto& lib) {
-        if (address >= lib.base_address && address < lib.base_address + lib.debug_info->elf().size()) {
-            result = &lib;
-            return IterationDecision::Break;
-        }
-        return IterationDecision::Continue;
-    });
-    return result;
-}
-
-Optional<DebugSession::SymbolicationResult> DebugSession::symbolicate(FlatPtr address) const
-{
-    auto* lib = library_at(address);
-    if (!lib)
-        return {};
-    //FIXME: ELF::Image symlicate() API should return String::empty() if symbol is not found (It currently returns ??)
-    auto symbol = lib->debug_info->elf().symbolicate(address - lib->base_address);
-    return { { lib->name, symbol } };
-}
-
-Optional<DebugInfo::SourcePositionAndAddress> DebugSession::get_address_from_source_position(const String& file, size_t line) const
-{
-    Optional<DebugInfo::SourcePositionAndAddress> result;
-    for_each_loaded_library([this, file, line, &result](auto& lib) {
-        // The loader contains its own definitions for LibC symbols, so we don't want to include it in the search.
-        if (lib.name == "Loader.so")
-            return IterationDecision::Continue;
-
-        auto source_position_and_address = lib.debug_info->get_address_from_source_position(file, line);
-        if (!source_position_and_address.has_value())
-            return IterationDecision::Continue;
-
-        result = source_position_and_address;
-        result.value().address += lib.base_address;
-        return IterationDecision::Break;
-    });
-    return result;
-}
-
-Optional<DebugInfo::SourcePosition> DebugSession::get_source_position(FlatPtr address) const
-{
-    auto* lib = library_at(address);
-    if (!lib)
-        return {};
-    return lib->debug_info->get_source_position(address - lib->base_address);
 }
 
 }

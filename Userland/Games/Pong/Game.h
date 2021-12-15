@@ -6,9 +6,10 @@
 
 #pragma once
 
-#include <LibCore/ConfigFile.h>
+#include <AK/Optional.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/MessageBox.h>
+#include <LibGUI/MouseTracker.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Widget.h>
 #include <LibGfx/Bitmap.h>
@@ -17,7 +18,8 @@
 
 namespace Pong {
 
-class Game final : public GUI::Widget {
+class Game final : public GUI::Widget
+    , GUI::MouseTracker {
     C_OBJECT(Game);
 
 public:
@@ -32,8 +34,8 @@ private:
     virtual void paint_event(GUI::PaintEvent&) override;
     virtual void keyup_event(GUI::KeyEvent&) override;
     virtual void keydown_event(GUI::KeyEvent&) override;
-    virtual void mousemove_event(GUI::MouseEvent&) override;
     virtual void timer_event(Core::TimerEvent&) override;
+    virtual void track_mouse_move(Gfx::IntPoint const&) override;
 
     void reset();
     void reset_ball(int serve_to_player);
@@ -75,16 +77,26 @@ private:
         }
     };
 
+    constexpr static int score_margin = 5;
+
     Gfx::IntRect player_1_score_rect() const
     {
         int score_width = font().width(String::formatted("{}", m_player_1_score));
-        return { (game_width / 2) + score_width + 2, 2, score_width, font().glyph_height() };
+        return { (game_width / 2) + score_margin, score_margin, score_width, font().glyph_height() };
     }
 
     Gfx::IntRect player_2_score_rect() const
     {
         int score_width = font().width(String::formatted("{}", m_player_2_score));
-        return { (game_width / 2) - score_width - 2, 2, score_width, font().glyph_height() };
+        return { (game_width / 2) - score_width - score_margin, score_margin, score_width, font().glyph_height() };
+    }
+
+    Gfx::IntRect cursor_paddle_target_rect() const
+    {
+        int radius = 3;
+        int center_x = m_player1_paddle.rect.center().x();
+        int center_y = *m_cursor_paddle_target_y + m_player1_paddle.rect.height() / 2;
+        return { center_x - radius, center_y - radius, 2 * radius, 2 * radius };
     }
 
     Net m_net;
@@ -95,6 +107,10 @@ private:
     int m_score_to_win = 21;
     int m_player_1_score = 0;
     int m_player_2_score = 0;
+
+    Optional<int> m_cursor_paddle_target_y;
+    bool m_up_key_held = false;
+    bool m_down_key_held = false;
 };
 
 }

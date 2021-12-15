@@ -6,22 +6,24 @@
 
 #pragma once
 
+#include <AK/Error.h>
 #include <AK/NonnullOwnPtr.h>
 #include <AK/RefCounted.h>
+
+#define OWNPTR_SCRUB_BYTE 0xf0
 
 namespace AK {
 
 template<typename T>
-class OwnPtr {
+class [[nodiscard]] OwnPtr {
 public:
     OwnPtr() = default;
-    explicit OwnPtr(T* ptr)
-        : m_ptr(ptr)
+
+    OwnPtr(decltype(nullptr))
+        : m_ptr(nullptr)
     {
-        static_assert(
-            requires { requires typename T::AllowOwnPtr()(); } || !requires(T obj) { requires !typename T::AllowOwnPtr()(); obj.ref(); obj.unref(); },
-            "Use RefPtr<> for RefCounted types");
     }
+
     OwnPtr(OwnPtr&& other)
         : m_ptr(other.leak_ptr())
     {
@@ -41,10 +43,7 @@ public:
     {
         clear();
 #ifdef SANITIZE_PTRS
-        if constexpr (sizeof(T*) == 8)
-            m_ptr = (T*)(0xe1e1e1e1e1e1e1e1);
-        else
-            m_ptr = (T*)(0xe1e1e1e1);
+        m_ptr = (T*)(explode_byte(OWNPTR_SCRUB_BYTE));
 #endif
     }
 
@@ -96,13 +95,7 @@ public:
         return *this;
     }
 
-    OwnPtr& operator=(T* ptr)
-    {
-        if (m_ptr != ptr)
-            delete m_ptr;
-        m_ptr = ptr;
-        return *this;
-    }
+    OwnPtr& operator=(T* ptr) = delete;
 
     OwnPtr& operator=(std::nullptr_t)
     {
@@ -181,6 +174,19 @@ public:
         ::swap(m_ptr, other.m_ptr);
     }
 
+    static OwnPtr lift(T* ptr)
+    {
+        return OwnPtr { ptr };
+    }
+
+protected:
+    explicit OwnPtr(T* ptr)
+        : m_ptr(ptr)
+    {
+        static_assert(
+            requires { requires typename T::AllowOwnPtr()(); } || !requires { requires !typename T::AllowOwnPtr()(); declval<T>().ref(); declval<T>().unref(); }, "Use RefPtr<> for RefCounted types");
+    }
+
 private:
     T* m_ptr = nullptr;
 };
@@ -192,12 +198,47 @@ inline void swap(OwnPtr<T>& a, OwnPtr<U>& b)
 }
 
 template<typename T>
+inline OwnPtr<T> adopt_own_if_nonnull(T* object)
+{
+    if (object)
+        return OwnPtr<T>::lift(object);
+    return {};
+}
+
+template<typename T>
+inline ErrorOr<NonnullOwnPtr<T>> adopt_nonnull_own_or_enomem(T* object)
+{
+    auto result = adopt_own_if_nonnull(object);
+    if (!result)
+        return ENOMEM;
+    return result.release_nonnull();
+}
+
+template<typename T, class... Args>
+requires(IsConstructible<T, Args...>) inline OwnPtr<T> try_make(Args&&... args)
+{
+    return adopt_own_if_nonnull(new (nothrow) T(forward<Args>(args)...));
+}
+
+// FIXME: Remove once P0960R3 is available in Clang.
+template<typename T, class... Args>
+inline OwnPtr<T> try_make(Args&&... args)
+
+{
+    return adopt_own_if_nonnull(new (nothrow) T { forward<Args>(args)... });
+}
+
+template<typename T>
 struct Traits<OwnPtr<T>> : public GenericTraits<OwnPtr<T>> {
-    using PeekType = const T*;
+    using PeekType = T*;
+    using ConstPeekType = const T*;
     static unsigned hash(const OwnPtr<T>& p) { return ptr_hash(p.ptr()); }
     static bool equals(const OwnPtr<T>& a, const OwnPtr<T>& b) { return a.ptr() == b.ptr(); }
 };
 
 }
 
+using AK::adopt_nonnull_own_or_enomem;
+using AK::adopt_own_if_nonnull;
 using AK::OwnPtr;
+using AK::try_make;

@@ -7,7 +7,6 @@
 #pragma once
 
 #include <AK/Forward.h>
-#include <AK/IPv4Address.h>
 #include <AK/Optional.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
@@ -31,7 +30,7 @@ public:
         Object,
     };
 
-    static Optional<JsonValue> from_string(const StringView&);
+    static ErrorOr<JsonValue> from_string(StringView);
 
     explicit JsonValue(Type = Type::Null);
     ~JsonValue() { clear(); }
@@ -55,7 +54,6 @@ public:
     JsonValue(bool);
     JsonValue(const char*);
     JsonValue(const String&);
-    JsonValue(const IPv4Address&);
     JsonValue(const JsonArray&);
     JsonValue(const JsonObject&);
 
@@ -71,7 +69,7 @@ public:
     template<typename Builder>
     void serialize(Builder&) const;
 
-    String as_string_or(const String& alternative)
+    String as_string_or(String const& alternative) const
     {
         if (is_string())
             return as_string();
@@ -85,13 +83,6 @@ public:
         return serialized<StringBuilder>();
     }
 
-    Optional<IPv4Address> to_ipv4_address() const
-    {
-        if (!is_string())
-            return {};
-        return IPv4Address::from_string(as_string());
-    }
-
     int to_int(int default_value = 0) const { return to_i32(default_value); }
     i32 to_i32(i32 default_value = 0) const { return to_number<i32>(default_value); }
     i64 to_i64(i64 default_value = 0) const { return to_number<i64>(default_value); }
@@ -99,6 +90,15 @@ public:
     unsigned to_uint(unsigned default_value = 0) const { return to_u32(default_value); }
     u32 to_u32(u32 default_value = 0) const { return to_number<u32>(default_value); }
     u64 to_u64(u64 default_value = 0) const { return to_number<u64>(default_value); }
+
+    FlatPtr to_addr(FlatPtr default_value = 0) const
+    {
+#ifdef __LP64__
+        return to_u64(default_value);
+#else
+        return to_u32(default_value);
+#endif
+    }
 
     bool to_bool(bool default_value = false) const
     {
@@ -245,9 +245,9 @@ private:
 
 template<>
 struct Formatter<JsonValue> : Formatter<StringView> {
-    void format(FormatBuilder& builder, const JsonValue& value)
+    ErrorOr<void> format(FormatBuilder& builder, JsonValue const& value)
     {
-        Formatter<StringView>::format(builder, value.to_string());
+        return Formatter<StringView>::format(builder, value.to_string());
     }
 };
 

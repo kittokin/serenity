@@ -9,7 +9,6 @@
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/NonnullOwnPtrVector.h>
-#include <LibCore/LocalSocket.h>
 #include <LibGUI/Model.h>
 
 namespace Inspector {
@@ -30,7 +29,6 @@ public:
     virtual GUI::Variant data(const GUI::ModelIndex&, GUI::ModelRole) const override;
     virtual GUI::ModelIndex index(int row, int column, const GUI::ModelIndex& parent = GUI::ModelIndex()) const override;
     virtual GUI::ModelIndex parent_index(const GUI::ModelIndex&) const override;
-    virtual void update() override;
 
 private:
     explicit RemoteObjectGraphModel(RemoteProcess&);

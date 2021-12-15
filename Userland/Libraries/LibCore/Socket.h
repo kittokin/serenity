@@ -42,7 +42,11 @@ public:
     SocketAddress destination_address() const { return m_destination_address; }
     int destination_port() const { return m_destination_port; }
 
+    virtual bool close() override;
+    virtual void set_idle(bool);
+
     Function<void()> on_connected;
+    Function<void()> on_error;
     Function<void()> on_ready_to_read;
 
 protected:
@@ -58,7 +62,7 @@ protected:
     virtual bool common_connect(const struct sockaddr*, socklen_t);
 
 private:
-    virtual bool open(IODevice::OpenMode) override { VERIFY_NOT_REACHED(); }
+    virtual bool open(OpenMode) override { VERIFY_NOT_REACHED(); }
     void ensure_read_notifier();
 
     Type m_type { Type::Invalid };

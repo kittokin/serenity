@@ -22,7 +22,7 @@ class ClientConnection : public Connection<ServerEndpoint, ClientEndpoint>
     , public ClientEndpoint::template Proxy<ServerEndpoint> {
 public:
     using ServerStub = typename ServerEndpoint::Stub;
-    using IPCProxy = ClientEndpoint::template Proxy<ServerEndpoint>;
+    using IPCProxy = typename ClientEndpoint::template Proxy<ServerEndpoint>;
 
     ClientConnection(ServerStub& stub, NonnullRefPtr<Core::LocalSocket> socket, int client_id)
         : IPC::Connection<ServerEndpoint, ClientEndpoint>(stub, move(socket))
@@ -30,7 +30,10 @@ public:
         , m_client_id(client_id)
     {
         VERIFY(this->socket().is_connected());
-        this->socket().on_ready_to_read = [this] { this->drain_messages_from_peer(); };
+        this->socket().on_ready_to_read = [this] {
+            // FIXME: Do something about errors.
+            (void)this->drain_messages_from_peer();
+        };
     }
 
     virtual ~ClientConnection() override
@@ -49,9 +52,15 @@ public:
         this->shutdown();
     }
 
+    void shutdown_with_error(Error const& error)
+    {
+        dbgln("{} (id={}) had error ({}), disconnecting.", *this, m_client_id, error);
+        this->shutdown();
+    }
+
     int client_id() const { return m_client_id; }
 
-    virtual void die() = 0;
+    virtual void die() override = 0;
 
 private:
     int m_client_id { -1 };
@@ -59,7 +68,6 @@ private:
 
 }
 
-template<>
 template<typename ClientEndpoint, typename ServerEndpoint>
 struct AK::Formatter<IPC::ClientConnection<ClientEndpoint, ServerEndpoint>> : Formatter<Core::Object> {
 };

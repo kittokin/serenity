@@ -6,8 +6,7 @@
 
 #include <LibJS/Interpreter.h>
 #include <LibJS/Parser.h>
-#include <LibJS/Runtime/Function.h>
-#include <LibJS/Runtime/ScriptFunction.h>
+#include <LibJS/Runtime/FunctionObject.h>
 #include <LibProtocol/WebSocket.h>
 #include <LibProtocol/WebSocketClient.h>
 #include <LibWeb/Bindings/EventWrapper.h>
@@ -41,7 +40,7 @@ WebSocketClientManager::WebSocketClientManager()
 {
 }
 
-RefPtr<Protocol::WebSocket> WebSocketClientManager::connect(const URL& url)
+RefPtr<Protocol::WebSocket> WebSocketClientManager::connect(const AK::URL& url)
 {
     return m_websocket_client->connect(url);
 }
@@ -49,7 +48,7 @@ RefPtr<Protocol::WebSocket> WebSocketClientManager::connect(const URL& url)
 // https://html.spec.whatwg.org/multipage/web-sockets.html#the-websocket-interface
 DOM::ExceptionOr<NonnullRefPtr<WebSocket>> WebSocket::create_with_global_object(Bindings::WindowObject& window, const String& url)
 {
-    URL url_record(url);
+    AK::URL url_record(url);
     if (!url_record.is_valid())
         return DOM::SyntaxError::create("Invalid URL");
     if (!url_record.protocol().is_one_of("ws", "wss"))
@@ -61,8 +60,8 @@ DOM::ExceptionOr<NonnullRefPtr<WebSocket>> WebSocket::create_with_global_object(
     return WebSocket::create(window.impl(), url_record);
 }
 
-WebSocket::WebSocket(DOM::Window& window, URL& url)
-    : EventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.document()))
+WebSocket::WebSocket(DOM::Window& window, AK::URL& url)
+    : EventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.associated_document()))
     , m_window(window)
 {
     // FIXME: Integrate properly with FETCH as per https://fetch.spec.whatwg.org/#websocket-opening-handshake
@@ -190,7 +189,11 @@ void WebSocket::on_close(u16 code, String reason, bool was_clean)
 {
     // 1. Change the readyState attribute's value to CLOSED. This is handled by the Protocol's WebSocket
     // 2. If [needed], fire an event named error at the WebSocket object. This is handled by the Protocol's WebSocket
-    dispatch_event(CloseEvent::create(EventNames::close, was_clean, code, reason));
+    CloseEventInit event_init {};
+    event_init.was_clean = was_clean;
+    event_init.code = code;
+    event_init.reason = move(reason);
+    dispatch_event(CloseEvent::create(EventNames::close, event_init));
 }
 
 // https://html.spec.whatwg.org/multipage/web-sockets.html#feedback-from-the-protocol
@@ -200,17 +203,15 @@ void WebSocket::on_message(ByteBuffer message, bool is_text)
         return;
     if (is_text) {
         auto text_message = String(ReadonlyBytes(message));
-        dispatch_event(MessageEvent::create(EventNames::message, text_message, url()));
+        MessageEventInit event_init {};
+        event_init.data = JS::js_string(wrapper()->vm(), text_message);
+        event_init.origin = url();
+        dispatch_event(MessageEvent::create(EventNames::message, event_init));
         return;
     }
     // type indicates that the data is Binary and binaryType is "blob"
     // type indicates that the data is Binary and binaryType is "arraybuffer"
     TODO();
-}
-
-bool WebSocket::dispatch_event(NonnullRefPtr<DOM::Event> event)
-{
-    return DOM::EventDispatcher::dispatch(*this, move(event));
 }
 
 JS::Object* WebSocket::create_wrapper(JS::GlobalObject& global_object)
@@ -226,49 +227,9 @@ JS::Object* WebSocket::create_wrapper(JS::GlobalObject& global_object)
     }                                                              \
     HTML::EventHandler WebSocket::attribute_name()                 \
     {                                                              \
-        return get_event_handler_attribute(event_name);            \
+        return event_handler_attribute(event_name);                \
     }
 ENUMERATE_WEBSOCKET_EVENT_HANDLERS(__ENUMERATE)
 #undef __ENUMERATE
-
-// FIXME: This is copied from GlobalEventHandlers.cpp. Find a way to deduplicate it.
-void WebSocket::set_event_handler_attribute(const FlyString& name, HTML::EventHandler value)
-{
-    RefPtr<DOM::EventListener> listener;
-    if (!value.callback.is_null()) {
-        listener = adopt_ref(*new DOM::EventListener(move(value.callback)));
-    } else {
-        StringBuilder builder;
-        builder.appendff("function {}(event) {{\n{}\n}}", name, value.string);
-        auto parser = JS::Parser(JS::Lexer(builder.string_view()));
-        auto program = parser.parse_function_node<JS::FunctionExpression>();
-        if (parser.has_errors()) {
-            dbgln("Failed to parse script in event handler attribute '{}'", name);
-            return;
-        }
-        auto* function = JS::ScriptFunction::create(script_execution_context()->interpreter().global_object(), name, program->body(), program->parameters(), program->function_length(), nullptr, false, false);
-        VERIFY(function);
-        listener = adopt_ref(*new DOM::EventListener(JS::make_handle(static_cast<JS::Function*>(function))));
-    }
-    if (listener) {
-        for (auto& registered_listener : listeners()) {
-            if (registered_listener.event_name == name && registered_listener.listener->is_attribute()) {
-                remove_event_listener(name, registered_listener.listener);
-                break;
-            }
-        }
-        add_event_listener(name, listener.release_nonnull());
-    }
-}
-
-HTML::EventHandler WebSocket::get_event_handler_attribute(const FlyString& name)
-{
-    for (auto& listener : listeners()) {
-        if (listener.event_name == name && listener.listener->is_attribute())
-            return HTML::EventHandler { JS::make_handle(&listener.listener->function()) };
-    }
-
-    return {};
-}
 
 }

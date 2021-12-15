@@ -21,7 +21,7 @@ Statusbar::Statusbar(int label_count)
 {
     set_fixed_height(18);
     set_layout<HorizontalBoxLayout>();
-    layout()->set_margins({ 0, 0, 0, 0 });
+    layout()->set_margins(0);
     layout()->set_spacing(2);
 
     m_corner = add<ResizeCorner>();
@@ -43,6 +43,7 @@ NonnullRefPtr<Label> Statusbar::create_label()
     label->set_frame_shape(Gfx::FrameShape::Panel);
     label->set_frame_thickness(1);
     label->set_text_alignment(Gfx::TextAlignment::CenterLeft);
+    label->set_text_wrapping(Gfx::TextWrapping::DontWrap);
     return label;
 }
 
@@ -116,8 +117,9 @@ void Statusbar::paint_event(PaintEvent& event)
 
 void Statusbar::resize_event(ResizeEvent& event)
 {
-    if (window())
-        m_corner->set_visible(window()->is_maximized() ? false : true);
+    if (auto* window = this->window()) {
+        m_corner->set_visible(window->is_resizable() && !window->is_maximized());
+    }
 
     Widget::resize_event(event);
 }

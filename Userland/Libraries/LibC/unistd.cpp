@@ -21,6 +21,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/select.h>
 #include <sys/types.h>
 #include <syscall.h>
 #include <termios.h>
@@ -160,6 +161,26 @@ int execl(const char* filename, const char* arg0, ...)
     return execve(filename, const_cast<char* const*>(args.data()), environ);
 }
 
+int execle(char const* filename, char const* arg0, ...)
+{
+    Vector<char const*> args;
+    args.append(arg0);
+
+    va_list ap;
+    va_start(ap, arg0);
+    char const* arg;
+    do {
+        arg = va_arg(ap, char const*);
+        args.append(arg);
+    } while (arg);
+
+    auto argv = const_cast<char* const*>(args.data());
+    auto envp = const_cast<char* const*>(va_arg(ap, char* const*));
+    va_end(ap);
+
+    return execve(filename, argv, envp);
+}
+
 int execlp(const char* filename, const char* arg0, ...)
 {
     Vector<const char*, 16> args;
@@ -237,7 +258,11 @@ pid_t setsid()
 
 pid_t tcgetpgrp(int fd)
 {
-    return ioctl(fd, TIOCGPGRP);
+    pid_t pgrp;
+    int rc = ioctl(fd, TIOCGPGRP, &pgrp);
+    if (rc < 0)
+        return rc;
+    return pgrp;
 }
 
 int tcsetpgrp(int fd, pid_t pgid)
@@ -271,12 +296,8 @@ ssize_t read(int fd, void* buf, size_t count)
 
 ssize_t pread(int fd, void* buf, size_t count, off_t offset)
 {
-    // FIXME: This is not thread safe and should be implemented in the kernel instead.
-    off_t old_offset = lseek(fd, 0, SEEK_CUR);
-    lseek(fd, offset, SEEK_SET);
-    ssize_t nread = read(fd, buf, count);
-    lseek(fd, old_offset, SEEK_SET);
-    return nread;
+    int rc = syscall(SC_pread, fd, buf, count, &offset);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
 ssize_t write(int fd, const void* buf, size_t count)
@@ -594,7 +615,7 @@ int mknod(const char* pathname, mode_t mode, dev_t dev)
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
-long fpathconf([[maybe_unused]] int fd, [[maybe_unused]] int name)
+long fpathconf([[maybe_unused]] int fd, int name)
 {
     switch (name) {
     case _PC_NAME_MAX:
@@ -603,6 +624,8 @@ long fpathconf([[maybe_unused]] int fd, [[maybe_unused]] int name)
         return PATH_MAX;
     case _PC_VDISABLE:
         return _POSIX_VDISABLE;
+    case _PC_LINK_MAX:
+        return LINK_MAX;
     }
 
     VERIFY_NOT_REACHED();
@@ -617,6 +640,8 @@ long pathconf([[maybe_unused]] const char* path, int name)
         return PATH_MAX;
     case _PC_PIPE_BUF:
         return PIPE_BUF;
+    case _PC_LINK_MAX:
+        return LINK_MAX;
     }
 
     VERIFY_NOT_REACHED();
@@ -675,32 +700,14 @@ int gettid()
     return cached_tid;
 }
 
-int donate(int tid)
-{
-    int rc = syscall(SC_donate, tid);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
-}
-
 void sysbeep()
 {
     syscall(SC_beep);
 }
 
-int fsync([[maybe_unused]] int fd)
+int fsync(int fd)
 {
-    dbgln("FIXME: Implement fsync()");
-    return 0;
-}
-
-int halt()
-{
-    int rc = syscall(SC_halt);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
-}
-
-int reboot()
-{
-    int rc = syscall(SC_reboot);
+    int rc = syscall(SC_fsync, fd);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -712,9 +719,9 @@ int mount(int source_fd, const char* target, const char* fs_type, int flags)
     }
 
     Syscall::SC_mount_params params {
-        source_fd,
         { target, strlen(target) },
         { fs_type, strlen(fs_type) },
+        source_fd,
         flags
     };
     int rc = syscall(SC_mount, &params);
@@ -741,21 +748,6 @@ int get_process_name(char* buffer, int buffer_size)
 int set_process_name(const char* name, size_t name_length)
 {
     int rc = syscall(SC_set_process_name, name, name_length);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
-}
-
-int chroot(const char* path)
-{
-    return chroot_with_mount_flags(path, -1);
-}
-
-int chroot_with_mount_flags(const char* path, int mount_flags)
-{
-    if (!path) {
-        errno = EFAULT;
-        return -1;
-    }
-    int rc = syscall(SC_chroot, path, strlen(path), mount_flags);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -794,5 +786,16 @@ long sysconf(int name)
 int getpagesize()
 {
     return PAGE_SIZE;
+}
+
+int pause()
+{
+    return select(0, nullptr, nullptr, nullptr, nullptr);
+}
+
+int chroot(const char* path)
+{
+    dbgln("FIXME: chroot(\"{}\")", path);
+    return -1;
 }
 }

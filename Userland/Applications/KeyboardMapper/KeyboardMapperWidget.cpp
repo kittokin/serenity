@@ -13,8 +13,6 @@
 #include <LibGUI/RadioButton.h>
 #include <LibKeyboard/CharacterMap.h>
 #include <LibKeyboard/CharacterMapFile.h>
-#include <fcntl.h>
-#include <stdio.h>
 #include <string.h>
 
 KeyboardMapperWidget::KeyboardMapperWidget()
@@ -30,7 +28,7 @@ void KeyboardMapperWidget::create_frame()
 {
     set_fill_with_background_color(true);
     set_layout<GUI::VerticalBoxLayout>();
-    layout()->set_margins({ 4, 4, 4, 4 });
+    layout()->set_margins(4);
 
     auto& main_widget = add<GUI::Widget>();
     main_widget.set_relative_rect(0, 0, 200, 200);
@@ -126,15 +124,19 @@ void KeyboardMapperWidget::create_frame()
 void KeyboardMapperWidget::load_from_file(String filename)
 {
     auto result = Keyboard::CharacterMapFile::load_from_file(filename);
-    VERIFY(result.has_value());
+    if (!result.has_value()) {
+        auto error_message = String::formatted("Failed to load character map from file {}", filename);
+        GUI::MessageBox::show(window(), error_message, "Error", GUI::MessageBox::Type::Error);
+        return;
+    }
 
     m_filename = filename;
     m_character_map = result.value();
     set_current_map("map");
 
-    for (Widget* widget : m_map_group->child_widgets()) {
-        auto radio_button = (GUI::RadioButton*)widget;
-        radio_button->set_checked(radio_button->name() == "map");
+    for (auto& widget : m_map_group->child_widgets()) {
+        auto& radio_button = static_cast<GUI::RadioButton&>(widget);
+        radio_button.set_checked(radio_button.name() == "map");
     }
 
     update_window_title();
@@ -149,9 +151,9 @@ void KeyboardMapperWidget::load_from_system()
     m_character_map = result.value().character_map_data();
     set_current_map("map");
 
-    for (Widget* widget : m_map_group->child_widgets()) {
-        auto radio_button = (GUI::RadioButton*)widget;
-        radio_button->set_checked(radio_button->name() == "map");
+    for (auto& widget : m_map_group->child_widgets()) {
+        auto& radio_button = static_cast<GUI::RadioButton&>(widget);
+        radio_button.set_checked(radio_button.name() == "map");
     }
 
     update_window_title();
@@ -162,7 +164,7 @@ void KeyboardMapperWidget::save()
     save_to_file(m_filename);
 }
 
-void KeyboardMapperWidget::save_to_file(const StringView& filename)
+void KeyboardMapperWidget::save_to_file(StringView filename)
 {
     JsonObject map_json;
 
@@ -189,7 +191,7 @@ void KeyboardMapperWidget::save_to_file(const StringView& filename)
     String file_content = map_json.to_string();
 
     auto file = Core::File::construct(filename);
-    file->open(Core::IODevice::WriteOnly);
+    file->open(Core::OpenMode::WriteOnly);
     if (!file->is_open()) {
         StringBuilder sb;
         sb.append("Failed to open ");
@@ -277,7 +279,7 @@ void KeyboardMapperWidget::update_window_title()
     sb.append(m_filename);
     if (m_modified)
         sb.append(" (*)");
-    sb.append(" - KeyboardMapper");
+    sb.append(" - Keyboard Mapper");
 
     window()->set_title(sb.to_string());
 }

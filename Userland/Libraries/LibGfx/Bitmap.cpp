@@ -11,23 +11,16 @@
 #include <AK/Optional.h>
 #include <AK/ScopeGuard.h>
 #include <AK/String.h>
-#include <LibGfx/BMPLoader.h>
+#include <AK/Try.h>
+#include <LibCore/MappedFile.h>
+#include <LibCore/System.h>
 #include <LibGfx/Bitmap.h>
-#include <LibGfx/GIFLoader.h>
-#include <LibGfx/ICOLoader.h>
-#include <LibGfx/JPGLoader.h>
-#include <LibGfx/PBMLoader.h>
-#include <LibGfx/PGMLoader.h>
-#include <LibGfx/PNGLoader.h>
-#include <LibGfx/PPMLoader.h>
+#include <LibGfx/ImageDecoder.h>
 #include <LibGfx/ShareableBitmap.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/mman.h>
-
-#ifdef __serenity__
-#    include <serenity.h>
-#endif
 
 namespace Gfx {
 
@@ -56,57 +49,43 @@ size_t Bitmap::minimum_pitch(size_t physical_width, BitmapFormat format)
     return physical_width * element_size;
 }
 
-static bool size_would_overflow(BitmapFormat format, const IntSize& size, int scale_factor)
+static bool size_would_overflow(BitmapFormat format, IntSize const& size, int scale_factor)
 {
     if (size.width() < 0 || size.height() < 0)
         return true;
     // This check is a bit arbitrary, but should protect us from most shenanigans:
-    if (size.width() >= 32768 || size.height() >= 32768 || scale_factor < 1 || scale_factor > 4)
+    if (size.width() >= INT16_MAX || size.height() >= INT16_MAX || scale_factor < 1 || scale_factor > 4)
         return true;
     // In contrast, this check is absolutely necessary:
     size_t pitch = Bitmap::minimum_pitch(size.width() * scale_factor, format);
     return Checked<size_t>::multiplication_would_overflow(pitch, size.height() * scale_factor);
 }
 
-RefPtr<Bitmap> Bitmap::create(BitmapFormat format, const IntSize& size, int scale_factor)
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::try_create(BitmapFormat format, IntSize const& size, int scale_factor)
 {
-    auto backing_store = Bitmap::allocate_backing_store(format, size, scale_factor, Purgeable::No);
-    if (!backing_store.has_value())
-        return nullptr;
-    return adopt_ref(*new Bitmap(format, size, scale_factor, Purgeable::No, backing_store.value()));
+    auto backing_store = TRY(Bitmap::allocate_backing_store(format, size, scale_factor));
+    return AK::adopt_nonnull_ref_or_enomem(new (nothrow) Bitmap(format, size, scale_factor, backing_store));
 }
 
-RefPtr<Bitmap> Bitmap::create_purgeable(BitmapFormat format, const IntSize& size, int scale_factor)
-{
-    auto backing_store = Bitmap::allocate_backing_store(format, size, scale_factor, Purgeable::Yes);
-    if (!backing_store.has_value())
-        return nullptr;
-    return adopt_ref(*new Bitmap(format, size, scale_factor, Purgeable::Yes, backing_store.value()));
-}
-
-#ifdef __serenity__
-RefPtr<Bitmap> Bitmap::create_shareable(BitmapFormat format, const IntSize& size, int scale_factor)
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::try_create_shareable(BitmapFormat format, IntSize const& size, int scale_factor)
 {
     if (size_would_overflow(format, size, scale_factor))
-        return nullptr;
+        return Error::from_string_literal("Gfx::Bitmap::try_create_shareable size overflow"sv);
 
-    const auto pitch = minimum_pitch(size.width() * scale_factor, format);
-    const auto data_size = size_in_bytes(pitch, size.height() * scale_factor);
+    auto const pitch = minimum_pitch(size.width() * scale_factor, format);
+    auto const data_size = size_in_bytes(pitch, size.height() * scale_factor);
 
-    auto anon_fd = anon_create(round_up_to_power_of_two(data_size, PAGE_SIZE), O_CLOEXEC);
-    if (anon_fd < 0)
-        return nullptr;
-    return Bitmap::create_with_anon_fd(format, anon_fd, size, scale_factor, {}, ShouldCloseAnonymousFile::No);
+    auto buffer = TRY(Core::AnonymousBuffer::create_with_size(round_up_to_power_of_two(data_size, PAGE_SIZE)));
+    auto bitmap = TRY(Bitmap::try_create_with_anonymous_buffer(format, buffer, size, scale_factor, {}));
+    return bitmap;
 }
-#endif
 
-Bitmap::Bitmap(BitmapFormat format, const IntSize& size, int scale_factor, Purgeable purgeable, const BackingStore& backing_store)
+Bitmap::Bitmap(BitmapFormat format, IntSize const& size, int scale_factor, BackingStore const& backing_store)
     : m_size(size)
     , m_scale(scale_factor)
     , m_data(backing_store.data)
     , m_pitch(backing_store.pitch)
     , m_format(format)
-    , m_purgeable(purgeable == Purgeable::Yes)
 {
     VERIFY(!m_size.is_empty());
     VERIFY(!size_would_overflow(format, size, scale_factor));
@@ -116,50 +95,53 @@ Bitmap::Bitmap(BitmapFormat format, const IntSize& size, int scale_factor, Purge
     m_needs_munmap = true;
 }
 
-RefPtr<Bitmap> Bitmap::create_wrapper(BitmapFormat format, const IntSize& size, int scale_factor, size_t pitch, void* data)
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::try_create_wrapper(BitmapFormat format, IntSize const& size, int scale_factor, size_t pitch, void* data)
 {
     if (size_would_overflow(format, size, scale_factor))
-        return nullptr;
+        return Error::from_string_literal("Gfx::Bitmap::try_create_wrapper size overflow"sv);
     return adopt_ref(*new Bitmap(format, size, scale_factor, pitch, data));
 }
 
-RefPtr<Bitmap> Bitmap::load_from_file(String const& path, int scale_factor)
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::try_load_from_file(String const& path, int scale_factor)
 {
     if (scale_factor > 1 && path.starts_with("/res/")) {
         LexicalPath lexical_path { path };
         StringBuilder highdpi_icon_path;
         highdpi_icon_path.append(lexical_path.dirname());
-        highdpi_icon_path.append("/");
+        highdpi_icon_path.append('/');
         highdpi_icon_path.append(lexical_path.title());
-        highdpi_icon_path.appendf("-%dx.", scale_factor);
+        highdpi_icon_path.appendff("-{}x.", scale_factor);
         highdpi_icon_path.append(lexical_path.extension());
 
-        RefPtr<Bitmap> bmp;
-#define __ENUMERATE_IMAGE_FORMAT(Name, Ext)                    \
-    if (path.ends_with(Ext, CaseSensitivity::CaseInsensitive)) \
-        bmp = load_##Name(highdpi_icon_path.to_string());
-        ENUMERATE_IMAGE_FORMATS
-#undef __ENUMERATE_IMAGE_FORMAT
-        if (bmp) {
-            VERIFY(bmp->width() % scale_factor == 0);
-            VERIFY(bmp->height() % scale_factor == 0);
-            bmp->m_size.set_width(bmp->width() / scale_factor);
-            bmp->m_size.set_height(bmp->height() / scale_factor);
-            bmp->m_scale = scale_factor;
-            return bmp;
-        }
+        auto highdpi_icon_string = highdpi_icon_path.to_string();
+        auto fd = TRY(Core::System::open(highdpi_icon_string, O_RDONLY));
+
+        auto bitmap = TRY(try_load_from_fd_and_close(fd, highdpi_icon_string));
+        VERIFY(bitmap->width() % scale_factor == 0);
+        VERIFY(bitmap->height() % scale_factor == 0);
+        bitmap->m_size.set_width(bitmap->width() / scale_factor);
+        bitmap->m_size.set_height(bitmap->height() / scale_factor);
+        bitmap->m_scale = scale_factor;
+        return bitmap;
     }
 
-#define __ENUMERATE_IMAGE_FORMAT(Name, Ext)                    \
-    if (path.ends_with(Ext, CaseSensitivity::CaseInsensitive)) \
-        return load_##Name(path);
-    ENUMERATE_IMAGE_FORMATS
-#undef __ENUMERATE_IMAGE_FORMAT
-
-    return nullptr;
+    auto fd = TRY(Core::System::open(path, O_RDONLY));
+    return try_load_from_fd_and_close(fd, path);
 }
 
-Bitmap::Bitmap(BitmapFormat format, const IntSize& size, int scale_factor, size_t pitch, void* data)
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::try_load_from_fd_and_close(int fd, String const& path)
+{
+    auto file = TRY(Core::MappedFile::map_from_fd_and_close(fd, path));
+    if (auto decoder = ImageDecoder::try_create(file->bytes())) {
+        auto frame = TRY(decoder->frame(0));
+        if (auto& bitmap = frame.image)
+            return bitmap.release_nonnull();
+    }
+
+    return Error::from_string_literal("Gfx::Bitmap unable to load from fd"sv);
+}
+
+Bitmap::Bitmap(BitmapFormat format, IntSize const& size, int scale_factor, size_t pitch, void* data)
     : m_size(size)
     , m_scale(scale_factor)
     , m_data(data)
@@ -173,7 +155,7 @@ Bitmap::Bitmap(BitmapFormat format, const IntSize& size, int scale_factor, size_
     allocate_palette_from_format(format, {});
 }
 
-static bool check_size(const IntSize& size, int scale_factor, BitmapFormat format, unsigned actual_size)
+static bool check_size(IntSize const& size, int scale_factor, BitmapFormat format, unsigned actual_size)
 {
     // FIXME: Code duplication of size_in_bytes() and m_pitch
     unsigned expected_size_min = Bitmap::minimum_pitch(size.width() * scale_factor, format) * size.height() * scale_factor;
@@ -193,33 +175,12 @@ static bool check_size(const IntSize& size, int scale_factor, BitmapFormat forma
     return true;
 }
 
-RefPtr<Bitmap> Bitmap::create_with_anon_fd(BitmapFormat format, int anon_fd, const IntSize& size, int scale_factor, const Vector<RGBA32>& palette, ShouldCloseAnonymousFile should_close_anon_fd)
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::try_create_with_anonymous_buffer(BitmapFormat format, Core::AnonymousBuffer buffer, IntSize const& size, int scale_factor, Vector<RGBA32> const& palette)
 {
-    void* data = nullptr;
-    {
-        // If ShouldCloseAnonymousFile::Yes, it's our responsibility to close 'anon_fd' no matter what.
-        ScopeGuard close_guard = [&] {
-            if (should_close_anon_fd == ShouldCloseAnonymousFile::Yes) {
-                int rc = close(anon_fd);
-                VERIFY(rc == 0);
-                anon_fd = -1;
-            }
-        };
+    if (size_would_overflow(format, size, scale_factor))
+        return Error::from_string_literal("Gfx::Bitmap::try_create_with_anonymous_buffer size overflow");
 
-        if (size_would_overflow(format, size, scale_factor))
-            return nullptr;
-
-        const auto pitch = minimum_pitch(size.width() * scale_factor, format);
-        const auto data_size_in_bytes = size_in_bytes(pitch, size.height() * scale_factor);
-
-        data = mmap(nullptr, round_up_to_power_of_two(data_size_in_bytes, PAGE_SIZE), PROT_READ | PROT_WRITE, MAP_FILE | MAP_SHARED, anon_fd, 0);
-        if (data == MAP_FAILED) {
-            perror("mmap");
-            return nullptr;
-        }
-    }
-
-    return adopt_ref(*new Bitmap(format, anon_fd, size, scale_factor, data, palette));
+    return adopt_nonnull_ref_or_enomem(new (nothrow) Bitmap(format, move(buffer), size, scale_factor, palette));
 }
 
 /// Read a bitmap as described by:
@@ -231,10 +192,10 @@ RefPtr<Bitmap> Bitmap::create_with_anon_fd(BitmapFormat format, int anon_fd, con
 /// - palette count
 /// - palette data (= palette count * BGRA8888)
 /// - image data (= actual size * u8)
-RefPtr<Bitmap> Bitmap::create_from_serialized_byte_buffer(ByteBuffer&& buffer)
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::try_create_from_serialized_byte_buffer(ByteBuffer&& buffer)
 {
     InputMemoryStream stream { buffer };
-    unsigned actual_size;
+    size_t actual_size;
     unsigned width;
     unsigned height;
     unsigned scale_factor;
@@ -249,40 +210,38 @@ RefPtr<Bitmap> Bitmap::create_from_serialized_byte_buffer(ByteBuffer&& buffer)
     };
 
     if (!read(actual_size) || !read(width) || !read(height) || !read(scale_factor) || !read(format) || !read(palette_size))
-        return nullptr;
+        return Error::from_string_literal("Gfx::Bitmap::try_create_from_serialized_byte_buffer: decode failed"sv);
 
     if (format > BitmapFormat::BGRA8888 || format < BitmapFormat::Indexed1)
-        return nullptr;
+        return Error::from_string_literal("Gfx::Bitmap::try_create_from_serialized_byte_buffer: decode failed"sv);
 
     if (!check_size({ width, height }, scale_factor, format, actual_size))
-        return {};
+        return Error::from_string_literal("Gfx::Bitmap::try_create_from_serialized_byte_buffer: decode failed"sv);
 
     palette.ensure_capacity(palette_size);
     for (size_t i = 0; i < palette_size; ++i) {
         if (!read(palette[i]))
-            return {};
+            return Error::from_string_literal("Gfx::Bitmap::try_create_from_serialized_byte_buffer: decode failed"sv);
     }
 
     if (stream.remaining() < actual_size)
-        return {};
+        return Error::from_string_literal("Gfx::Bitmap::try_create_from_serialized_byte_buffer: decode failed"sv);
 
     auto data = stream.bytes().slice(stream.offset(), actual_size);
 
-    auto bitmap = Bitmap::create(format, { width, height }, scale_factor);
-    if (!bitmap)
-        return {};
+    auto bitmap = TRY(Bitmap::try_create(format, { width, height }, scale_factor));
 
     bitmap->m_palette = new RGBA32[palette_size];
     memcpy(bitmap->m_palette, palette.data(), palette_size * sizeof(RGBA32));
 
     data.copy_to({ bitmap->scanline(0), bitmap->size_in_bytes() });
-
     return bitmap;
 }
 
 ByteBuffer Bitmap::serialize_to_byte_buffer() const
 {
-    auto buffer = ByteBuffer::create_uninitialized(5 * sizeof(unsigned) + sizeof(BitmapFormat) + sizeof(RGBA32) * palette_size(m_format) + size_in_bytes());
+    // FIXME: Somehow handle possible OOM situation here.
+    auto buffer = ByteBuffer::create_uninitialized(sizeof(size_t) + 4 * sizeof(unsigned) + sizeof(BitmapFormat) + sizeof(RGBA32) * palette_size(m_format) + size_in_bytes()).release_value();
     OutputMemoryStream stream { buffer };
 
     auto write = [&]<typename T>(T value) {
@@ -309,15 +268,13 @@ ByteBuffer Bitmap::serialize_to_byte_buffer() const
     return buffer;
 }
 
-Bitmap::Bitmap(BitmapFormat format, int anon_fd, const IntSize& size, int scale_factor, void* data, const Vector<RGBA32>& palette)
+Bitmap::Bitmap(BitmapFormat format, Core::AnonymousBuffer buffer, IntSize const& size, int scale_factor, Vector<RGBA32> const& palette)
     : m_size(size)
     , m_scale(scale_factor)
-    , m_data(data)
+    , m_data(buffer.data<void>())
     , m_pitch(minimum_pitch(size.width() * scale_factor, format))
     , m_format(format)
-    , m_needs_munmap(true)
-    , m_purgeable(true)
-    , m_anon_fd(anon_fd)
+    , m_buffer(move(buffer))
 {
     VERIFY(!is_indexed() || !palette.is_empty());
     VERIFY(!size_would_overflow(format, size, scale_factor));
@@ -326,18 +283,9 @@ Bitmap::Bitmap(BitmapFormat format, int anon_fd, const IntSize& size, int scale_
         allocate_palette_from_format(m_format, palette);
 }
 
-RefPtr<Gfx::Bitmap> Bitmap::clone() const
+ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::clone() const
 {
-    RefPtr<Gfx::Bitmap> new_bitmap {};
-    if (m_purgeable) {
-        new_bitmap = Bitmap::create_purgeable(format(), size(), scale());
-    } else {
-        new_bitmap = Bitmap::create(format(), size(), scale());
-    }
-
-    if (!new_bitmap) {
-        return nullptr;
-    }
+    auto new_bitmap = TRY(Bitmap::try_create(format(), size(), scale()));
 
     VERIFY(size_in_bytes() == new_bitmap->size_in_bytes());
     memcpy(new_bitmap->scanline(0), scanline(0), size_in_bytes());
@@ -345,18 +293,16 @@ RefPtr<Gfx::Bitmap> Bitmap::clone() const
     return new_bitmap;
 }
 
-RefPtr<Gfx::Bitmap> Bitmap::rotated(Gfx::RotationDirection rotation_direction) const
+ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::rotated(Gfx::RotationDirection rotation_direction) const
 {
-    auto new_bitmap = Gfx::Bitmap::create(this->format(), { height(), width() }, scale());
-    if (!new_bitmap)
-        return nullptr;
+    auto new_bitmap = TRY(Gfx::Bitmap::try_create(this->format(), { height(), width() }, scale()));
 
     auto w = this->physical_width();
     auto h = this->physical_height();
     for (int i = 0; i < w; i++) {
         for (int j = 0; j < h; j++) {
             Color color;
-            if (rotation_direction == Gfx::RotationDirection::Left)
+            if (rotation_direction == Gfx::RotationDirection::CounterClockwise)
                 color = this->get_pixel(w - i - 1, j);
             else
                 color = this->get_pixel(i, h - j - 1);
@@ -368,11 +314,9 @@ RefPtr<Gfx::Bitmap> Bitmap::rotated(Gfx::RotationDirection rotation_direction) c
     return new_bitmap;
 }
 
-RefPtr<Gfx::Bitmap> Bitmap::flipped(Gfx::Orientation orientation) const
+ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::flipped(Gfx::Orientation orientation) const
 {
-    auto new_bitmap = Gfx::Bitmap::create(this->format(), { width(), height() }, scale());
-    if (!new_bitmap)
-        return nullptr;
+    auto new_bitmap = TRY(Gfx::Bitmap::try_create(this->format(), { width(), height() }, scale()));
 
     auto w = this->physical_width();
     auto h = this->physical_height();
@@ -389,15 +333,13 @@ RefPtr<Gfx::Bitmap> Bitmap::flipped(Gfx::Orientation orientation) const
     return new_bitmap;
 }
 
-RefPtr<Gfx::Bitmap> Bitmap::scaled(int sx, int sy) const
+ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::scaled(int sx, int sy) const
 {
     VERIFY(sx >= 0 && sy >= 0);
     if (sx == 1 && sy == 1)
-        return this;
+        return NonnullRefPtr { *this };
 
-    auto new_bitmap = Gfx::Bitmap::create(format(), { width() * sx, height() * sy }, scale());
-    if (!new_bitmap)
-        return nullptr;
+    auto new_bitmap = TRY(Gfx::Bitmap::try_create(format(), { width() * sx, height() * sy }, scale()));
 
     auto old_width = physical_width();
     auto old_height = physical_height();
@@ -420,15 +362,16 @@ RefPtr<Gfx::Bitmap> Bitmap::scaled(int sx, int sy) const
 }
 
 // http://fourier.eng.hmc.edu/e161/lectures/resize/node3.html
-RefPtr<Gfx::Bitmap> Bitmap::scaled(float sx, float sy) const
+ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::scaled(float sx, float sy) const
 {
     VERIFY(sx >= 0.0f && sy >= 0.0f);
     if (floorf(sx) == sx && floorf(sy) == sy)
         return scaled(static_cast<int>(sx), static_cast<int>(sy));
 
-    auto new_bitmap = Gfx::Bitmap::create(format(), { width() * sx, height() * sy }, scale());
-    if (!new_bitmap)
-        return nullptr;
+    int scaled_width = (int)ceilf(sx * (float)width());
+    int scaled_height = (int)ceilf(sy * (float)height());
+
+    auto new_bitmap = TRY(Gfx::Bitmap::try_create(format(), { scaled_width, scaled_height }, scale()));
 
     auto old_width = physical_width();
     auto old_height = physical_height();
@@ -444,8 +387,8 @@ RefPtr<Gfx::Bitmap> Bitmap::scaled(float sx, float sy) const
             auto p = static_cast<float>(x) * static_cast<float>(old_width - 1) / static_cast<float>(new_width - 1);
             auto q = static_cast<float>(y) * static_cast<float>(old_height - 1) / static_cast<float>(new_height - 1);
 
-            int i = floor(p);
-            int j = floor(q);
+            int i = floorf(p);
+            int j = floorf(q);
             float u = p - static_cast<float>(i);
             float v = q - static_cast<float>(j);
 
@@ -467,7 +410,7 @@ RefPtr<Gfx::Bitmap> Bitmap::scaled(float sx, float sy) const
     for (int x = 0; x < new_width - 1; x++) {
         auto p = static_cast<float>(x) * static_cast<float>(old_width - 1) / static_cast<float>(new_width - 1);
 
-        int i = floor(p);
+        int i = floorf(p);
         float u = p - static_cast<float>(i);
 
         auto a = get_pixel(i, old_bottom_y);
@@ -482,7 +425,7 @@ RefPtr<Gfx::Bitmap> Bitmap::scaled(float sx, float sy) const
     for (int y = 0; y < new_height - 1; y++) {
         auto q = static_cast<float>(y) * static_cast<float>(old_height - 1) / static_cast<float>(new_height - 1);
 
-        int j = floor(q);
+        int j = floorf(q);
         float v = q - static_cast<float>(j);
 
         auto c = get_pixel(old_right_x, j);
@@ -498,30 +441,38 @@ RefPtr<Gfx::Bitmap> Bitmap::scaled(float sx, float sy) const
     return new_bitmap;
 }
 
-#ifdef __serenity__
-RefPtr<Bitmap> Bitmap::to_bitmap_backed_by_anon_fd() const
+ErrorOr<NonnullRefPtr<Gfx::Bitmap>> Bitmap::cropped(Gfx::IntRect crop) const
 {
-    if (m_anon_fd != -1)
-        return *this;
-    auto anon_fd = anon_create(round_up_to_power_of_two(size_in_bytes(), PAGE_SIZE), O_CLOEXEC);
-    if (anon_fd < 0)
-        return nullptr;
-    auto bitmap = Bitmap::create_with_anon_fd(m_format, anon_fd, size(), scale(), palette_to_vector(), ShouldCloseAnonymousFile::No);
-    if (!bitmap)
-        return nullptr;
+    auto new_bitmap = TRY(Gfx::Bitmap::try_create(format(), { crop.width(), crop.height() }, 1));
+
+    for (int y = 0; y < crop.height(); ++y) {
+        for (int x = 0; x < crop.width(); ++x) {
+            int global_x = x + crop.left();
+            int global_y = y + crop.top();
+            if (global_x >= physical_width() || global_y >= physical_height() || global_x < 0 || global_y < 0) {
+                new_bitmap->set_pixel(x, y, Gfx::Color::Black);
+            } else {
+                new_bitmap->set_pixel(x, y, get_pixel(global_x, global_y));
+            }
+        }
+    }
+    return new_bitmap;
+}
+
+ErrorOr<NonnullRefPtr<Bitmap>> Bitmap::to_bitmap_backed_by_anonymous_buffer() const
+{
+    if (m_buffer.is_valid())
+        return NonnullRefPtr { *this };
+    auto buffer = TRY(Core::AnonymousBuffer::create_with_size(round_up_to_power_of_two(size_in_bytes(), PAGE_SIZE)));
+    auto bitmap = TRY(Bitmap::try_create_with_anonymous_buffer(m_format, move(buffer), size(), scale(), palette_to_vector()));
     memcpy(bitmap->scanline(0), scanline(0), size_in_bytes());
     return bitmap;
 }
-#endif
 
 Bitmap::~Bitmap()
 {
     if (m_needs_munmap) {
         int rc = munmap(m_data, size_in_bytes());
-        VERIFY(rc == 0);
-    }
-    if (m_anon_fd != -1) {
-        int rc = close(m_anon_fd);
         VERIFY(rc == 0);
     }
     m_data = nullptr;
@@ -547,7 +498,6 @@ void Bitmap::fill(Color color)
 
 void Bitmap::set_volatile()
 {
-    VERIFY(m_purgeable);
     if (m_volatile)
         return;
 #ifdef __serenity__
@@ -560,58 +510,58 @@ void Bitmap::set_volatile()
     m_volatile = true;
 }
 
-[[nodiscard]] bool Bitmap::set_nonvolatile()
+[[nodiscard]] bool Bitmap::set_nonvolatile(bool& was_purged)
 {
-    VERIFY(m_purgeable);
-    if (!m_volatile)
+    if (!m_volatile) {
+        was_purged = false;
         return true;
+    }
+
 #ifdef __serenity__
     int rc = madvise(m_data, size_in_bytes(), MADV_SET_NONVOLATILE);
     if (rc < 0) {
+        if (errno == ENOMEM) {
+            was_purged = true;
+            return false;
+        }
         perror("madvise(MADV_SET_NONVOLATILE)");
         VERIFY_NOT_REACHED();
     }
-#else
-    int rc = 0;
+    was_purged = rc != 0;
 #endif
     m_volatile = false;
-    return rc == 0;
+    return true;
 }
 
-#ifdef __serenity__
-ShareableBitmap Bitmap::to_shareable_bitmap() const
+Gfx::ShareableBitmap Bitmap::to_shareable_bitmap() const
 {
-    auto bitmap = to_bitmap_backed_by_anon_fd();
-    if (!bitmap)
+    auto bitmap_or_error = to_bitmap_backed_by_anonymous_buffer();
+    if (bitmap_or_error.is_error())
         return {};
-    return ShareableBitmap(*bitmap);
+    return Gfx::ShareableBitmap { bitmap_or_error.release_value_but_fixme_should_propagate_errors(), Gfx::ShareableBitmap::ConstructWithKnownGoodBitmap };
 }
-#endif
 
-Optional<BackingStore> Bitmap::allocate_backing_store(BitmapFormat format, const IntSize& size, int scale_factor, [[maybe_unused]] Purgeable purgeable)
+ErrorOr<BackingStore> Bitmap::allocate_backing_store(BitmapFormat format, IntSize const& size, int scale_factor)
 {
     if (size_would_overflow(format, size, scale_factor))
-        return {};
+        return Error::from_string_literal("Gfx::Bitmap backing store size overflow"sv);
 
-    const auto pitch = minimum_pitch(size.width() * scale_factor, format);
-    const auto data_size_in_bytes = size_in_bytes(pitch, size.height() * scale_factor);
+    auto const pitch = minimum_pitch(size.width() * scale_factor, format);
+    auto const data_size_in_bytes = size_in_bytes(pitch, size.height() * scale_factor);
 
     int map_flags = MAP_ANONYMOUS | MAP_PRIVATE;
-    if (purgeable == Purgeable::Yes)
-        map_flags |= MAP_NORESERVE;
 #ifdef __serenity__
+    map_flags |= MAP_PURGEABLE;
     void* data = mmap_with_name(nullptr, data_size_in_bytes, PROT_READ | PROT_WRITE, map_flags, 0, 0, String::formatted("GraphicsBitmap [{}]", size).characters());
 #else
     void* data = mmap(nullptr, data_size_in_bytes, PROT_READ | PROT_WRITE, map_flags, 0, 0);
 #endif
-    if (data == MAP_FAILED) {
-        perror("mmap");
-        return {};
-    }
-    return { { data, pitch, data_size_in_bytes } };
+    if (data == MAP_FAILED)
+        return Error::from_errno(errno);
+    return BackingStore { data, pitch, data_size_in_bytes };
 }
 
-void Bitmap::allocate_palette_from_format(BitmapFormat format, const Vector<RGBA32>& source_palette)
+void Bitmap::allocate_palette_from_format(BitmapFormat format, Vector<RGBA32> const& source_palette)
 {
     size_t size = palette_size(format);
     if (size == 0)
@@ -632,5 +582,4 @@ Vector<RGBA32> Bitmap::palette_to_vector() const
         vector.unchecked_append(palette_color(i).value());
     return vector;
 }
-
 }

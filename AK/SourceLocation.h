@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Andrew Kaster <andrewdkaster@gmail.com>
+ * Copyright (c) 2021, Andrew Kaster <akaster@serenityos.org>
  * Copyright (c) 2021, Brian Gianforcaro <bgianf@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -43,7 +43,7 @@ private:
 
 template<>
 struct AK::Formatter<AK::SourceLocation> : AK::Formatter<FormatString> {
-    void format(FormatBuilder& builder, AK::SourceLocation location)
+    ErrorOr<void> format(FormatBuilder& builder, AK::SourceLocation location)
     {
         return AK::Formatter<FormatString>::format(builder, "[{} @ {}:{}]", location.function_name(), location.filename(), location.line_number());
     }

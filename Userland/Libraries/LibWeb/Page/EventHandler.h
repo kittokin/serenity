@@ -17,11 +17,9 @@
 
 namespace Web {
 
-class Frame;
-
 class EventHandler {
 public:
-    explicit EventHandler(Badge<Frame>, Frame&);
+    explicit EventHandler(Badge<HTML::BrowsingContext>, HTML::BrowsingContext&);
     ~EventHandler();
 
     bool handle_mouseup(const Gfx::IntPoint&, unsigned button, unsigned modifiers);
@@ -30,6 +28,7 @@ public:
     bool handle_mousewheel(const Gfx::IntPoint&, unsigned buttons, unsigned modifiers, int wheel_delta);
 
     bool handle_keydown(KeyCode, unsigned modifiers, u32 code_point);
+    bool handle_keyup(KeyCode, unsigned modifiers, u32 code_point);
 
     void set_mouse_event_tracking_layout_node(Layout::Node*);
 
@@ -39,10 +38,10 @@ private:
     bool focus_next_element();
     bool focus_previous_element();
 
-    Layout::InitialContainingBlockBox* layout_root();
-    const Layout::InitialContainingBlockBox* layout_root() const;
+    Layout::InitialContainingBlock* layout_root();
+    const Layout::InitialContainingBlock* layout_root() const;
 
-    Frame& m_frame;
+    HTML::BrowsingContext& m_frame;
 
     bool m_in_mouse_selection { false };
 

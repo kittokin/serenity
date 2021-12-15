@@ -8,74 +8,27 @@
 #pragma once
 
 #include <AK/ByteBuffer.h>
+#include <AK/Error.h>
 #include <AK/MemoryStream.h>
+#include <AK/NonnullRefPtr.h>
+#include <AK/RefPtr.h>
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
+#include <AK/kmalloc.h>
+#include <LibAudio/Sample.h>
 #include <LibCore/AnonymousBuffer.h>
 #include <string.h>
 
 namespace Audio {
-
-// A single sample in an audio buffer.
-// Values are floating point, and should range from -1.0 to +1.0
-struct Frame {
-    Frame()
-        : left(0)
-        , right(0)
-    {
-    }
-
-    // For mono
-    Frame(double left)
-        : left(left)
-        , right(left)
-    {
-    }
-
-    // For stereo
-    Frame(double left, double right)
-        : left(left)
-        , right(right)
-    {
-    }
-
-    void clip()
-    {
-        if (left > 1)
-            left = 1;
-        else if (left < -1)
-            left = -1;
-
-        if (right > 1)
-            right = 1;
-        else if (right < -1)
-            right = -1;
-    }
-
-    void scale(int percent)
-    {
-        double pct = (double)percent / 100.0;
-        left *= pct;
-        right *= pct;
-    }
-
-    Frame& operator+=(const Frame& other)
-    {
-        left += other.left;
-        right += other.right;
-        return *this;
-    }
-
-    double left;
-    double right;
-};
+using namespace AK::Exponentials;
 
 // Supported PCM sample formats.
 enum PcmSampleFormat : u8 {
     Uint8,
     Int16,
     Int24,
+    Int32,
     Float32,
     Float64,
 };
@@ -87,48 +40,69 @@ String sample_format_name(PcmSampleFormat format);
 // Small helper to resample from one playback rate to another
 // This isn't really "smart", in that we just insert (or drop) samples.
 // Should do better...
+template<typename SampleType>
 class ResampleHelper {
 public:
-    ResampleHelper(double source, double target);
+    ResampleHelper(u32 source, u32 target);
 
-    void process_sample(double sample_l, double sample_r);
-    bool read_sample(double& next_l, double& next_r);
+    // To be used as follows:
+    // while the resampler doesn't need a new sample, read_sample(current) and store the resulting samples.
+    // as long as the resampler needs a new sample, process_sample(current)
+
+    // Stores a new sample
+    void process_sample(SampleType sample_l, SampleType sample_r);
+    // Assigns the given sample to its correct value and returns false if there is a new sample required
+    bool read_sample(SampleType& next_l, SampleType& next_r);
+    Vector<SampleType> resample(Vector<SampleType> to_resample);
+
+    void reset();
+
+    u32 source() const { return m_source; }
+    u32 target() const { return m_target; }
 
 private:
-    const double m_ratio;
-    double m_current_ratio { 0 };
-    double m_last_sample_l { 0 };
-    double m_last_sample_r { 0 };
+    const u32 m_source;
+    const u32 m_target;
+    u32 m_current_ratio { 0 };
+    SampleType m_last_sample_l;
+    SampleType m_last_sample_r;
 };
 
-// A buffer of audio samples, normalized to 44100hz.
+// A buffer of audio samples.
 class Buffer : public RefCounted<Buffer> {
 public:
-    static RefPtr<Buffer> from_pcm_data(ReadonlyBytes data, ResampleHelper& resampler, int num_channels, PcmSampleFormat sample_format);
-    static RefPtr<Buffer> from_pcm_stream(InputMemoryStream& stream, ResampleHelper& resampler, int num_channels, PcmSampleFormat sample_format, int num_samples);
-    static NonnullRefPtr<Buffer> create_with_samples(Vector<Frame>&& samples)
+    static ErrorOr<NonnullRefPtr<Buffer>> from_pcm_data(ReadonlyBytes data, int num_channels, PcmSampleFormat sample_format);
+    static ErrorOr<NonnullRefPtr<Buffer>> from_pcm_stream(InputMemoryStream& stream, int num_channels, PcmSampleFormat sample_format, int num_samples);
+    static ErrorOr<NonnullRefPtr<Buffer>> create_with_samples(Vector<Sample>&& samples)
     {
-        return adopt_ref(*new Buffer(move(samples)));
+        return adopt_nonnull_ref_or_enomem(new (nothrow) Buffer(move(samples)));
     }
-    static NonnullRefPtr<Buffer> create_with_anonymous_buffer(Core::AnonymousBuffer buffer, i32 buffer_id, int sample_count)
+    static ErrorOr<NonnullRefPtr<Buffer>> create_with_anonymous_buffer(Core::AnonymousBuffer buffer, i32 buffer_id, int sample_count)
     {
-        return adopt_ref(*new Buffer(move(buffer), buffer_id, sample_count));
+        return adopt_nonnull_ref_or_enomem(new (nothrow) Buffer(move(buffer), buffer_id, sample_count));
+    }
+    static NonnullRefPtr<Buffer> create_empty()
+    {
+        // If we can't allocate an empty buffer, things are in a very bad state.
+        return MUST(adopt_nonnull_ref_or_enomem(new (nothrow) Buffer({})));
     }
 
-    const Frame* samples() const { return (const Frame*)data(); }
+    const Sample* samples() const { return (const Sample*)data(); }
     int sample_count() const { return m_sample_count; }
     const void* data() const { return m_buffer.data<void>(); }
-    int size_in_bytes() const { return m_sample_count * (int)sizeof(Frame); }
+    int size_in_bytes() const { return m_sample_count * (int)sizeof(Sample); }
     int id() const { return m_id; }
     const Core::AnonymousBuffer& anonymous_buffer() const { return m_buffer; }
 
 private:
-    explicit Buffer(const Vector<Frame> samples)
-        : m_buffer(Core::AnonymousBuffer::create_with_size(samples.size() * sizeof(Frame)))
+    explicit Buffer(const Vector<Sample> samples)
+        // FIXME: AnonymousBuffers can't be empty, so even for empty buffers we create a buffer of size 1 here,
+        //        although the sample count is set to 0 to mark this.
+        : m_buffer(Core::AnonymousBuffer::create_with_size(max(samples.size(), 1) * sizeof(Sample)).release_value())
         , m_id(allocate_id())
         , m_sample_count(samples.size())
     {
-        memcpy(m_buffer.data<void>(), samples.data(), samples.size() * sizeof(Frame));
+        memcpy(m_buffer.data<void>(), samples.data(), samples.size() * sizeof(Sample));
     }
 
     explicit Buffer(Core::AnonymousBuffer buffer, i32 buffer_id, int sample_count)
@@ -144,5 +118,8 @@ private:
     const i32 m_id;
     const int m_sample_count;
 };
+
+// This only works for double resamplers, and therefore cannot be part of the class
+ErrorOr<NonnullRefPtr<Buffer>> resample_buffer(ResampleHelper<double>& resampler, Buffer const& to_resample);
 
 }

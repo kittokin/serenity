@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -53,7 +53,7 @@ private:
 class TarOutputStream {
 public:
     TarOutputStream(OutputStream&);
-    void add_file(const String& path, mode_t, const ReadonlyBytes&);
+    void add_file(const String& path, mode_t, ReadonlyBytes);
     void add_directory(const String& path, mode_t);
     void finish();
 

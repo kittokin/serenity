@@ -22,6 +22,11 @@ enum class TrimMode {
     Both
 };
 
+enum class TrimWhitespace {
+    Yes,
+    No,
+};
+
 struct MaskSpan {
     size_t start;
     size_t length;
@@ -38,21 +43,36 @@ struct MaskSpan {
 
 namespace StringUtils {
 
-bool matches(const StringView& str, const StringView& mask, CaseSensitivity = CaseSensitivity::CaseInsensitive, Vector<MaskSpan>* match_spans = nullptr);
+bool matches(StringView str, StringView mask, CaseSensitivity = CaseSensitivity::CaseInsensitive, Vector<MaskSpan>* match_spans = nullptr);
 template<typename T = int>
-Optional<T> convert_to_int(const StringView&);
+Optional<T> convert_to_int(StringView, TrimWhitespace = TrimWhitespace::Yes);
 template<typename T = unsigned>
-Optional<T> convert_to_uint(const StringView&);
+Optional<T> convert_to_uint(StringView, TrimWhitespace = TrimWhitespace::Yes);
 template<typename T = unsigned>
-Optional<T> convert_to_uint_from_hex(const StringView&);
-bool equals_ignoring_case(const StringView&, const StringView&);
-bool ends_with(const StringView& a, const StringView& b, CaseSensitivity);
-bool starts_with(const StringView&, const StringView&, CaseSensitivity);
-bool contains(const StringView&, const StringView&, CaseSensitivity);
-bool is_whitespace(const StringView&);
-StringView trim_whitespace(const StringView&, TrimMode mode);
-Optional<size_t> find(const StringView& haystack, const StringView& needle);
-String to_snakecase(const StringView&);
+Optional<T> convert_to_uint_from_hex(StringView, TrimWhitespace = TrimWhitespace::Yes);
+bool equals_ignoring_case(StringView, StringView);
+bool ends_with(StringView a, StringView b, CaseSensitivity);
+bool starts_with(StringView, StringView, CaseSensitivity);
+bool contains(StringView, StringView, CaseSensitivity);
+bool is_whitespace(StringView);
+StringView trim(StringView string, StringView characters, TrimMode mode);
+StringView trim_whitespace(StringView string, TrimMode mode);
+
+Optional<size_t> find(StringView haystack, char needle, size_t start = 0);
+Optional<size_t> find(StringView haystack, StringView needle, size_t start = 0);
+Optional<size_t> find_last(StringView haystack, char needle);
+Vector<size_t> find_all(StringView haystack, StringView needle);
+enum class SearchDirection {
+    Forward,
+    Backward
+};
+Optional<size_t> find_any_of(StringView haystack, StringView needles, SearchDirection);
+
+String to_snakecase(StringView);
+String to_titlecase(StringView);
+
+String replace(StringView, StringView needle, StringView replacement, bool all_occurrences = false);
+size_t count(StringView, StringView needle);
 
 }
 
@@ -60,3 +80,4 @@ String to_snakecase(const StringView&);
 
 using AK::CaseSensitivity;
 using AK::TrimMode;
+using AK::TrimWhitespace;

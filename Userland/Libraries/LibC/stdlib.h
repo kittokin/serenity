@@ -16,20 +16,25 @@ __BEGIN_DECLS
 
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
-#define MB_CUR_MAX 1
+#define MB_CUR_MAX 4
 
 __attribute__((malloc)) __attribute__((alloc_size(1))) void* malloc(size_t);
 __attribute__((malloc)) __attribute__((alloc_size(1, 2))) void* calloc(size_t nmemb, size_t);
 size_t malloc_size(void*);
+size_t malloc_good_size(size_t);
 void serenity_dump_malloc_stats(void);
 void free(void*);
 __attribute__((alloc_size(2))) void* realloc(void* ptr, size_t);
+__attribute__((malloc, alloc_size(1), alloc_align(2))) void* _aligned_malloc(size_t size, size_t alignment);
+void _aligned_free(void* memblock);
 char* getenv(const char* name);
 char* secure_getenv(const char* name);
 int putenv(char*);
 int unsetenv(const char*);
 int clearenv(void);
 int setenv(const char* name, const char* value, int overwrite);
+const char* getprogname();
+void setprogname(const char*);
 int atoi(const char*);
 long atol(const char*);
 long long atoll(const char*);
@@ -56,11 +61,13 @@ char* mktemp(char*);
 int mkstemp(char*);
 char* mkdtemp(char*);
 void* bsearch(const void* key, const void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*));
+int mblen(char const*, size_t);
 size_t mbstowcs(wchar_t*, const char*, size_t);
 int mbtowc(wchar_t*, const char*, size_t);
 int wctomb(char*, wchar_t);
 size_t wcstombs(char*, const wchar_t*, size_t);
 char* realpath(const char* pathname, char* buffer);
+__attribute__((noreturn)) void _Exit(int status);
 
 #define RAND_MAX 32767
 int rand();
@@ -92,7 +99,5 @@ lldiv_t lldiv(long long, long long);
 int posix_openpt(int flags);
 int grantpt(int fd);
 int unlockpt(int fd);
-
-long getauxval(long type);
 
 __END_DECLS

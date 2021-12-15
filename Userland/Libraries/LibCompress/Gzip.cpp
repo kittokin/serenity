@@ -9,6 +9,7 @@
 
 #include <AK/MemoryStream.h>
 #include <AK/String.h>
+#include <LibCore/DateTime.h>
 
 namespace Compress {
 
@@ -117,14 +118,27 @@ size_t GzipDecompressor::read(Bytes bytes)
                 m_input_stream.discard_or_error(length);
             }
 
+            auto discard_string = [&]() {
+                char next_char;
+                do {
+                    m_input_stream >> next_char;
+                    if (m_input_stream.has_any_error()) {
+                        set_fatal_error();
+                        break;
+                    }
+                } while (next_char);
+            };
+
             if (header.flags & Flags::FNAME) {
-                String original_filename;
-                m_input_stream >> original_filename;
+                discard_string();
+                if (has_any_error())
+                    break;
             }
 
             if (header.flags & Flags::FCOMMENT) {
-                String comment;
-                m_input_stream >> comment;
+                discard_string();
+                if (has_any_error())
+                    break;
             }
 
             if (header.flags & Flags::FHCRC) {
@@ -138,6 +152,19 @@ size_t GzipDecompressor::read(Bytes bytes)
         }
     }
     return total_read;
+}
+
+Optional<String> GzipDecompressor::describe_header(ReadonlyBytes bytes)
+{
+    if (bytes.size() < sizeof(BlockHeader))
+        return {};
+
+    auto& header = *(reinterpret_cast<const BlockHeader*>(bytes.data()));
+    if (!header.valid_magic_number() || !header.supported_by_implementation())
+        return {};
+
+    LittleEndian<u32> original_size = *reinterpret_cast<const u32*>(bytes.offset(bytes.size() - sizeof(u32)));
+    return String::formatted("last modified: {}, original size {}", Core::DateTime::from_timestamp(header.modification_time).to_string(), (u32)original_size);
 }
 
 bool GzipDecompressor::read_or_error(Bytes bytes)
@@ -234,7 +261,7 @@ bool GzipCompressor::write_or_error(ReadonlyBytes bytes)
     return true;
 }
 
-Optional<ByteBuffer> GzipCompressor::compress_all(const ReadonlyBytes& bytes)
+Optional<ByteBuffer> GzipCompressor::compress_all(ReadonlyBytes bytes)
 {
     DuplexMemoryStream output_stream;
     GzipCompressor gzip_stream { output_stream };

@@ -11,7 +11,6 @@
 #include <LibGUI/WindowManagerServerConnection.h>
 #include <LibGUI/WindowServerConnection.h>
 #include <LibGfx/Font.h>
-#include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/StylePainter.h>
 
@@ -54,7 +53,7 @@ void TaskbarButton::resize_event(GUI::ResizeEvent& event)
     return GUI::Button::resize_event(event);
 }
 
-static void paint_custom_progressbar(GUI::Painter& painter, const Gfx::IntRect& rect, const Gfx::IntRect& text_rect, const Palette& palette, int min, int max, int value, const StringView& text, const Gfx::Font& font, Gfx::TextAlignment text_alignment)
+static void paint_custom_progressbar(GUI::Painter& painter, const Gfx::IntRect& rect, const Gfx::IntRect& text_rect, const Palette& palette, int min, int max, int value, StringView text, const Gfx::Font& font, Gfx::TextAlignment text_alignment)
 {
     float range_size = max - min;
     float progress = (value - min) / range_size;
@@ -89,7 +88,7 @@ void TaskbarButton::paint_event(GUI::PaintEvent& event)
 {
     VERIFY(icon());
     auto& icon = *this->icon();
-    auto& font = is_checked() ? Gfx::FontDatabase::default_bold_font() : this->font();
+    auto& font = is_checked() ? this->font().bold_variant() : this->font();
     auto& window = WindowList::the().ensure_window(m_identifier);
 
     GUI::Painter painter(*this);

@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <utime.h>
 
@@ -40,6 +39,7 @@ int main(int argc, char** argv)
 
     Core::ArgsParser args_parser;
     args_parser.set_general_help("Create a file, or update its mtime (time of last modification).");
+    args_parser.add_ignored(nullptr, 'f');
     args_parser.add_positional_argument(paths, "Files to touch", "path", Core::ArgsParser::Required::Yes);
     args_parser.parse(argc, argv);
 

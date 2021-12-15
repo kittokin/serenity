@@ -4,11 +4,22 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/CharacterTypes.h>
 #include <LibGUI/EditingEngine.h>
 #include <LibGUI/Event.h>
 #include <LibGUI/TextEditor.h>
 
 namespace GUI {
+
+constexpr bool is_vim_alphanumeric(u32 code_point)
+{
+    return is_ascii_alphanumeric(code_point) || code_point == '_';
+}
+
+constexpr bool is_vim_punctuation(u32 code_point)
+{
+    return is_ascii_punctuation(code_point) && code_point != '_';
+}
 
 EditingEngine::~EditingEngine()
 {
@@ -29,9 +40,9 @@ void EditingEngine::detach()
 bool EditingEngine::on_key(const KeyEvent& event)
 {
     if (event.key() == KeyCode::Key_Left) {
-        if (!event.shift() && m_editor->selection()->is_valid()) {
-            m_editor->set_cursor(m_editor->selection()->normalized().start());
-            m_editor->selection()->clear();
+        if (!event.shift() && m_editor->selection().is_valid()) {
+            m_editor->set_cursor(m_editor->selection().normalized().start());
+            m_editor->selection().clear();
             m_editor->did_update_selection();
             if (!event.ctrl()) {
                 m_editor->update();
@@ -41,25 +52,25 @@ bool EditingEngine::on_key(const KeyEvent& event)
         if (event.ctrl()) {
             m_editor->update_selection(event.shift());
             move_to_previous_span();
-            if (event.shift() && m_editor->selection()->start().is_valid()) {
-                m_editor->selection()->set_end(m_editor->cursor());
+            if (event.shift() && m_editor->selection().start().is_valid()) {
+                m_editor->selection().set_end(m_editor->cursor());
                 m_editor->did_update_selection();
             }
             return true;
         }
         m_editor->update_selection(event.shift());
         move_one_left();
-        if (event.shift() && m_editor->selection()->start().is_valid()) {
-            m_editor->selection()->set_end(m_editor->cursor());
+        if (event.shift() && m_editor->selection().start().is_valid()) {
+            m_editor->selection().set_end(m_editor->cursor());
             m_editor->did_update_selection();
         }
         return true;
     }
 
     if (event.key() == KeyCode::Key_Right) {
-        if (!event.shift() && m_editor->selection()->is_valid()) {
-            m_editor->set_cursor(m_editor->selection()->normalized().end());
-            m_editor->selection()->clear();
+        if (!event.shift() && m_editor->selection().is_valid()) {
+            m_editor->set_cursor(m_editor->selection().normalized().end());
+            m_editor->selection().clear();
             m_editor->did_update_selection();
             if (!event.ctrl()) {
                 m_editor->update();
@@ -67,13 +78,18 @@ bool EditingEngine::on_key(const KeyEvent& event)
             }
         }
         if (event.ctrl()) {
-            move_to_next_span(event);
+            m_editor->update_selection(event.shift());
+            move_to_next_span();
+            if (event.shift() && m_editor->selection().start().is_valid()) {
+                m_editor->selection().set_end(m_editor->cursor());
+                m_editor->did_update_selection();
+            }
             return true;
         }
         m_editor->update_selection(event.shift());
         move_one_right();
-        if (event.shift() && m_editor->selection()->start().is_valid()) {
-            m_editor->selection()->set_end(m_editor->cursor());
+        if (event.shift() && m_editor->selection().start().is_valid()) {
+            m_editor->selection().set_end(m_editor->cursor());
             m_editor->did_update_selection();
         }
         return true;
@@ -84,8 +100,8 @@ bool EditingEngine::on_key(const KeyEvent& event)
             m_editor->update_selection(event.shift());
         }
         move_one_up(event);
-        if (event.shift() && m_editor->selection()->start().is_valid()) {
-            m_editor->selection()->set_end(m_editor->cursor());
+        if (event.shift() && m_editor->selection().start().is_valid()) {
+            m_editor->selection().set_end(m_editor->cursor());
             m_editor->did_update_selection();
         }
         return true;
@@ -96,45 +112,37 @@ bool EditingEngine::on_key(const KeyEvent& event)
             m_editor->update_selection(event.shift());
         }
         move_one_down(event);
-        if (event.shift() && m_editor->selection()->start().is_valid()) {
-            m_editor->selection()->set_end(m_editor->cursor());
+        if (event.shift() && m_editor->selection().start().is_valid()) {
+            m_editor->selection().set_end(m_editor->cursor());
             m_editor->did_update_selection();
         }
         return true;
     }
 
     if (event.key() == KeyCode::Key_Home) {
+        m_editor->update_selection(event.shift());
         if (event.ctrl()) {
             move_to_first_line();
-            if (event.shift() && m_editor->selection()->start().is_valid()) {
-                m_editor->selection()->set_end(m_editor->cursor());
-                m_editor->did_update_selection();
-            }
         } else {
-            m_editor->update_selection(event.shift());
             move_to_line_beginning();
-            if (event.shift() && m_editor->selection()->start().is_valid()) {
-                m_editor->selection()->set_end(m_editor->cursor());
-                m_editor->did_update_selection();
-            }
+        }
+        if (event.shift() && m_editor->selection().start().is_valid()) {
+            m_editor->selection().set_end(m_editor->cursor());
+            m_editor->did_update_selection();
         }
         return true;
     }
 
     if (event.key() == KeyCode::Key_End) {
+        m_editor->update_selection(event.shift());
         if (event.ctrl()) {
             move_to_last_line();
-            if (event.shift() && m_editor->selection()->start().is_valid()) {
-                m_editor->selection()->set_end(m_editor->cursor());
-                m_editor->did_update_selection();
-            }
         } else {
-            m_editor->update_selection(event.shift());
             move_to_line_end();
-            if (event.shift() && m_editor->selection()->start().is_valid()) {
-                m_editor->selection()->set_end(m_editor->cursor());
-                m_editor->did_update_selection();
-            }
+        }
+        if (event.shift() && m_editor->selection().start().is_valid()) {
+            m_editor->selection().set_end(m_editor->cursor());
+            m_editor->did_update_selection();
         }
         return true;
     }
@@ -144,8 +152,8 @@ bool EditingEngine::on_key(const KeyEvent& event)
             m_editor->update_selection(event.shift());
         }
         move_page_up();
-        if (event.shift() && m_editor->selection()->start().is_valid()) {
-            m_editor->selection()->set_end(m_editor->cursor());
+        if (event.shift() && m_editor->selection().start().is_valid()) {
+            m_editor->selection().set_end(m_editor->cursor());
             m_editor->did_update_selection();
         }
         return true;
@@ -156,8 +164,8 @@ bool EditingEngine::on_key(const KeyEvent& event)
             m_editor->update_selection(event.shift());
         }
         move_page_down();
-        if (event.shift() && m_editor->selection()->start().is_valid()) {
-            m_editor->selection()->set_end(m_editor->cursor());
+        if (event.shift() && m_editor->selection().start().is_valid()) {
+            m_editor->selection().set_end(m_editor->cursor());
             m_editor->did_update_selection();
         }
         return true;
@@ -209,7 +217,7 @@ void EditingEngine::move_to_previous_span()
     m_editor->set_cursor(new_cursor);
 }
 
-void EditingEngine::move_to_next_span(const KeyEvent& event)
+void EditingEngine::move_to_next_span()
 {
     TextPosition new_cursor;
     if (m_editor->document().has_spans()) {
@@ -224,40 +232,44 @@ void EditingEngine::move_to_next_span(const KeyEvent& event)
         new_cursor = m_editor->document().first_word_break_after(m_editor->cursor());
     }
     m_editor->set_cursor(new_cursor);
-    if (event.shift() && m_editor->selection()->start().is_valid()) {
-        m_editor->selection()->set_end(m_editor->cursor());
-        m_editor->did_update_selection();
+}
+
+void EditingEngine::move_to_logical_line_beginning()
+{
+    TextPosition new_cursor;
+    size_t first_nonspace_column = m_editor->current_line().first_non_whitespace_column();
+    if (m_editor->cursor().column() == first_nonspace_column) {
+        new_cursor = { m_editor->cursor().line(), 0 };
+    } else {
+        new_cursor = { m_editor->cursor().line(), first_nonspace_column };
     }
+    m_editor->set_cursor(new_cursor);
 }
 
 void EditingEngine::move_to_line_beginning()
 {
-    TextPosition new_cursor;
     if (m_editor->is_wrapping_enabled()) {
         // FIXME: Replicate the first_nonspace_column behavior in wrapping mode.
         auto home_position = m_editor->cursor_content_rect().location().translated(-m_editor->width(), 0);
-        new_cursor = m_editor->text_position_at_content_position(home_position);
+        m_editor->set_cursor(m_editor->text_position_at_content_position(home_position));
     } else {
-        size_t first_nonspace_column = m_editor->current_line().first_non_whitespace_column();
-        if (m_editor->cursor().column() == first_nonspace_column) {
-            new_cursor = { m_editor->cursor().line(), 0 };
-        } else {
-            new_cursor = { m_editor->cursor().line(), first_nonspace_column };
-        }
+        move_to_logical_line_beginning();
     }
-    m_editor->set_cursor(new_cursor);
 }
 
 void EditingEngine::move_to_line_end()
 {
-    TextPosition new_cursor;
     if (m_editor->is_wrapping_enabled()) {
         auto end_position = m_editor->cursor_content_rect().location().translated(m_editor->width(), 0);
-        new_cursor = m_editor->text_position_at_content_position(end_position);
+        m_editor->set_cursor(m_editor->text_position_at_content_position(end_position));
     } else {
-        new_cursor = { m_editor->cursor().line(), m_editor->current_line().length() };
+        move_to_logical_line_end();
     }
-    m_editor->set_cursor(new_cursor);
+}
+
+void EditingEngine::move_to_logical_line_end()
+{
+    m_editor->set_cursor({ m_editor->cursor().line(), m_editor->current_line().length() });
 }
 
 void EditingEngine::move_one_up(const KeyEvent& event)
@@ -379,15 +391,7 @@ TextPosition EditingEngine::find_beginning_of_next_word()
      * If the end of the input is reached, jump there
      */
 
-    auto vim_isalnum = [](int c) {
-        return c == '_' || isalnum(c);
-    };
-
-    auto vim_ispunct = [](int c) {
-        return c != '_' && ispunct(c);
-    };
-
-    bool started_on_punct = vim_ispunct(m_editor->current_line().to_utf8().characters()[m_editor->cursor().column()]);
+    bool started_on_punct = is_vim_punctuation(m_editor->current_line().to_utf8().characters()[m_editor->cursor().column()]);
     bool has_seen_whitespace = false;
     bool is_first_line = true;
     auto& lines = m_editor->lines();
@@ -409,18 +413,18 @@ TextPosition EditingEngine::find_beginning_of_next_word()
             const u32* line_chars = line.view().code_points();
             const u32 current_char = line_chars[column_index];
 
-            if (started_on_punct && vim_isalnum(current_char)) {
+            if (started_on_punct && is_vim_alphanumeric(current_char)) {
                 return { line_index, column_index };
             }
 
-            if (vim_ispunct(current_char) && !started_on_punct) {
+            if (is_vim_punctuation(current_char) && !started_on_punct) {
                 return { line_index, column_index };
             }
 
-            if (isspace(current_char))
+            if (is_ascii_space(current_char))
                 has_seen_whitespace = true;
 
-            if (has_seen_whitespace && (vim_isalnum(current_char) || vim_ispunct(current_char))) {
+            if (has_seen_whitespace && (is_vim_alphanumeric(current_char) || is_vim_punctuation(current_char))) {
                 return { line_index, column_index };
             }
 
@@ -449,14 +453,6 @@ TextPosition EditingEngine::find_end_of_next_word()
      * If the end of the input is reached, jump there
      */
 
-    auto vim_isalnum = [](int c) {
-        return c == '_' || isalnum(c);
-    };
-
-    auto vim_ispunct = [](int c) {
-        return c != '_' && ispunct(c);
-    };
-
     bool is_first_line = true;
     bool is_first_iteration = true;
     auto& lines = m_editor->lines();
@@ -481,7 +477,7 @@ TextPosition EditingEngine::find_end_of_next_word()
             const u32* line_chars = line.view().code_points();
             const u32 current_char = line_chars[column_index];
 
-            if (column_index == lines.at(line_index).length() - 1 && !is_first_iteration && (vim_isalnum(current_char) || vim_ispunct(current_char)))
+            if (column_index == lines.at(line_index).length() - 1 && !is_first_iteration && (is_vim_alphanumeric(current_char) || is_vim_punctuation(current_char)))
                 return { line_index, column_index };
             else if (column_index == lines.at(line_index).length() - 1) {
                 is_first_iteration = false;
@@ -490,10 +486,10 @@ TextPosition EditingEngine::find_end_of_next_word()
 
             const u32 next_char = line_chars[column_index + 1];
 
-            if (!is_first_iteration && vim_isalnum(current_char) && (isspace(next_char) || vim_ispunct(next_char)))
+            if (!is_first_iteration && is_vim_alphanumeric(current_char) && (is_ascii_space(next_char) || is_vim_punctuation(next_char)))
                 return { line_index, column_index };
 
-            if (!is_first_iteration && vim_ispunct(current_char) && (isspace(next_char) || vim_isalnum(next_char)))
+            if (!is_first_iteration && is_vim_punctuation(current_char) && (is_ascii_space(next_char) || is_vim_alphanumeric(next_char)))
                 return { line_index, column_index };
 
             if (line_index == lines.size() - 1 && column_index == line.length() - 1) {
@@ -513,15 +509,7 @@ void EditingEngine::move_to_end_of_next_word()
 
 TextPosition EditingEngine::find_end_of_previous_word()
 {
-    auto vim_isalnum = [](int c) {
-        return c == '_' || isalnum(c);
-    };
-
-    auto vim_ispunct = [](int c) {
-        return c != '_' && ispunct(c);
-    };
-
-    bool started_on_punct = vim_ispunct(m_editor->current_line().to_utf8().characters()[m_editor->cursor().column()]);
+    bool started_on_punct = is_vim_punctuation(m_editor->current_line().to_utf8().characters()[m_editor->cursor().column()]);
     bool is_first_line = true;
     bool has_seen_whitespace = false;
     auto& lines = m_editor->lines();
@@ -545,19 +533,19 @@ TextPosition EditingEngine::find_end_of_previous_word()
             const u32* line_chars = line.view().code_points();
             const u32 current_char = line_chars[column_index];
 
-            if (started_on_punct && vim_isalnum(current_char)) {
+            if (started_on_punct && is_vim_alphanumeric(current_char)) {
                 return { line_index, column_index };
             }
 
-            if (vim_ispunct(current_char) && !started_on_punct) {
+            if (is_vim_punctuation(current_char) && !started_on_punct) {
                 return { line_index, column_index };
             }
 
-            if (isspace(current_char)) {
+            if (is_ascii_space(current_char)) {
                 has_seen_whitespace = true;
             }
 
-            if (has_seen_whitespace && (vim_isalnum(current_char) || vim_ispunct(current_char))) {
+            if (has_seen_whitespace && (is_vim_alphanumeric(current_char) || is_vim_punctuation(current_char))) {
                 return { line_index, column_index };
             }
 
@@ -580,14 +568,6 @@ void EditingEngine::move_to_end_of_previous_word()
 
 TextPosition EditingEngine::find_beginning_of_previous_word()
 {
-    auto vim_isalnum = [](int c) {
-        return c == '_' || isalnum(c);
-    };
-
-    auto vim_ispunct = [](int c) {
-        return c != '_' && ispunct(c);
-    };
-
     bool is_first_iterated_line = true;
     bool is_first_iteration = true;
     auto& lines = m_editor->lines();
@@ -618,7 +598,7 @@ TextPosition EditingEngine::find_beginning_of_previous_word()
             const u32* line_chars = line.view().code_points();
             const u32 current_char = line_chars[column_index];
 
-            if (column_index == 0 && !is_first_iteration && (vim_isalnum(current_char) || vim_ispunct(current_char))) {
+            if (column_index == 0 && !is_first_iteration && (is_vim_alphanumeric(current_char) || is_vim_punctuation(current_char))) {
                 return { line_index, column_index };
             } else if (line_index == 0 && column_index == 0) {
                 return { line_index, column_index };
@@ -629,10 +609,10 @@ TextPosition EditingEngine::find_beginning_of_previous_word()
 
             const u32 next_char = line_chars[column_index - 1];
 
-            if (!is_first_iteration && vim_isalnum(current_char) && (isspace(next_char) || vim_ispunct(next_char)))
+            if (!is_first_iteration && is_vim_alphanumeric(current_char) && (is_ascii_space(next_char) || is_vim_punctuation(next_char)))
                 return { line_index, column_index };
 
-            if (!is_first_iteration && vim_ispunct(current_char) && (isspace(next_char) || vim_isalnum(next_char)))
+            if (!is_first_iteration && is_vim_punctuation(current_char) && (is_ascii_space(next_char) || is_vim_alphanumeric(next_char)))
                 return { line_index, column_index };
 
             is_first_iteration = false;
@@ -662,8 +642,8 @@ void EditingEngine::move_selected_lines_up()
     m_editor->set_cursor({ first_line - 1, 0 });
 
     if (m_editor->has_selection()) {
-        m_editor->selection()->set_start({ first_line - 1, 0 });
-        m_editor->selection()->set_end({ last_line - 1, m_editor->line(last_line - 1).length() });
+        m_editor->selection().set_start({ first_line - 1, 0 });
+        m_editor->selection().set_end({ last_line - 1, m_editor->line(last_line - 1).length() });
     }
 
     m_editor->did_change();
@@ -687,8 +667,8 @@ void EditingEngine::move_selected_lines_down()
     m_editor->set_cursor({ first_line + 1, 0 });
 
     if (m_editor->has_selection()) {
-        m_editor->selection()->set_start({ first_line + 1, 0 });
-        m_editor->selection()->set_end({ last_line + 1, m_editor->line(last_line + 1).length() });
+        m_editor->selection().set_start({ first_line + 1, 0 });
+        m_editor->selection().set_end({ last_line + 1, m_editor->line(last_line + 1).length() });
     }
 
     m_editor->did_change();

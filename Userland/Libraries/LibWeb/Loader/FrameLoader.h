@@ -12,6 +12,8 @@
 
 namespace Web {
 
+constexpr size_t maximum_redirects_allowed = 20;
+
 class FrameLoader final
     : public ResourceClient {
 public:
@@ -21,26 +23,28 @@ public:
         IFrame,
     };
 
-    explicit FrameLoader(Frame&);
+    explicit FrameLoader(HTML::BrowsingContext&);
     ~FrameLoader();
 
-    bool load(const URL&, Type);
-    bool load(const LoadRequest&, Type);
+    bool load(const AK::URL&, Type);
+    bool load(LoadRequest&, Type);
 
-    void load_html(const StringView&, const URL&);
+    void load_html(StringView, const AK::URL&);
 
-    Frame& frame() { return m_frame; }
-    const Frame& frame() const { return m_frame; }
+    HTML::BrowsingContext& browsing_context() { return m_browsing_context; }
+    HTML::BrowsingContext const& browsing_context() const { return m_browsing_context; }
 
 private:
     // ^ResourceClient
     virtual void resource_did_load() override;
     virtual void resource_did_fail() override;
 
-    void load_error_page(const URL& failed_url, const String& error_message);
+    void load_error_page(const AK::URL& failed_url, const String& error_message);
+    void load_favicon(RefPtr<Gfx::Bitmap> bitmap = nullptr);
     bool parse_document(DOM::Document&, const ByteBuffer& data);
 
-    Frame& m_frame;
+    HTML::BrowsingContext& m_browsing_context;
+    size_t m_redirects_count { 0 };
 };
 
 }

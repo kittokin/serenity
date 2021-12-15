@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020, Andrew Kaster <andrewdkaster@gmail.com>
+ * Copyright (c) 2019-2020, Andrew Kaster <akaster@serenityos.org>
  * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -8,6 +8,7 @@
 #pragma once
 
 #include <AK/Assertions.h>
+#include <AK/Concepts.h>
 #include <AK/RefCounted.h>
 #include <AK/String.h>
 #include <Kernel/VirtualAddress.h>
@@ -19,6 +20,7 @@ namespace ELF {
 class DynamicObject : public RefCounted<DynamicObject> {
 public:
     static NonnullRefPtr<DynamicObject> create(const String& filename, VirtualAddress base_address, VirtualAddress dynamic_section_address);
+    static const char* name_for_dtag(ElfW(Sword) d_tag);
 
     ~DynamicObject();
     void dump() const;
@@ -37,7 +39,7 @@ public:
         {
         }
 
-        ~DynamicEntry() { }
+        ~DynamicEntry() = default;
 
         ElfW(Sword) tag() const { return m_dyn.d_tag; }
         ElfW(Addr) ptr() const { return m_dyn.d_un.d_ptr; }
@@ -59,13 +61,27 @@ public:
         StringView name() const { return m_dynamic.symbol_string_table_string(m_sym.st_name); }
         const char* raw_name() const { return m_dynamic.raw_symbol_string_table_string(m_sym.st_name); }
         unsigned section_index() const { return m_sym.st_shndx; }
-        unsigned value() const { return m_sym.st_value; }
-        unsigned size() const { return m_sym.st_size; }
+        FlatPtr value() const { return m_sym.st_value; }
+        size_t size() const { return m_sym.st_size; }
         unsigned index() const { return m_index; }
-        unsigned type() const { return ELF32_ST_TYPE(m_sym.st_info); }
+#if ARCH(I386)
+        unsigned type() const
+        {
+            return ELF32_ST_TYPE(m_sym.st_info);
+        }
         unsigned bind() const { return ELF32_ST_BIND(m_sym.st_info); }
+#else
+        unsigned type() const
+        {
+            return ELF64_ST_TYPE(m_sym.st_info);
+        }
+        unsigned bind() const { return ELF64_ST_BIND(m_sym.st_info); }
+#endif
 
-        bool is_undefined() const { return section_index() == 0; }
+        bool is_undefined() const
+        {
+            return section_index() == 0;
+        }
 
         VirtualAddress address() const
         {
@@ -83,7 +99,7 @@ public:
 
     class Section {
     public:
-        Section(const DynamicObject& dynamic, unsigned section_offset, unsigned section_size_bytes, unsigned entry_size, const StringView& name)
+        Section(const DynamicObject& dynamic, unsigned section_offset, unsigned section_size_bytes, unsigned entry_size, StringView name)
             : m_dynamic(dynamic)
             , m_section_offset(section_offset)
             , m_section_size_bytes(section_size_bytes)
@@ -118,44 +134,75 @@ public:
 
     class RelocationSection : public Section {
     public:
-        explicit RelocationSection(const Section& section)
+        explicit RelocationSection(const Section& section, bool addend_used)
             : Section(section.m_dynamic, section.m_section_offset, section.m_section_size_bytes, section.m_entry_size, section.m_name)
+            , m_addend_used(addend_used)
         {
         }
         unsigned relocation_count() const { return entry_count(); }
         Relocation relocation(unsigned index) const;
         Relocation relocation_at_offset(unsigned offset) const;
-        template<typename F>
+
+        template<IteratorFunction<DynamicObject::Relocation&> F>
         void for_each_relocation(F) const;
+        template<VoidFunction<DynamicObject::Relocation&> F>
+        void for_each_relocation(F func) const;
+
+    private:
+        const bool m_addend_used;
     };
 
     class Relocation {
     public:
-        Relocation(const DynamicObject& dynamic, const ElfW(Rel) & rel, unsigned offset_in_section)
+        Relocation(const DynamicObject& dynamic, const ElfW(Rela) & rel, unsigned offset_in_section, bool addend_used)
             : m_dynamic(dynamic)
             , m_rel(rel)
             , m_offset_in_section(offset_in_section)
+            , m_addend_used(addend_used)
         {
         }
 
-        ~Relocation() { }
+        ~Relocation() = default;
 
         unsigned offset_in_section() const { return m_offset_in_section; }
         unsigned offset() const { return m_rel.r_offset; }
-        unsigned type() const { return ELF32_R_TYPE(m_rel.r_info); }
+#if ARCH(I386)
+        unsigned type() const
+        {
+            return ELF32_R_TYPE(m_rel.r_info);
+        }
         unsigned symbol_index() const { return ELF32_R_SYM(m_rel.r_info); }
-        Symbol symbol() const { return m_dynamic.symbol(symbol_index()); }
+#else
+        unsigned type() const
+        {
+            return ELF64_R_TYPE(m_rel.r_info);
+        }
+        unsigned symbol_index() const { return ELF64_R_SYM(m_rel.r_info); }
+#endif
+        unsigned addend() const
+        {
+            VERIFY(m_addend_used);
+            return m_rel.r_addend;
+        }
+        bool addend_used() const { return m_addend_used; }
+
+        Symbol symbol() const
+        {
+            return m_dynamic.symbol(symbol_index());
+        }
         VirtualAddress address() const
         {
             if (m_dynamic.elf_is_dynamic())
                 return m_dynamic.base_address().offset(offset());
             return VirtualAddress { offset() };
         }
+        [[nodiscard]] DynamicObject const& dynamic_object() const { return m_dynamic; }
 
     private:
         const DynamicObject& m_dynamic;
-        const ElfW(Rel) & m_rel;
+        const ElfW(Rela) & m_rel;
         const unsigned m_offset_in_section;
+        const bool m_addend_used;
     };
 
     enum class HashType {
@@ -165,7 +212,7 @@ public:
 
     class HashSymbol {
     public:
-        HashSymbol(const StringView& name)
+        HashSymbol(StringView name)
             : m_name(name)
         {
         }
@@ -196,8 +243,8 @@ public:
         }
 
     private:
-        Optional<Symbol> lookup_sysv_symbol(const StringView& name, u32 hash_value) const;
-        Optional<Symbol> lookup_gnu_symbol(const StringView& name, u32 hash) const;
+        Optional<Symbol> lookup_sysv_symbol(StringView name, u32 hash_value) const;
+        Optional<Symbol> lookup_gnu_symbol(StringView name, u32 hash) const;
 
         HashType m_hash_type {};
     };
@@ -251,16 +298,18 @@ public:
     ElfW(Half) program_header_count() const;
     const ElfW(Phdr) * program_headers() const;
 
-    template<typename F>
+    template<VoidFunction<StringView> F>
     void for_each_needed_library(F) const;
 
-    template<typename F>
+    template<VoidFunction<InitializationFunction&> F>
     void for_each_initialization_array_function(F f) const;
 
-    template<typename F>
+    template<IteratorFunction<DynamicEntry&> F>
     void for_each_dynamic_entry(F) const;
+    template<VoidFunction<DynamicEntry&> F>
+    void for_each_dynamic_entry(F func) const;
 
-    template<typename F>
+    template<VoidFunction<Symbol&> F>
     void for_each_symbol(F) const;
 
     struct SymbolLookupResult {
@@ -271,7 +320,7 @@ public:
         const ELF::DynamicObject* dynamic_object { nullptr }; // The object in which the symbol is defined
     };
 
-    Optional<SymbolLookupResult> lookup_symbol(const StringView& name) const;
+    Optional<SymbolLookupResult> lookup_symbol(StringView name) const;
     Optional<SymbolLookupResult> lookup_symbol(const HashSymbol& symbol) const;
 
     // Will be called from _fixup_plt_entry, as part of the PLT trampoline
@@ -279,7 +328,7 @@ public:
 
     bool elf_is_dynamic() const { return m_is_elf_dynamic; }
 
-    void* symbol_for_name(const StringView& name);
+    void* symbol_for_name(StringView name);
 
 private:
     explicit DynamicObject(const String& filename, VirtualAddress base_address, VirtualAddress dynamic_section_address);
@@ -323,6 +372,7 @@ private:
     size_t m_number_of_relocations { 0 };
     size_t m_size_of_relocation_entry { 0 };
     size_t m_size_of_relocation_table { 0 };
+    bool m_addend_used { false };
     FlatPtr m_relocation_table_offset { 0 };
     bool m_is_elf_dynamic { false };
 
@@ -341,7 +391,7 @@ private:
     // End Section information from DT_* entries
 };
 
-template<typename F>
+template<IteratorFunction<DynamicObject::Relocation&> F>
 inline void DynamicObject::RelocationSection::for_each_relocation(F func) const
 {
     for (unsigned i = 0; i < relocation_count(); ++i) {
@@ -353,16 +403,24 @@ inline void DynamicObject::RelocationSection::for_each_relocation(F func) const
     }
 }
 
-template<typename F>
+template<VoidFunction<DynamicObject::Relocation&> F>
+inline void DynamicObject::RelocationSection::for_each_relocation(F func) const
+{
+    for_each_relocation([&](auto& reloc) {
+        func(reloc);
+        return IterationDecision::Continue;
+    });
+}
+
+template<VoidFunction<DynamicObject::Symbol&> F>
 inline void DynamicObject::for_each_symbol(F func) const
 {
     for (unsigned i = 0; i < symbol_count(); ++i) {
-        if (func(symbol(i)) == IterationDecision::Break)
-            break;
+        func(symbol(i));
     }
 }
 
-template<typename F>
+template<IteratorFunction<DynamicObject::DynamicEntry&> F>
 inline void DynamicObject::for_each_dynamic_entry(F func) const
 {
     auto* dyns = reinterpret_cast<const ElfW(Dyn)*>(m_dynamic_address.as_ptr());
@@ -374,21 +432,29 @@ inline void DynamicObject::for_each_dynamic_entry(F func) const
             break;
     }
 }
-template<typename F>
-inline void DynamicObject::for_each_needed_library(F func) const
+
+template<VoidFunction<DynamicObject::DynamicEntry&> F>
+inline void DynamicObject::for_each_dynamic_entry(F func) const
 {
-    for_each_dynamic_entry([func, this](auto entry) {
-        if (entry.tag() != DT_NEEDED)
-            return IterationDecision::Continue;
-        ElfW(Word) offset = entry.val();
-        StringView name { (const char*)(m_base_address.offset(m_string_table_offset).offset(offset)).as_ptr() };
-        if (func(StringView(name)) == IterationDecision::Break)
-            return IterationDecision::Break;
+    for_each_dynamic_entry([&](auto& dyn) {
+        func(dyn);
         return IterationDecision::Continue;
     });
 }
 
-template<typename F>
+template<VoidFunction<StringView> F>
+inline void DynamicObject::for_each_needed_library(F func) const
+{
+    for_each_dynamic_entry([func, this](auto entry) {
+        if (entry.tag() != DT_NEEDED)
+            return;
+        ElfW(Word) offset = entry.val();
+        StringView name { (const char*)(m_base_address.offset(m_string_table_offset).offset(offset)).as_ptr() };
+        func(name);
+    });
+}
+
+template<VoidFunction<DynamicObject::InitializationFunction&> F>
 void DynamicObject::for_each_initialization_array_function(F f) const
 {
     if (!has_init_array_section())

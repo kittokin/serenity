@@ -5,18 +5,19 @@
  */
 
 #include <AK/Singleton.h>
-#include <Kernel/ACPI/Parser.h>
 #include <Kernel/CommandLine.h>
 #include <Kernel/Devices/HID/HIDManagement.h>
 #include <Kernel/Devices/HID/I8042Controller.h>
+#include <Kernel/Firmware/ACPI/Parser.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
 Atomic<bool> g_caps_lock_remapped_to_ctrl;
-static AK::Singleton<HIDManagement> s_the;
+static Singleton<HIDManagement> s_the;
 
 // clang-format off
-static const Keyboard::CharacterMapData DEFAULT_CHARACTER_MAP =
+static constexpr Keyboard::CharacterMapData DEFAULT_CHARACTER_MAP =
 {
     .map = {
         0,    '\033',    '1',    '2',    '3',    '4',    '5',    '6',    '7',    '8',    '9',    '0',    '-',    '=',    0x08,
@@ -74,10 +75,6 @@ static const Keyboard::CharacterMapData DEFAULT_CHARACTER_MAP =
 };
 // clang-format on
 
-KeyboardClient::~KeyboardClient()
-{
-}
-
 size_t HIDManagement::generate_minor_device_number_for_mouse()
 {
     // FIXME: Lock this to prevent race conditions with hot-plugging devices!
@@ -107,12 +104,15 @@ UNMAP_AFTER_INIT void HIDManagement::enumerate()
     // emulation of the PS/2 controller if it was set by the BIOS.
     // If ACPI indicates we have an i8042 controller and the USB controller was
     // set to emulate PS/2, we should not initialize the PS/2 controller.
-    if (!ACPI::Parser::the()->have_8042() || kernel_command_line().disable_ps2_controller())
+    if (kernel_command_line().disable_ps2_controller())
+        return;
+    if (ACPI::Parser::the() && !ACPI::Parser::the()->have_8042())
         return;
     m_i8042_controller = I8042Controller::initialize();
     m_i8042_controller->detect_devices();
     if (m_i8042_controller->mouse())
         m_hid_devices.append(m_i8042_controller->mouse().release_nonnull());
+
     if (m_i8042_controller->keyboard())
         m_hid_devices.append(m_i8042_controller->keyboard().release_nonnull());
 }

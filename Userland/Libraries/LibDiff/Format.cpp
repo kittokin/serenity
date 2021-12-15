@@ -14,9 +14,9 @@ String generate_only_additions(const String& text)
 {
     auto lines = text.split('\n', true); // Keep empty
     StringBuilder builder;
-    builder.appendf("@@ -0,0 +1,%zu @@\n", lines.size());
+    builder.appendff("@@ -0,0 +1,{} @@\n", lines.size());
     for (const auto& line : lines) {
-        builder.appendf("+%s\n", line.characters());
+        builder.appendff("+{}\n", line);
     }
     return builder.to_string();
 }

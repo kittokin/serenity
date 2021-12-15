@@ -1,14 +1,18 @@
 /*
- * Copyright (c) 2021, the SerenityOS Developers
+ * Copyright (c) 2021, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "WelcomeWidget.h"
+#include <AK/Random.h>
 #include <Applications/Welcome/WelcomeWindowGML.h>
+#include <LibConfig/Client.h>
 #include <LibCore/File.h>
+#include <LibCore/Process.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/CheckBox.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/BitmapFont.h>
@@ -16,8 +20,6 @@
 #include <LibMarkdown/Document.h>
 #include <LibWeb/OutOfProcessWebView.h>
 #include <serenity.h>
-#include <spawn.h>
-#include <time.h>
 
 WelcomeWidget::WelcomeWidget()
 {
@@ -28,15 +30,15 @@ WelcomeWidget::WelcomeWidget()
     tip_frame.set_fill_with_background_color(true);
 
     auto& light_bulb_label = *find_descendant_of_type_named<GUI::Label>("light_bulb_label");
-    light_bulb_label.set_icon(Gfx::Bitmap::load_from_file("/res/icons/32x32/app-welcome.png"));
+    light_bulb_label.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/32x32/app-welcome.png").release_value_but_fixme_should_propagate_errors());
 
     m_web_view = *find_descendant_of_type_named<Web::OutOfProcessWebView>("web_view");
 
     m_tip_label = *find_descendant_of_type_named<GUI::Label>("tip_label");
 
     m_next_button = *find_descendant_of_type_named<GUI::Button>("next_button");
-    m_next_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/go-forward.png"));
-    m_next_button->on_click = [&]() {
+    m_next_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png").release_value_but_fixme_should_propagate_errors());
+    m_next_button->on_click = [&](auto) {
         if (!tip_frame.is_visible()) {
             m_web_view->set_visible(false);
             tip_frame.set_visible(true);
@@ -50,32 +52,31 @@ WelcomeWidget::WelcomeWidget()
     };
 
     m_help_button = *find_descendant_of_type_named<GUI::Button>("help_button");
-    m_help_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/book-open.png"));
-    m_help_button->on_click = []() {
-        pid_t pid;
-        const char* argv[] = { "Help", nullptr };
-        if ((errno = posix_spawn(&pid, "/bin/Help", nullptr, nullptr, const_cast<char**>(argv), environ))) {
-            perror("posix_spawn");
-        } else {
-            if (disown(pid) < 0)
-                perror("disown");
-        }
+    m_help_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/book-open.png").release_value_but_fixme_should_propagate_errors());
+    m_help_button->on_click = [](auto) {
+        Core::Process::spawn("/bin/Help"sv);
     };
 
     m_new_button = *find_descendant_of_type_named<GUI::Button>("new_button");
-    m_new_button->on_click = [&]() {
+    m_new_button->on_click = [&](auto) {
         m_web_view->set_visible(!m_web_view->is_visible());
         tip_frame.set_visible(!tip_frame.is_visible());
     };
 
     m_close_button = *find_descendant_of_type_named<GUI::Button>("close_button");
-    m_close_button->on_click = []() {
+    m_close_button->on_click = [](auto) {
         GUI::Application::the()->quit();
+    };
+
+    auto exec_path = Config::read_string("SystemServer", "Welcome", "Executable", {});
+    m_startup_checkbox = *find_descendant_of_type_named<GUI::CheckBox>("startup_checkbox");
+    m_startup_checkbox->set_checked(!exec_path.is_empty());
+    m_startup_checkbox->on_checked = [](bool is_checked) {
+        Config::write_string("SystemServer", "Welcome", "Executable", is_checked ? "/bin/Welcome" : "");
     };
 
     open_and_parse_readme_file();
     open_and_parse_tips_file();
-    srand(time(nullptr));
     set_random_tip();
 }
 
@@ -86,7 +87,7 @@ WelcomeWidget::~WelcomeWidget()
 void WelcomeWidget::open_and_parse_tips_file()
 {
     auto file = Core::File::construct("/home/anon/Documents/tips.txt");
-    if (!file->open(Core::IODevice::ReadOnly)) {
+    if (!file->open(Core::OpenMode::ReadOnly)) {
         m_tip_label->set_text("~/Documents/tips.txt has gone missing!");
         return;
     }
@@ -108,7 +109,7 @@ void WelcomeWidget::open_and_parse_tips_file()
 void WelcomeWidget::open_and_parse_readme_file()
 {
     auto file = Core::File::construct("/home/anon/README.md");
-    if (!file->open(Core::IODevice::ReadOnly))
+    if (!file->open(Core::OpenMode::ReadOnly))
         return;
 
     auto document = Markdown::Document::parse(file->read_all());
@@ -123,12 +124,8 @@ void WelcomeWidget::set_random_tip()
     if (m_tips.is_empty())
         return;
 
-    size_t n;
-    do
-        n = rand();
-    while (n >= m_tips.size());
-    m_initial_tip_index = n;
-    m_tip_label->set_text(m_tips[n]);
+    m_initial_tip_index = get_random_uniform(m_tips.size());
+    m_tip_label->set_text(m_tips[m_initial_tip_index]);
 }
 
 void WelcomeWidget::paint_event(GUI::PaintEvent& event)

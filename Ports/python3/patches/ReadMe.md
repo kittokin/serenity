@@ -4,22 +4,21 @@
 
 Ensures `HAVE_SIGSET_T` is defined, as we *do* have `sigset_t` but it's not detected properly due to some related functions being missing.
 
+## `include-sys-uio.patch`
+
+Ensures `struct iovec` is defined, required by the socket module.
+
 ## `define-py-force-utf8-locale.patch`
 
 Enforce UTF-8 as encoding by defining `_Py_FORCE_UTF8_LOCALE`.
 
-## `disable-setrlimit.patch`
-
-Disables check for `RLIMIT_CORE` and subsequent `setrlimit()` call. Would be enabled otherwise as we *do* have `<sys/resource.h>` and therefore `HAVE_SYS_RESOURCE_H`.
-
 ## `fix-autoconf.patch`
 
-As usual, make the `configure` script recognize Serenity.
+As usual, make the `configure` script recognize Serenity. Also set `MACHDEP` (which is used for `sys.platform`) to a version-less `serenityos`, even when not cross-compiling.
 
-## `remove-setlocale-from-preconfig.patch`
+## `tweak-setup-py.patch`
 
-Our stub implementation of `setlocale()` always returns `nullptr`, which the interpreter considers critical enough to exit right away.
+Make some tweaks to Python's `setup.py` files:
 
-## `tweak-unsupported-printf-format-specifiers.patch`
-
-Replace uses of `%.Ns` with `%s` as the former is not supported by our `printf` implementation yet and would result in empty strings. It uses `snprintf` already, so this is safe.
+- Add `/usr/local/lib` / `/usr/local/include` to the system lib / include dirs, relative to the sysroot when crosscompiling. These are by default only included when not crosscompiling for some reason.
+- Add `/usr/local/include/ncurses` to the curses include paths so it can build the `_curses` module. This is by default included for a bunch of extensions, but not `_curses`.

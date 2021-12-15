@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@gmx.de>
+ * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -20,8 +20,12 @@ public:
 
     Token next();
 
-    const StringView& source() const { return m_source; };
-    const StringView& filename() const { return m_filename; };
+    StringView source() const { return m_source; };
+    StringView filename() const { return m_filename; };
+
+    void disallow_html_comments() { m_allow_html_comments = false; };
+
+    Token force_slash_as_regex();
 
 private:
     void consume();
@@ -29,10 +33,17 @@ private:
     bool consume_octal_number();
     bool consume_hexadecimal_number();
     bool consume_binary_number();
+    bool consume_decimal_number();
+
+    bool is_unicode_character() const;
+    u32 current_code_point() const;
+
     bool is_eof() const;
     bool is_line_terminator() const;
-    bool is_identifier_start() const;
-    bool is_identifier_middle() const;
+    bool is_whitespace() const;
+    Optional<u32> is_identifier_unicode_escape(size_t& identifier_length) const;
+    Optional<u32> is_identifier_start(size_t& identifier_length) const;
+    Optional<u32> is_identifier_middle(size_t& identifier_length) const;
     bool is_line_comment_start(bool line_has_token_yet) const;
     bool is_block_comment_start() const;
     bool is_block_comment_end() const;
@@ -40,12 +51,17 @@ private:
     bool match(char, char) const;
     bool match(char, char, char) const;
     bool match(char, char, char, char) const;
+    template<typename Callback>
+    bool match_numeric_literal_separator_followed_by(Callback) const;
     bool slash_means_division() const;
+
+    TokenType consume_regex_literal();
 
     StringView m_source;
     size_t m_position { 0 };
     Token m_current_token;
     char m_current_char { 0 };
+    bool m_eof { false };
 
     StringView m_filename;
     size_t m_line_number { 1 };
@@ -59,10 +75,20 @@ private:
     };
     Vector<TemplateState> m_template_states;
 
-    static HashMap<String, TokenType> s_keywords;
+    bool m_allow_html_comments { true };
+
+    static HashMap<FlyString, TokenType> s_keywords;
     static HashMap<String, TokenType> s_three_char_tokens;
     static HashMap<String, TokenType> s_two_char_tokens;
     static HashMap<char, TokenType> s_single_char_tokens;
+
+    struct ParsedIdentifiers : public RefCounted<ParsedIdentifiers> {
+        // Resolved identifiers must be kept alive for the duration of the parsing stage, otherwise
+        // the only references to these strings are deleted by the Token destructor.
+        HashTable<FlyString> identifiers;
+    };
+
+    RefPtr<ParsedIdentifiers> m_parsed_identifiers;
 };
 
 }

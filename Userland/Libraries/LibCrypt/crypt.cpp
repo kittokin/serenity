@@ -1,8 +1,9 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
+
 #include <AK/Base64.h>
 #include <AK/Types.h>
 #include <LibCrypto/Hash/SHA2.h>

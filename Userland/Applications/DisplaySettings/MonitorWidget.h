@@ -32,17 +32,26 @@ public:
 private:
     MonitorWidget();
 
+    void redraw_desktop_if_needed();
+
     virtual void paint_event(GUI::PaintEvent& event) override;
 
     Gfx::IntRect m_monitor_rect;
     RefPtr<Gfx::Bitmap> m_monitor_bitmap;
+    RefPtr<Gfx::Bitmap> m_desktop_bitmap;
+    bool m_desktop_dirty { true };
 
     String m_desktop_wallpaper_path;
-    RefPtr<Gfx::Bitmap> m_desktop_wallpaper_bitmap;
+    RefPtr<Gfx::Bitmap> m_wallpaper_bitmap;
     String m_desktop_wallpaper_mode;
     Gfx::IntSize m_desktop_resolution;
     int m_desktop_scale_factor { 1 };
     Gfx::Color m_desktop_color;
+
+    bool is_different_to_current_wallpaper_path(String const& path)
+    {
+        return (!path.is_empty() && path != m_desktop_wallpaper_path) || (path.is_empty() && m_desktop_wallpaper_path != nullptr);
+    }
 };
 
 }

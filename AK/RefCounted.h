@@ -6,12 +6,15 @@
 
 #pragma once
 
-#include <AK/Assertions.h>
-#include <AK/Atomic.h>
-#include <AK/Checked.h>
-#include <AK/Noncopyable.h>
-#include <AK/Platform.h>
-#include <AK/StdLibExtras.h>
+#ifdef KERNEL
+#    include <Kernel/Library/ThreadSafeRefCounted.h>
+#else
+
+#    include <AK/Assertions.h>
+#    include <AK/Checked.h>
+#    include <AK/Noncopyable.h>
+#    include <AK/Platform.h>
+#    include <AK/StdLibExtras.h>
 
 namespace AK {
 
@@ -22,6 +25,7 @@ constexpr auto call_will_be_destroyed_if_present(const T* object) -> decltype(co
     return {};
 }
 
+// NOLINTNEXTLINE(cert-dcl50-cpp) variadic argument used to implement "is detected" pattern
 constexpr auto call_will_be_destroyed_if_present(...) -> FalseType
 {
     return {};
@@ -34,6 +38,7 @@ constexpr auto call_one_ref_left_if_present(const T* object) -> decltype(const_c
     return {};
 }
 
+// NOLINTNEXTLINE(cert-dcl50-cpp) variadic argument used to implement "is detected" pattern
 constexpr auto call_one_ref_left_if_present(...) -> FalseType
 {
     return {};
@@ -49,43 +54,32 @@ public:
 
     ALWAYS_INLINE void ref() const
     {
-        auto old_ref_count = m_ref_count.fetch_add(1, AK::MemoryOrder::memory_order_relaxed);
-        VERIFY(old_ref_count > 0);
-        VERIFY(!Checked<RefCountType>::addition_would_overflow(old_ref_count, 1));
+        VERIFY(m_ref_count > 0);
+        VERIFY(!Checked<RefCountType>::addition_would_overflow(m_ref_count, 1));
+        ++m_ref_count;
     }
 
-    [[nodiscard]] ALWAYS_INLINE bool try_ref() const
+    [[nodiscard]] bool try_ref() const
     {
-        RefCountType expected = m_ref_count.load(AK::MemoryOrder::memory_order_relaxed);
-        for (;;) {
-            if (expected == 0)
-                return false;
-            VERIFY(!Checked<RefCountType>::addition_would_overflow(expected, 1));
-            if (m_ref_count.compare_exchange_strong(expected, expected + 1, AK::MemoryOrder::memory_order_acquire))
-                return true;
-        }
+        if (m_ref_count == 0)
+            return false;
+        ref();
+        return true;
     }
 
-    ALWAYS_INLINE RefCountType ref_count() const
-    {
-        return m_ref_count.load(AK::MemoryOrder::memory_order_relaxed);
-    }
+    [[nodiscard]] RefCountType ref_count() const { return m_ref_count; }
 
 protected:
     RefCountedBase() = default;
-    ALWAYS_INLINE ~RefCountedBase()
-    {
-        VERIFY(m_ref_count.load(AK::MemoryOrder::memory_order_relaxed) == 0);
-    }
+    ~RefCountedBase() { VERIFY(!m_ref_count); }
 
     ALWAYS_INLINE RefCountType deref_base() const
     {
-        auto old_ref_count = m_ref_count.fetch_sub(1, AK::MemoryOrder::memory_order_acq_rel);
-        VERIFY(old_ref_count > 0);
-        return old_ref_count - 1;
+        VERIFY(m_ref_count);
+        return --m_ref_count;
     }
 
-    mutable Atomic<RefCountType> m_ref_count { 1 };
+    RefCountType mutable m_ref_count { 1 };
 };
 
 template<typename T>
@@ -108,3 +102,6 @@ public:
 }
 
 using AK::RefCounted;
+using AK::RefCountedBase;
+
+#endif

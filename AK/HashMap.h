@@ -9,17 +9,11 @@
 #include <AK/HashTable.h>
 #include <AK/Optional.h>
 #include <AK/Vector.h>
-
-// NOTE: We can't include <initializer_list> during the toolchain bootstrap,
-//       since it's part of libstdc++, and libstdc++ depends on LibC.
-//       For this reason, we don't support HashMap(initializer_list) in LibC.
-#ifndef SERENITY_LIBC_BUILD
-#    include <initializer_list>
-#endif
+#include <initializer_list>
 
 namespace AK {
 
-template<typename K, typename V, typename KeyTraits>
+template<typename K, typename V, typename KeyTraits, bool IsOrdered>
 class HashMap {
 private:
     struct Entry {
@@ -33,16 +27,17 @@ private:
     };
 
 public:
+    using KeyType = K;
+    using ValueType = V;
+
     HashMap() = default;
 
-#ifndef SERENITY_LIBC_BUILD
     HashMap(std::initializer_list<Entry> list)
     {
         ensure_capacity(list.size());
         for (auto& item : list)
             set(item.key, item.value);
     }
-#endif
 
     [[nodiscard]] bool is_empty() const
     {
@@ -51,9 +46,13 @@ public:
     [[nodiscard]] size_t size() const { return m_table.size(); }
     [[nodiscard]] size_t capacity() const { return m_table.capacity(); }
     void clear() { m_table.clear(); }
+    void clear_with_capacity() { m_table.clear_with_capacity(); }
 
     HashSetResult set(const K& key, const V& value) { return m_table.set({ key, value }); }
     HashSetResult set(const K& key, V&& value) { return m_table.set({ key, move(value) }); }
+    ErrorOr<HashSetResult> try_set(const K& key, const V& value) { return m_table.try_set({ key, value }); }
+    ErrorOr<HashSetResult> try_set(const K& key, V&& value) { return m_table.try_set({ key, move(value) }); }
+
     bool remove(const K& key)
     {
         auto it = find(key);
@@ -63,39 +62,39 @@ public:
         }
         return false;
     }
-    void remove_one_randomly() { m_table.remove(m_table.begin()); }
 
-    using HashTableType = HashTable<Entry, EntryTraits>;
+    using HashTableType = HashTable<Entry, EntryTraits, IsOrdered>;
     using IteratorType = typename HashTableType::Iterator;
     using ConstIteratorType = typename HashTableType::ConstIterator;
 
-    IteratorType begin() { return m_table.begin(); }
-    IteratorType end() { return m_table.end(); }
-    IteratorType find(const K& key)
+    [[nodiscard]] IteratorType begin() { return m_table.begin(); }
+    [[nodiscard]] IteratorType end() { return m_table.end(); }
+    [[nodiscard]] IteratorType find(const K& key)
     {
         return m_table.find(KeyTraits::hash(key), [&](auto& entry) { return KeyTraits::equals(key, entry.key); });
     }
-    template<typename Finder>
-    IteratorType find(unsigned hash, Finder finder)
+    template<typename TUnaryPredicate>
+    [[nodiscard]] IteratorType find(unsigned hash, TUnaryPredicate predicate)
     {
-        return m_table.find(hash, finder);
+        return m_table.find(hash, predicate);
     }
 
-    ConstIteratorType begin() const { return m_table.begin(); }
-    ConstIteratorType end() const { return m_table.end(); }
-    ConstIteratorType find(const K& key) const
+    [[nodiscard]] ConstIteratorType begin() const { return m_table.begin(); }
+    [[nodiscard]] ConstIteratorType end() const { return m_table.end(); }
+    [[nodiscard]] ConstIteratorType find(const K& key) const
     {
         return m_table.find(KeyTraits::hash(key), [&](auto& entry) { return KeyTraits::equals(key, entry.key); });
     }
-    template<typename Finder>
-    ConstIteratorType find(unsigned hash, Finder finder) const
+    template<typename TUnaryPredicate>
+    [[nodiscard]] ConstIteratorType find(unsigned hash, TUnaryPredicate predicate) const
     {
-        return m_table.find(hash, finder);
+        return m_table.find(hash, predicate);
     }
 
     void ensure_capacity(size_t capacity) { m_table.ensure_capacity(capacity); }
+    ErrorOr<void> try_ensure_capacity(size_t capacity) { return m_table.try_ensure_capacity(capacity); }
 
-    Optional<typename Traits<V>::PeekType> get(const K& key) const
+    Optional<typename Traits<V>::PeekType> get(const K& key) const requires(!IsPointer<typename Traits<V>::PeekType>)
     {
         auto it = find(key);
         if (it == end())
@@ -103,7 +102,23 @@ public:
         return (*it).value;
     }
 
-    bool contains(const K& key) const
+    Optional<typename Traits<V>::ConstPeekType> get(const K& key) const requires(IsPointer<typename Traits<V>::PeekType>)
+    {
+        auto it = find(key);
+        if (it == end())
+            return {};
+        return (*it).value;
+    }
+
+    Optional<typename Traits<V>::PeekType> get(const K& key) requires(!IsConst<typename Traits<V>::PeekType>)
+    {
+        auto it = find(key);
+        if (it == end())
+            return {};
+        return (*it).value;
+    }
+
+    [[nodiscard]] bool contains(const K& key) const
     {
         return find(key) != end();
     }
@@ -116,18 +131,41 @@ public:
     V& ensure(const K& key)
     {
         auto it = find(key);
-        if (it == end())
-            set(key, V());
+        if (it != end())
+            return it->value;
+        auto result = set(key, V());
+        VERIFY(result == HashSetResult::InsertedNewEntry);
         return find(key)->value;
     }
 
-    Vector<K> keys() const
+    template<typename Callback>
+    V& ensure(K const& key, Callback initialization_callback)
+    {
+        auto it = find(key);
+        if (it != end())
+            return it->value;
+        auto result = set(key, initialization_callback());
+        VERIFY(result == HashSetResult::InsertedNewEntry);
+        return find(key)->value;
+    }
+
+    [[nodiscard]] Vector<K> keys() const
     {
         Vector<K> list;
         list.ensure_capacity(size());
         for (auto& it : *this)
             list.unchecked_append(it.key);
         return list;
+    }
+
+    [[nodiscard]] u32 hash() const
+    {
+        u32 hash = 0;
+        for (auto& it : *this) {
+            auto entry_hash = pair_int_hash(it.key.hash(), it.value.hash());
+            hash = pair_int_hash(hash, entry_hash);
+        }
+        return hash;
     }
 
 private:
@@ -137,3 +175,4 @@ private:
 }
 
 using AK::HashMap;
+using AK::OrderedHashMap;

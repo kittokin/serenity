@@ -5,25 +5,31 @@
  */
 
 #include <Kernel/KSyms.h>
-#include <Kernel/PerformanceEventBuffer.h>
+#include <Kernel/PerformanceManager.h>
 #include <Kernel/Process.h>
+#include <Kernel/Thread.h>
 
 namespace Kernel {
 
 void Process::sys$exit(int status)
 {
+    // FIXME: We have callers from kernel which don't acquire the big process lock.
+    if (Thread::current()->previous_mode() == Thread::PreviousMode::UserMode) {
+        VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this);
+    }
+
     {
         ProtectedDataMutationScope scope { *this };
-        m_termination_status = status;
-        m_termination_signal = 0;
+        m_protected_values.termination_status = status;
+        m_protected_values.termination_signal = 0;
     }
 
-    if (auto* event_buffer = current_perf_events_buffer()) {
-        [[maybe_unused]] auto rc = event_buffer->append(PERF_EVENT_THREAD_EXIT, Thread::current()->tid().value(), 0, nullptr);
-    }
+    auto* current_thread = Thread::current();
+    current_thread->set_profiling_suppressed();
+    PerformanceManager::add_thread_exit_event(*current_thread);
 
     die();
-    Thread::current()->die_if_needed();
+    current_thread->die_if_needed();
     VERIFY_NOT_REACHED();
 }
 

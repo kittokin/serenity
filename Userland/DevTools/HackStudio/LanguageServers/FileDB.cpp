@@ -7,6 +7,7 @@
 #include "FileDB.h"
 
 #include <AK/LexicalPath.h>
+#include <AK/NonnullRefPtr.h>
 #include <LibCore/File.h>
 
 namespace LanguageServers {
@@ -18,7 +19,7 @@ RefPtr<const GUI::TextDocument> FileDB::get(const String& filename) const
     if (!document_optional.has_value())
         return nullptr;
 
-    return document_optional.value();
+    return *document_optional.value();
 }
 
 RefPtr<GUI::TextDocument> FileDB::get(const String& filename)
@@ -66,13 +67,14 @@ String FileDB::to_absolute_path(const String& filename) const
     if (LexicalPath { filename }.is_absolute()) {
         return filename;
     }
-    VERIFY(!m_project_root.is_null());
+    if (m_project_root.is_null())
+        return filename;
     return LexicalPath { String::formatted("{}/{}", m_project_root, filename) }.string();
 }
 
 RefPtr<GUI::TextDocument> FileDB::create_from_filesystem(const String& filename) const
 {
-    auto file = Core::File::open(to_absolute_path(filename), Core::IODevice::ReadOnly);
+    auto file = Core::File::open(to_absolute_path(filename), Core::OpenMode::ReadOnly);
     if (file.is_error()) {
         dbgln("failed to create document for {} from filesystem", filename);
         return nullptr;
@@ -83,7 +85,7 @@ RefPtr<GUI::TextDocument> FileDB::create_from_filesystem(const String& filename)
 RefPtr<GUI::TextDocument> FileDB::create_from_fd(int fd) const
 {
     auto file = Core::File::construct();
-    if (!file->open(fd, Core::IODevice::ReadOnly, Core::File::ShouldCloseFileDescriptor::Yes)) {
+    if (!file->open(fd, Core::OpenMode::ReadOnly, Core::File::ShouldCloseFileDescriptor::Yes)) {
         errno = file->error();
         perror("open");
         dbgln("Failed to open project file");
@@ -99,9 +101,10 @@ public:
     virtual void document_did_insert_line(size_t) override {};
     virtual void document_did_remove_line(size_t) override {};
     virtual void document_did_remove_all_lines() override {};
-    virtual void document_did_change() override {};
-    virtual void document_did_set_text() override {};
+    virtual void document_did_change(GUI::AllowCallback) override {};
+    virtual void document_did_set_text(GUI::AllowCallback) override {};
     virtual void document_did_set_cursor(const GUI::TextPosition&) override {};
+    virtual void document_did_update_undo_stack() override { }
 
     virtual bool is_automatic_indentation_enabled() const override { return false; }
     virtual int soft_tab_width() const override { return 4; }

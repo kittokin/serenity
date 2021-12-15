@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/StdLibExtras.h>
 #include <Kernel/Net/IPv4.h>
 
 namespace Kernel {
@@ -20,6 +21,23 @@ struct TCPFlags {
         URG = 0x20
     };
 };
+
+class [[gnu::packed]] TCPOptionMSS {
+public:
+    TCPOptionMSS(u16 value)
+        : m_value(value)
+    {
+    }
+
+    u16 value() const { return m_value; }
+
+private:
+    u8 m_option_kind { 0x02 };
+    u8 m_option_length { sizeof(TCPOptionMSS) };
+    NetworkOrdered<u16> m_value;
+};
+
+static_assert(AssertSize<TCPOptionMSS, 4>());
 
 class [[gnu::packed]] TCPPacket {
 public:
@@ -75,6 +93,6 @@ private:
     NetworkOrdered<u16> m_urgent;
 };
 
-static_assert(sizeof(TCPPacket) == 20);
+static_assert(AssertSize<TCPPacket, 20>());
 
 }

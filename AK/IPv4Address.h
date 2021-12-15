@@ -57,7 +57,16 @@ public:
             octet(SubnetClass::D));
     }
 
-    static Optional<IPv4Address> from_string(const StringView& string)
+    String to_string_reversed() const
+    {
+        return String::formatted("{}.{}.{}.{}",
+            octet(SubnetClass::D),
+            octet(SubnetClass::C),
+            octet(SubnetClass::B),
+            octet(SubnetClass::A));
+    }
+
+    static Optional<IPv4Address> from_string(StringView string)
     {
         if (string.is_null())
             return {};
@@ -124,7 +133,7 @@ struct Traits<IPv4Address> : public GenericTraits<IPv4Address> {
 
 template<>
 struct Formatter<IPv4Address> : Formatter<String> {
-    void format(FormatBuilder& builder, IPv4Address value)
+    ErrorOr<void> format(FormatBuilder& builder, IPv4Address value)
     {
         return Formatter<String>::format(builder, value.to_string());
     }

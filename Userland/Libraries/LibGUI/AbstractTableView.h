@@ -39,6 +39,8 @@ public:
     int column_width(int column) const;
     void set_column_width(int column, int width);
     void set_default_column_width(int column, int width);
+    virtual int minimum_column_width(int column);
+    virtual int minimum_row_height(int row);
 
     Gfx::TextAlignment column_header_alignment(int column) const;
     void set_column_header_alignment(int column, Gfx::TextAlignment);
@@ -50,6 +52,8 @@ public:
     virtual Gfx::IntRect content_rect(const ModelIndex&) const override;
     Gfx::IntRect content_rect(int row, int column) const;
     Gfx::IntRect row_rect(int item_index) const;
+
+    virtual Gfx::IntRect paint_invalidation_rect(ModelIndex const& index) const override;
 
     virtual void scroll_into_view(const ModelIndex&, bool scroll_horizontally = true, bool scroll_vertically = true) override;
     void scroll_into_view(const ModelIndex& index, Orientation orientation)
@@ -96,8 +100,11 @@ protected:
 
     void move_cursor_relative(int vertical_steps, int horizontal_steps, SelectionUpdate);
 
+    virtual Gfx::IntPoint automatic_scroll_delta_from_position(const Gfx::IntPoint& pos) const override;
+
 private:
     void layout_headers();
+    bool is_navigation(GUI::KeyEvent&);
 
     RefPtr<HeaderView> m_column_header;
     RefPtr<HeaderView> m_row_header;
@@ -110,6 +117,7 @@ private:
 
     int m_vertical_padding { 8 };
     int m_horizontal_padding { font().glyph_height() / 2 };
+    int m_tab_moves { 0 };
 };
 
 }

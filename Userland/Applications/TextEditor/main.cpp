@@ -6,40 +6,42 @@
 
 #include "FileArgument.h"
 #include "MainWidget.h"
+#include <LibConfig/Client.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/System.h>
+#include <LibFileSystemAccessClient/Client.h>
 #include <LibGUI/Menubar.h>
-#include <stdio.h>
-#include <unistd.h>
+#include <LibGUI/MessageBox.h>
+#include <LibMain/Main.h>
 
 using namespace TextEditor;
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio recvfd sendfd thread rpath accept cpath wpath unix fattr", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd thread rpath cpath wpath unix"));
 
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    if (pledge("stdio recvfd sendfd thread rpath accept cpath wpath unix", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    Config::pledge_domains("TextEditor");
 
-    const char* preview_mode = "auto";
-    const char* file_to_edit = nullptr;
+    char const* preview_mode = "auto";
+    char const* file_to_edit = nullptr;
     Core::ArgsParser parser;
     parser.add_option(preview_mode, "Preview mode, one of 'none', 'html', 'markdown', 'auto'", "preview-mode", '\0', "mode");
     parser.add_positional_argument(file_to_edit, "File to edit, with optional starting line and column number", "file[:line[:column]]", Core::ArgsParser::Required::No);
+    parser.parse(arguments);
 
-    parser.parse(argc, argv);
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil("/tmp/portal/launch", "rw"));
+    TRY(Core::System::unveil("/tmp/portal/webcontent", "rw"));
+    TRY(Core::System::unveil("/tmp/portal/filesystemaccess", "rw"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     StringView preview_mode_view = preview_mode;
 
     auto app_icon = GUI::Icon::default_icon("app-text-editor");
 
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->resize(640, 400);
 
     auto& text_widget = window->set_main_widget<MainWidget>();
@@ -65,23 +67,24 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    auto menubar = GUI::Menubar::construct();
-    text_widget.initialize_menubar(menubar);
-    window->set_menubar(menubar);
-
-    if (file_to_edit) {
-        // A file name was passed, parse any possible line and column numbers included.
-        FileArgument parsed_argument(file_to_edit);
-        if (!text_widget.open_file(parsed_argument.file_name()))
-            return 1;
-        text_widget.editor().set_cursor_and_focus_line(parsed_argument.line().value_or(1) - 1, parsed_argument.column().value_or(0));
-    }
-    text_widget.update_title();
+    text_widget.initialize_menubar(*window);
 
     window->show();
     window->set_icon(app_icon.bitmap_for_size(16));
 
-    window->set_menubar(menubar);
+    if (file_to_edit) {
+        FileArgument parsed_argument(file_to_edit);
+        auto response = FileSystemAccessClient::Client::the().request_file_read_only_approved(window->window_id(), parsed_argument.filename());
+
+        if (response.error == 0) {
+            if (!text_widget.read_file_and_close(*response.fd, *response.chosen_file))
+                return 1;
+            text_widget.editor().set_cursor_and_focus_line(parsed_argument.line().value_or(1) - 1, parsed_argument.column().value_or(0));
+        } else {
+            text_widget.open_nonexistent_file(parsed_argument.filename());
+        }
+    }
+    text_widget.update_title();
 
     return app->exec();
 }

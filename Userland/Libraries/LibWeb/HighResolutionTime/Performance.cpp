@@ -14,7 +14,7 @@
 namespace Web::HighResolutionTime {
 
 Performance::Performance(DOM::Window& window)
-    : DOM::EventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.document()))
+    : DOM::EventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.associated_document()))
     , m_window(window)
     , m_timing(make<NavigationTiming::PerformanceTiming>(window))
 {
@@ -39,11 +39,6 @@ void Performance::ref_event_target()
 void Performance::unref_event_target()
 {
     m_window.unref();
-}
-
-bool Performance::dispatch_event(NonnullRefPtr<DOM::Event> event)
-{
-    return DOM::EventDispatcher::dispatch(*this, event);
 }
 
 JS::Object* Performance::create_wrapper(JS::GlobalObject& global_object)

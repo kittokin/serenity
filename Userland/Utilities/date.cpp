@@ -7,17 +7,13 @@
 #include <AK/String.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/DateTime.h>
-#include <inttypes.h>
-#include <stdio.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <time.h>
-#include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio settime", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio settime", nullptr));
 
     bool print_unix_date = false;
     bool print_iso_8601 = false;
@@ -31,21 +27,18 @@ int main(int argc, char** argv)
     args_parser.add_option(print_iso_8601, "Print date in ISO 8601 format", "iso-8601", 'i');
     args_parser.add_option(print_rfc_3339, "Print date in RFC 3339 format", "rfc-3339", 'r');
     args_parser.add_option(print_rfc_5322, "Print date in RFC 5322 format", "rfc-5322", 'R');
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     if (set_date != nullptr) {
         auto number = String(set_date).to_uint();
 
         if (!number.has_value()) {
-            fprintf(stderr, "date: Invalid timestamp value");
+            warnln("date: Invalid timestamp value");
             return 1;
         }
 
         timespec ts = { number.value(), 0 };
-        if (clock_settime(CLOCK_REALTIME, &ts) < 0) {
-            perror("clock_settime");
-            return 1;
-        }
+        TRY(Core::System::clock_settime(CLOCK_REALTIME, &ts));
 
         return 0;
     }
@@ -53,27 +46,21 @@ int main(int argc, char** argv)
     // FIXME: this should be improved and will need to be cleaned up
     // when additional output formats and formatting is supported
     if (print_unix_date && print_iso_8601 && print_rfc_3339 && print_rfc_5322) {
-        fprintf(stderr, "date: multiple output formats specified\n");
+        warnln("date: multiple output formats specified");
         return 1;
     }
 
-    time_t now = time(nullptr);
-    auto date = Core::DateTime::from_timestamp(now);
-
+    auto date = Core::DateTime::now();
     if (print_unix_date) {
-        printf("%lld\n", (long long)now);
-        return 0;
+        outln("{}", date.timestamp());
     } else if (print_iso_8601) {
-        printf("%s\n", date.to_string("%Y-%m-%dT%H:%M:%S-00:00").characters());
-        return 0;
+        outln("{}", date.to_string("%Y-%m-%dT%H:%M:%S-00:00"));
     } else if (print_rfc_5322) {
-        printf("%s\n", date.to_string("%a, %d %b %Y %H:%M:%S -0000").characters());
-        return 0;
+        outln("{}", date.to_string("%a, %d %b %Y %H:%M:%S -0000"));
     } else if (print_rfc_3339) {
-        printf("%s\n", date.to_string("%Y-%m-%d %H:%M:%S-00:00").characters());
-        return 0;
+        outln("{}", date.to_string("%Y-%m-%d %H:%M:%S-00:00"));
     } else {
-        printf("%s\n", date.to_string().characters());
-        return 0;
+        outln("{}", date.to_string());
     }
+    return 0;
 }

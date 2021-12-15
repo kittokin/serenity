@@ -14,7 +14,6 @@
 #include <LibGUI/InputBox.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
-#include <LibGUI/Model.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/Bitmap.h>
 #include <stdio.h>
@@ -32,7 +31,7 @@ GitWidget::GitWidget(const LexicalPath& repo_root)
     unstaged_header.set_layout<GUI::HorizontalBoxLayout>();
 
     auto& refresh_button = unstaged_header.add<GUI::Button>();
-    refresh_button.set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/reload.png"));
+    refresh_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/reload.png").release_value_but_fixme_should_propagate_errors());
     refresh_button.set_fixed_size(16, 16);
     refresh_button.set_tooltip("refresh");
     refresh_button.on_click = [this](int) { refresh(); };
@@ -43,8 +42,9 @@ GitWidget::GitWidget(const LexicalPath& repo_root)
     unstaged_header.set_fixed_height(20);
     m_unstaged_files = unstaged.add<GitFilesView>(
         [this](const auto& file) { stage_file(file); },
-        Gfx::Bitmap::load_from_file("/res/icons/16x16/plus.png").release_nonnull());
-    m_unstaged_files->on_selection = [this](const GUI::ModelIndex& index) {
+        Gfx::Bitmap::try_load_from_file("/res/icons/16x16/plus.png").release_value_but_fixme_should_propagate_errors());
+    m_unstaged_files->on_selection_change = [this] {
+        const auto& index = m_unstaged_files->selection().first();
         const auto& selected = index.data().as_string();
         show_diff(LexicalPath(selected));
     };
@@ -56,7 +56,7 @@ GitWidget::GitWidget(const LexicalPath& repo_root)
     staged_header.set_layout<GUI::HorizontalBoxLayout>();
 
     auto& commit_button = staged_header.add<GUI::Button>();
-    commit_button.set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/commit.png"));
+    commit_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/commit.png").release_value_but_fixme_should_propagate_errors());
     commit_button.set_fixed_size(16, 16);
     commit_button.set_tooltip("commit");
     commit_button.on_click = [this](int) { commit(); };
@@ -67,7 +67,7 @@ GitWidget::GitWidget(const LexicalPath& repo_root)
     staged_header.set_fixed_height(20);
     m_staged_files = staged.add<GitFilesView>(
         [this](const auto& file) { unstage_file(file); },
-        Gfx::Bitmap::load_from_file("/res/icons/16x16/minus.png").release_nonnull());
+        Gfx::Bitmap::try_load_from_file("/res/icons/16x16/minus.png").release_value_but_fixme_should_propagate_errors());
 }
 
 bool GitWidget::initialize()
@@ -149,7 +149,7 @@ void GitWidget::show_diff(const LexicalPath& file_path)
 {
     if (!m_git_repo->is_tracked(file_path)) {
         auto file = Core::File::construct(file_path.string());
-        if (!file->open(Core::IODevice::ReadOnly)) {
+        if (!file->open(Core::OpenMode::ReadOnly)) {
             perror("open");
             VERIFY_NOT_REACHED();
         }
@@ -163,5 +163,13 @@ void GitWidget::show_diff(const LexicalPath& file_path)
     const auto& diff = m_git_repo->unstaged_diff(file_path);
     VERIFY(original_content.has_value() && diff.has_value());
     m_view_diff_callback(original_content.value(), diff.value());
+}
+
+void GitWidget::change_repo(LexicalPath const& repo_root)
+{
+    m_repo_root = repo_root;
+    m_git_repo = nullptr;
+    m_unstaged_files->set_model(nullptr);
+    m_staged_files->set_model(nullptr);
 }
 }

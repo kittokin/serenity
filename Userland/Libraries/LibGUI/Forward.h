@@ -13,6 +13,7 @@ class AbstractTableView;
 class AbstractView;
 class Action;
 class ActionGroup;
+class AppletAreaRectChangeEvent;
 class Application;
 class AutocompleteBox;
 class AutocompleteProvider;
@@ -49,10 +50,12 @@ class MultiView;
 class OpacitySlider;
 class PaintEvent;
 class Painter;
+class PersistentHandle;
+class PersistentModelIndex;
 class RadioButton;
 class ResizeCorner;
 class ResizeEvent;
-class ScreenRectChangeEvent;
+class ScreenRectsChangeEvent;
 class Scrollbar;
 class AbstractScrollableWidget;
 class Slider;
@@ -64,25 +67,32 @@ class Statusbar;
 class TabWidget;
 class TableView;
 class TextBox;
+class TextPosition;
+class UrlBox;
 class TextDocument;
 class TextDocumentLine;
 struct TextDocumentSpan;
 class TextDocumentUndoCommand;
 class TextEditor;
 class ThemeChangeEvent;
+class FontsChangeEvent;
 class Toolbar;
 class ToolbarContainer;
 class TreeView;
+class ValueSlider;
 class Variant;
 class VerticalBoxLayout;
 class VerticalSlider;
 class WMEvent;
 class Widget;
-class WidgetClassRegistration;
 class Window;
 class WindowServerConnection;
 
 enum class ModelRole;
 enum class SortOrder;
 
+}
+
+namespace WindowServer {
+class ScreenLayout;
 }

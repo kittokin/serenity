@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -88,7 +88,7 @@ class CTR : public Mode<T> {
 public:
     constexpr static size_t IVSizeInBits = 128;
 
-    virtual ~CTR() { }
+    virtual ~CTR() = default;
 
     // Must intercept `Intent`, because AES must always be set to
     // Encryption, even when decrypting AES-CTR.
@@ -168,7 +168,7 @@ protected:
 
             cipher.encrypt_block(m_cipher_block, m_cipher_block);
             if (in) {
-                m_cipher_block.apply_initialization_vector(in->data() + offset);
+                m_cipher_block.apply_initialization_vector(in->slice(offset));
             }
             auto write_size = min(block_size, length);
 

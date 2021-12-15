@@ -5,6 +5,7 @@
  */
 
 #include <AK/Assertions.h>
+#include <AK/Format.h>
 #include <AK/ScopeGuard.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Vector.h>
@@ -23,6 +24,13 @@ extern "C" {
 DIR* opendir(const char* name)
 {
     int fd = open(name, O_RDONLY | O_DIRECTORY);
+    if (fd == -1)
+        return nullptr;
+    return fdopendir(fd);
+}
+
+DIR* fdopendir(int fd)
+{
     if (fd == -1)
         return nullptr;
     DIR* dirp = (DIR*)malloc(sizeof(DIR));
@@ -57,11 +65,11 @@ void rewinddir(DIR* dirp)
 struct [[gnu::packed]] sys_dirent {
     ino_t ino;
     u8 file_type;
-    size_t namelen;
+    u32 namelen;
     char name[];
     size_t total_size()
     {
-        return sizeof(ino_t) + sizeof(u8) + sizeof(size_t) + sizeof(char) * namelen;
+        return sizeof(ino_t) + sizeof(u8) + sizeof(u32) + sizeof(char) * namelen;
     }
 };
 
@@ -98,15 +106,30 @@ static int allocate_dirp_buffer(DIR* dirp)
     }
     size_t size_to_allocate = max(st.st_size, static_cast<off_t>(4096));
     dirp->buffer = (char*)malloc(size_to_allocate);
-    ssize_t nread = syscall(SC_get_dir_entries, dirp->fd, dirp->buffer, size_to_allocate);
-    if (nread < 0) {
-        // uh-oh, the syscall returned an error
-        free(dirp->buffer);
-        dirp->buffer = nullptr;
-        return -nread;
+    if (!dirp->buffer)
+        return ENOMEM;
+    for (;;) {
+        ssize_t nread = syscall(SC_get_dir_entries, dirp->fd, dirp->buffer, size_to_allocate);
+        if (nread < 0) {
+            if (nread == -EINVAL) {
+                size_to_allocate *= 2;
+                char* new_buffer = (char*)realloc(dirp->buffer, size_to_allocate);
+                if (new_buffer) {
+                    dirp->buffer = new_buffer;
+                    continue;
+                } else {
+                    nread = -ENOMEM;
+                }
+            }
+            // uh-oh, the syscall returned an error
+            free(dirp->buffer);
+            dirp->buffer = nullptr;
+            return -nread;
+        }
+        dirp->buffer_size = nread;
+        dirp->nextptr = dirp->buffer;
+        break;
     }
-    dirp->buffer_size = nread;
-    dirp->nextptr = dirp->buffer;
     return 0;
 }
 
@@ -240,7 +263,7 @@ int scandir(const char* dir_name,
     }
 
     const int size = tmp_names.size();
-    auto names = (struct dirent**)malloc(size * sizeof(struct dirent*));
+    auto** names = static_cast<struct dirent**>(kmalloc_array(size, sizeof(struct dirent*)));
     for (auto i = 0; i < size; i++) {
         names[i] = tmp_names[i];
     }

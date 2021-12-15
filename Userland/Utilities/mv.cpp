@@ -9,6 +9,7 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -58,8 +59,8 @@ int main(int argc, char** argv)
     for (auto& old_path : paths) {
         String combined_new_path;
         const char* new_path = original_new_path;
-        if (rc == 0 && S_ISDIR(st.st_mode)) {
-            auto old_basename = LexicalPath(old_path).basename();
+        if (S_ISDIR(st.st_mode)) {
+            auto old_basename = LexicalPath::basename(old_path);
             combined_new_path = String::formatted("{}/{}", original_new_path, old_basename);
             new_path = combined_new_path.characters();
         }
@@ -67,19 +68,26 @@ int main(int argc, char** argv)
         rc = rename(old_path, new_path);
         if (rc < 0) {
             if (errno == EXDEV) {
-                auto result = Core::File::copy_file_or_directory(new_path, old_path, Core::File::RecursionMode::Allowed, Core::File::LinkMode::Disallowed, Core::File::AddDuplicateFileMarker::No);
+                auto result = Core::File::copy_file_or_directory(
+                    new_path, old_path,
+                    Core::File::RecursionMode::Allowed,
+                    Core::File::LinkMode::Disallowed,
+                    Core::File::AddDuplicateFileMarker::No);
+
                 if (result.is_error()) {
-                    warnln("mv: could not move '{}': {}", old_path, result.error().error_code);
+                    warnln("mv: could not move '{}': {}", old_path, static_cast<Error const&>(result.error()));
                     return 1;
                 }
                 rc = unlink(old_path);
                 if (rc < 0)
-                    fprintf(stderr, "mv: unlink '%s': %s\n", old_path, strerror(errno));
+                    warnln("mv: unlink '{}': {}", old_path, strerror(errno));
+            } else {
+                warnln("mv: cannot move '{}' : {}", old_path, strerror(errno));
             }
         }
 
         if (verbose && rc == 0)
-            printf("renamed '%s' -> '%s'\n", old_path, new_path);
+            outln("renamed '{}' -> '{}'", old_path, new_path);
     }
 
     return 0;

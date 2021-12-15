@@ -5,48 +5,31 @@
  */
 
 #include <LibCore/ArgsParser.h>
+#include <LibCore/ConfigFile.h>
+#include <LibCore/System.h>
 #include <LibKeyboard/CharacterMap.h>
+#include <LibMain/Main.h>
 #include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio setkeymap getkeymap rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
-    if (unveil("/res/keymaps", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio setkeymap getkeymap rpath wpath cpath"));
+    TRY(Core::System::unveil("/res/keymaps", "r"));
+    TRY(Core::System::unveil("/etc/Keyboard.ini", "rwc"));
 
     const char* path = nullptr;
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(path, "The mapping file to be used", "file", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
-    if (path && path[0] == '/') {
-        if (unveil(path, "r") < 0) {
-            perror("unveil path");
-            return 1;
-        }
-    }
+    if (path && path[0] == '/')
+        TRY(Core::System::unveil(path, "r"));
 
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
+    TRY(Core::System::unveil(nullptr, nullptr));
 
     if (!path) {
-        auto keymap = Keyboard::CharacterMap::fetch_system_map();
-        if (keymap.is_error()) {
-            warnln("getkeymap: {}", keymap.error());
-            return 1;
-        }
-
-        outln("{}", keymap.value().character_map_name());
+        auto keymap = TRY(Keyboard::CharacterMap::fetch_system_map());
+        outln("{}", keymap.character_map_name());
         return 0;
     }
 
@@ -60,7 +43,12 @@ int main(int argc, char** argv)
     int rc = character_map.value().set_system_map();
     if (rc != 0) {
         perror("setkeymap");
+        return rc;
     }
+
+    auto mapper_config(Core::ConfigFile::open("/etc/Keyboard.ini", Core::ConfigFile::AllowWriting::Yes));
+    mapper_config->write_entry("Mapping", "Keymap", path);
+    mapper_config->sync();
 
     return rc;
 }

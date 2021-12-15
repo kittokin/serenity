@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,17 +8,12 @@
 #include <AK/Random.h>
 #include <AK/ScopeGuard.h>
 #include <LibCore/Account.h>
-#include <LibCore/File.h>
-#ifndef AK_OS_MACOS
-#    include <crypt.h>
-#endif
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
-#ifndef AK_OS_MACOS
+#ifndef AK_OS_BSD_GENERIC
+#    include <crypt.h>
 #    include <shadow.h>
-#else
-#    include <LibC/shadow.h>
 #endif
 #include <stdio.h>
 #include <string.h>
@@ -58,63 +53,109 @@ static Vector<gid_t> get_extra_gids(const passwd& pwd)
     return extra_gids;
 }
 
-Result<Account, String> Account::from_passwd(const passwd& pwd, const spwd& spwd)
+ErrorOr<Account> Account::from_passwd(const passwd& pwd, const spwd& spwd)
 {
     Account account(pwd, spwd, get_extra_gids(pwd));
     endpwent();
-#ifndef AK_OS_MACOS
+#ifndef AK_OS_BSD_GENERIC
     endspent();
 #endif
     return account;
 }
 
-Result<Account, String> Account::from_name(const char* username)
+Account Account::self(Read options)
+{
+    struct passwd fallback;
+    fallback.pw_name = const_cast<char*>("(unknown)");
+    fallback.pw_uid = getuid();
+    fallback.pw_gid = getgid();
+    fallback.pw_gecos = const_cast<char*>("");
+    fallback.pw_dir = const_cast<char*>("(unknown)");
+    fallback.pw_shell = const_cast<char*>("(unknown)");
+
+    Vector<gid_t> extra_gids;
+    int extra_gid_count = getgroups(0, nullptr);
+    if (extra_gid_count) {
+        extra_gids.resize(extra_gid_count);
+        int rc = getgroups(extra_gid_count, extra_gids.data());
+        if (rc < 0)
+            extra_gids.resize(0);
+    }
+
+    struct passwd* pwd = getpwuid(fallback.pw_uid);
+    if (!pwd)
+        pwd = &fallback;
+    else
+        pwd->pw_gid = fallback.pw_gid;
+
+    spwd spwd_dummy = {};
+    spwd_dummy.sp_namp = pwd->pw_name;
+    spwd_dummy.sp_pwdp = const_cast<char*>("");
+#ifndef AK_OS_BSD_GENERIC
+    spwd* spwd = nullptr;
+    if (options != Read::PasswdOnly)
+        spwd = getspnam(pwd->pw_name);
+    if (!spwd)
+        spwd = &spwd_dummy;
+#else
+    (void)options;
+    auto* spwd = &spwd_dummy;
+#endif
+
+    return Account(*pwd, *spwd, extra_gids);
+}
+
+ErrorOr<Account> Account::from_name(const char* username, Read options)
 {
     errno = 0;
     auto* pwd = getpwnam(username);
     if (!pwd) {
         if (errno == 0)
-            return String("No such user");
-
-        return String(strerror(errno));
+            return Error::from_string_literal("No such user"sv);
+        return Error::from_errno(errno);
     }
     spwd spwd_dummy = {};
     spwd_dummy.sp_namp = const_cast<char*>(username);
     spwd_dummy.sp_pwdp = const_cast<char*>("");
-#ifndef AK_OS_MACOS
-    auto* spwd = getspnam(username);
+#ifndef AK_OS_BSD_GENERIC
+    spwd* spwd = nullptr;
+    if (options != Read::PasswdOnly)
+        spwd = getspnam(pwd->pw_name);
     if (!spwd)
         spwd = &spwd_dummy;
 #else
+    (void)options;
     auto* spwd = &spwd_dummy;
 #endif
     return from_passwd(*pwd, *spwd);
 }
 
-Result<Account, String> Account::from_uid(uid_t uid)
+ErrorOr<Account> Account::from_uid(uid_t uid, Read options)
 {
     errno = 0;
     auto* pwd = getpwuid(uid);
     if (!pwd) {
         if (errno == 0)
-            return String("No such user");
-
-        return String(strerror(errno));
+            return Error::from_string_literal("No such user"sv);
+        return Error::from_errno(errno);
     }
     spwd spwd_dummy = {};
     spwd_dummy.sp_namp = pwd->pw_name;
     spwd_dummy.sp_pwdp = const_cast<char*>("");
-#ifndef AK_OS_MACOS
-    auto* spwd = getspnam(pwd->pw_name);
+#ifndef AK_OS_BSD_GENERIC
+    spwd* spwd = nullptr;
+    if (options != Read::PasswdOnly)
+        spwd = getspnam(pwd->pw_name);
     if (!spwd)
         spwd = &spwd_dummy;
 #else
+    (void)options;
     auto* spwd = &spwd_dummy;
 #endif
     return from_passwd(*pwd, *spwd);
 }
 
-bool Account::authenticate(const char* password) const
+bool Account::authenticate(SecretString const& password) const
 {
     // If there was no shadow entry for this account, authentication always fails.
     if (m_password_hash.is_null())
@@ -125,7 +166,7 @@ bool Account::authenticate(const char* password) const
         return true;
 
     // FIXME: Use crypt_r if it can be built in lagom.
-    char* hash = crypt(password, m_password_hash.characters());
+    char* hash = crypt(password.characters(), m_password_hash.characters());
     return hash != nullptr && strcmp(hash, m_password_hash.characters()) == 0;
 }
 
@@ -143,9 +184,9 @@ bool Account::login() const
     return true;
 }
 
-void Account::set_password(const char* password)
+void Account::set_password(SecretString const& password)
 {
-    m_password_hash = crypt(password, get_salt().characters());
+    m_password_hash = crypt(password.characters(), get_salt().characters());
 }
 
 void Account::set_password_enabled(bool enabled)
@@ -186,7 +227,7 @@ String Account::generate_passwd_file() const
     struct passwd* p;
     errno = 0;
     while ((p = getpwent())) {
-        if (p->pw_uid == m_uid) {
+        if (p->pw_name == m_username) {
             builder.appendff("{}:!:{}:{}:{}:{}:{}\n",
                 m_username,
                 m_uid, m_gid,
@@ -211,7 +252,7 @@ String Account::generate_passwd_file() const
     return builder.to_string();
 }
 
-#ifndef AK_OS_MACOS
+#ifndef AK_OS_BSD_GENERIC
 String Account::generate_shadow_file() const
 {
     StringBuilder builder;
@@ -224,18 +265,24 @@ String Account::generate_shadow_file() const
         if (p->sp_namp == m_username) {
             builder.appendff("{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
                 m_username, m_password_hash,
-                p->sp_lstchg, p->sp_min,
-                p->sp_max, p->sp_warn,
-                p->sp_inact, p->sp_expire,
-                p->sp_flag);
+                (p->sp_lstchg == -1) ? "" : String::formatted("{}", p->sp_lstchg),
+                (p->sp_min == -1) ? "" : String::formatted("{}", p->sp_min),
+                (p->sp_max == -1) ? "" : String::formatted("{}", p->sp_max),
+                (p->sp_warn == -1) ? "" : String::formatted("{}", p->sp_warn),
+                (p->sp_inact == -1) ? "" : String::formatted("{}", p->sp_inact),
+                (p->sp_expire == -1) ? "" : String::formatted("{}", p->sp_expire),
+                (p->sp_flag == 0) ? "" : String::formatted("{}", p->sp_flag));
 
         } else {
             builder.appendff("{}:{}:{}:{}:{}:{}:{}:{}:{}\n",
                 p->sp_namp, p->sp_pwdp,
-                p->sp_lstchg, p->sp_min,
-                p->sp_max, p->sp_warn,
-                p->sp_inact, p->sp_expire,
-                p->sp_flag);
+                (p->sp_lstchg == -1) ? "" : String::formatted("{}", p->sp_lstchg),
+                (p->sp_min == -1) ? "" : String::formatted("{}", p->sp_min),
+                (p->sp_max == -1) ? "" : String::formatted("{}", p->sp_max),
+                (p->sp_warn == -1) ? "" : String::formatted("{}", p->sp_warn),
+                (p->sp_inact == -1) ? "" : String::formatted("{}", p->sp_inact),
+                (p->sp_expire == -1) ? "" : String::formatted("{}", p->sp_expire),
+                (p->sp_flag == 0) ? "" : String::formatted("{}", p->sp_flag));
         }
     }
     endspent();
@@ -253,13 +300,13 @@ bool Account::sync()
 {
     auto new_passwd_file_content = generate_passwd_file();
     VERIFY(!new_passwd_file_content.is_null());
-#ifndef AK_OS_MACOS
+#ifndef AK_OS_BSD_GENERIC
     auto new_shadow_file_content = generate_shadow_file();
     VERIFY(!new_shadow_file_content.is_null());
 #endif
 
     char new_passwd_name[] = "/etc/passwd.XXXXXX";
-#ifndef AK_OS_MACOS
+#ifndef AK_OS_BSD_GENERIC
     char new_shadow_name[] = "/etc/shadow.XXXXXX";
 #endif
 
@@ -270,7 +317,7 @@ bool Account::sync()
             VERIFY_NOT_REACHED();
         }
         ScopeGuard new_passwd_fd_guard = [new_passwd_fd] { close(new_passwd_fd); };
-#ifndef AK_OS_MACOS
+#ifndef AK_OS_BSD_GENERIC
         auto new_shadow_fd = mkstemp(new_shadow_name);
         if (new_shadow_fd < 0) {
             perror("mkstemp");
@@ -291,7 +338,7 @@ bool Account::sync()
         }
         VERIFY(static_cast<size_t>(nwritten) == new_passwd_file_content.length());
 
-#ifndef AK_OS_MACOS
+#ifndef AK_OS_BSD_GENERIC
         nwritten = write(new_shadow_fd, new_shadow_file_content.characters(), new_shadow_file_content.length());
         if (nwritten < 0) {
             perror("write");
@@ -306,7 +353,7 @@ bool Account::sync()
         return false;
     }
 
-#ifndef AK_OS_MACOS
+#ifndef AK_OS_BSD_GENERIC
     if (rename(new_shadow_name, "/etc/shadow") < 0) {
         perror("Failed to install new /etc/shadow");
         return false;

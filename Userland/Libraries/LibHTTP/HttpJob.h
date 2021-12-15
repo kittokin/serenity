@@ -18,17 +18,15 @@ namespace HTTP {
 class HttpJob final : public Job {
     C_OBJECT(HttpJob)
 public:
-    explicit HttpJob(const HttpRequest& request, OutputStream& output_stream)
-        : Job(request, output_stream)
-    {
-    }
-
     virtual ~HttpJob() override
     {
     }
 
-    virtual void start() override;
-    virtual void shutdown() override;
+    virtual void start(NonnullRefPtr<Core::Socket>) override;
+    virtual void shutdown(ShutdownMode) override;
+
+    Core::Socket const* socket() const { return m_socket; }
+    URL url() const { return m_request.url(); }
 
 protected:
     virtual bool should_fail_on_empty_payload() const override { return false; }
@@ -43,6 +41,11 @@ protected:
     virtual bool is_established() const override { return true; }
 
 private:
+    explicit HttpJob(HttpRequest&& request, OutputStream& output_stream)
+        : Job(move(request), output_stream)
+    {
+    }
+
     RefPtr<Core::Socket> m_socket;
 };
 

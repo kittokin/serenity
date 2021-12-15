@@ -1,17 +1,18 @@
---- Python-3.9.4/config.sub	2021-02-21 20:22:43.901024503 +0100
-+++ Python-3.9.4/config.sub	2021-02-21 20:24:35.079400552 +0100
-@@ -1485,6 +1485,8 @@
- 	-oss*)
- 		os=-sysv3
+--- Python-3.10.1/config.sub	2021-12-06 18:23:39.000000000 +0000
++++ Python-3.10.1/config.sub	2021-12-11 17:17:07.076780435 +0000
+@@ -1474,6 +1474,9 @@
+ 	oss*)
+ 		os=sysv3
  		;;
-+	-serenity*)
++	serenity*)
++		os=serenity
 +		;;
- 	-svr4*)
- 		os=-sysv4
+ 	svr4*)
+ 		os=sysv4
  		;;
---- Python-3.9.4/configure.ac	2021-04-06 20:59:45.319060429 +0200
-+++ Python-3.9.4/configure.ac	2021-04-06 21:02:33.875267539 +0200
-@@ -389,6 +389,9 @@
+--- Python-3.10.1/configure.ac	2021-12-06 18:23:39.000000000 +0000
++++ Python-3.10.1/configure.ac	2021-12-11 17:23:18.363664786 +0000
+@@ -391,6 +391,9 @@
         # a lot of different things including 'define_xopen_source'
         # in the case statement below.
  	case "$host" in
@@ -21,7 +22,15 @@
  	*-*-linux-android*)
  		ac_sys_system=Linux-android
  		;;
-@@ -435,6 +438,9 @@
+@@ -429,6 +432,7 @@
+ 	linux*) MACHDEP="linux";;
+ 	cygwin*) MACHDEP="cygwin";;
+ 	darwin*) MACHDEP="darwin";;
++	serenityos*) MACHDEP="serenityos";;
+ 	'')	MACHDEP="unknown";;
+     esac
+ fi
+@@ -437,6 +441,9 @@
  AC_SUBST(_PYTHON_HOST_PLATFORM)
  if test "$cross_compiling" = yes; then
  	case "$host" in
@@ -31,9 +40,18 @@
  	*-*-linux*)
  		case "$host_cpu" in
  		arm*)
---- Python-3.9.4/configure	2021-02-21 20:22:43.898024520 +0100
-+++ Python-3.9.4/configure	2021-02-21 20:24:35.096400457 +0100
-@@ -3292,6 +3292,9 @@
+@@ -2802,7 +2809,7 @@
+ 	    LINKFORSHARED="-Wl,-E -Wl,+s";;
+ #	    LINKFORSHARED="-Wl,-E -Wl,+s -Wl,+b\$(BINLIBDEST)/lib-dynload";;
+ 	Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
+-	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
++	Linux*|GNU*|SerenityOS*) LINKFORSHARED="-Xlinker -export-dynamic";;
+ 	# -u libsys_s pulls in all symbols in libsys
+ 	Darwin/*)
+ 		LINKFORSHARED="$extra_undefs -framework CoreFoundation"
+--- Python-3.10.1/configure	2021-12-06 18:23:39.000000000 +0000
++++ Python-3.10.1/configure	2021-12-11 17:25:05.866475699 +0000
+@@ -3335,6 +3335,9 @@
         # a lot of different things including 'define_xopen_source'
         # in the case statement below.
  	case "$host" in
@@ -43,7 +61,15 @@
  	*-*-linux-android*)
  		ac_sys_system=Linux-android
  		;;
-@@ -3339,6 +3342,9 @@
+@@ -3373,6 +3376,7 @@
+ 	linux*) MACHDEP="linux";;
+ 	cygwin*) MACHDEP="cygwin";;
+ 	darwin*) MACHDEP="darwin";;
++	serenityos*) MACHDEP="serenityos";;
+ 	'')	MACHDEP="unknown";;
+     esac
+ fi
+@@ -3382,6 +3386,9 @@
  
  if test "$cross_compiling" = yes; then
  	case "$host" in
@@ -53,14 +79,12 @@
  	*-*-linux*)
  		case "$host_cpu" in
  		arm*)
-diff -Naur Python-3.9.4/configure Python-3.9.4.serenity/configure
---- Python-3.9.4/configure	2021-04-24 14:50:59.083484421 +0200
-+++ Python-3.9.4.serenity/configure	2021-04-24 15:50:26.821359967 +0200
-@@ -9647,6 +9647,7 @@
+@@ -9875,7 +9882,7 @@
+ 	    LINKFORSHARED="-Wl,-E -Wl,+s";;
  #	    LINKFORSHARED="-Wl,-E -Wl,+s -Wl,+b\$(BINLIBDEST)/lib-dynload";;
  	Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
- 	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
-+	SerenityOS*) LINKFORSHARED="-Xlinker -export-dynamic";;
+-	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
++	Linux*|GNU*|SerenityOS*) LINKFORSHARED="-Xlinker -export-dynamic";;
  	# -u libsys_s pulls in all symbols in libsys
  	Darwin/*)
  		LINKFORSHARED="$extra_undefs -framework CoreFoundation"

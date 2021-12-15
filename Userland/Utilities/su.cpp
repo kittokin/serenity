@@ -4,12 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Vector.h>
+#include <AK/ScopeGuard.h>
 #include <LibCore/Account.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/GetPassword.h>
 #include <stdio.h>
-#include <string.h>
 #include <unistd.h>
 
 extern "C" int main(int, char**);
@@ -41,7 +40,7 @@ int main(int argc, char** argv)
         ? Core::Account::from_name(user)
         : Core::Account::from_uid(0);
     if (account_or_error.is_error()) {
-        fprintf(stderr, "Core::Account::from_name: %s\n", account_or_error.error().characters());
+        warnln("Core::Account::from_name: {}", account_or_error.error());
         return 1;
     }
 
@@ -59,7 +58,7 @@ int main(int argc, char** argv)
             return 1;
         }
 
-        if (!account.authenticate(password.value().characters())) {
+        if (!account.authenticate(password.value())) {
             warnln("Incorrect or disabled password.");
             return 1;
         }

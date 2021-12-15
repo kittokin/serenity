@@ -10,11 +10,10 @@
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGfx/Font.h>
-#include <stdio.h>
 
 namespace GUI {
 
-int MessageBox::show(Window* parent_window, const StringView& text, const StringView& title, Type type, InputType input_type)
+int MessageBox::show(Window* parent_window, StringView text, StringView title, Type type, InputType input_type)
 {
     auto box = MessageBox::construct(parent_window, text, title, type, input_type);
     if (parent_window)
@@ -22,12 +21,12 @@ int MessageBox::show(Window* parent_window, const StringView& text, const String
     return box->exec();
 }
 
-int MessageBox::show_error(Window* parent_window, const StringView& text)
+int MessageBox::show_error(Window* parent_window, StringView text)
 {
     return show(parent_window, text, "Error", GUI::MessageBox::Type::Error, GUI::MessageBox::InputType::OK);
 }
 
-MessageBox::MessageBox(Window* parent_window, const StringView& text, const StringView& title, Type type, InputType input_type)
+MessageBox::MessageBox(Window* parent_window, StringView text, StringView title, Type type, InputType input_type)
     : Dialog(parent_window)
     , m_text(text)
     , m_type(type)
@@ -45,13 +44,13 @@ RefPtr<Gfx::Bitmap> MessageBox::icon() const
 {
     switch (m_type) {
     case Type::Information:
-        return Gfx::Bitmap::load_from_file("/res/icons/32x32/msgbox-information.png");
+        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-information.png").release_value_but_fixme_should_propagate_errors();
     case Type::Warning:
-        return Gfx::Bitmap::load_from_file("/res/icons/32x32/msgbox-warning.png");
+        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-warning.png").release_value_but_fixme_should_propagate_errors();
     case Type::Error:
-        return Gfx::Bitmap::load_from_file("/res/icons/32x32/msgbox-error.png");
+        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-error.png").release_value_but_fixme_should_propagate_errors();
     case Type::Question:
-        return Gfx::Bitmap::load_from_file("/res/icons/32x32/msgbox-question.png");
+        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-question.png").release_value_but_fixme_should_propagate_errors();
     default:
         return nullptr;
     }
@@ -82,28 +81,33 @@ void MessageBox::build()
     auto& widget = set_main_widget<Widget>();
 
     int text_width = widget.font().width(m_text);
+    auto number_of_lines = m_text.split('\n').size();
+    int padded_text_height = widget.font().glyph_height() * 1.6;
+    int total_text_height = number_of_lines * padded_text_height;
     int icon_width = 0;
 
     widget.set_layout<VerticalBoxLayout>();
     widget.set_fill_with_background_color(true);
 
-    widget.layout()->set_margins({ 8, 8, 8, 8 });
+    widget.layout()->set_margins(8);
     widget.layout()->set_spacing(6);
 
     auto& message_container = widget.add<Widget>();
     message_container.set_layout<HorizontalBoxLayout>();
-    message_container.layout()->set_margins({ 8, 0, 0, 0 });
     message_container.layout()->set_spacing(8);
 
     if (m_type != Type::None) {
         auto& icon_image = message_container.add<ImageWidget>();
         icon_image.set_bitmap(icon());
-        if (icon())
+        if (icon()) {
             icon_width = icon()->width();
+            if (icon_width > 0)
+                message_container.layout()->set_margins({ 0, 0, 0, 8 });
+        }
     }
 
     auto& label = message_container.add<Label>(m_text);
-    label.set_fixed_height(16);
+    label.set_fixed_height(total_text_height);
     if (m_type != Type::None)
         label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
 
@@ -139,7 +143,7 @@ void MessageBox::build()
     int width = (button_count * button_width) + ((button_count - 1) * button_container.layout()->spacing()) + 32;
     width = max(width, text_width + icon_width + 56);
 
-    set_rect(x(), y(), width, 96);
+    set_rect(x(), y(), width, 80 + label.max_height());
     set_resizable(false);
 }
 

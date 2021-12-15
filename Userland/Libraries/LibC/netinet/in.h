@@ -6,57 +6,45 @@
 
 #pragma once
 
-#include <bits/stdint.h>
-#include <sys/cdefs.h>
-#include <sys/socket.h>
+#include <Kernel/API/POSIX/netinet/in.h>
+#include <endian.h>
 
 __BEGIN_DECLS
 
-typedef uint32_t in_addr_t;
-in_addr_t inet_addr(const char*);
+in_addr_t inet_addr(char const*);
 
-#define INADDR_ANY ((in_addr_t)0)
-#define INADDR_NONE ((in_addr_t)-1)
-#define INADDR_LOOPBACK 0x7f000001
+static inline uint16_t htons(uint16_t value)
+{
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+    return __builtin_bswap16(value);
+#else
+    return value;
+#endif
+}
 
-#define IN_LOOPBACKNET 127
+static inline uint16_t ntohs(uint16_t value)
+{
+    return htons(value);
+}
 
-#define IP_TTL 2
-#define IP_MULTICAST_LOOP 3
-#define IP_ADD_MEMBERSHIP 4
-#define IP_DROP_MEMBERSHIP 5
+static inline uint32_t htonl(uint32_t value)
+{
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+    return __builtin_bswap32(value);
+#else
+    return value;
+#endif
+}
 
-#define IPPORT_RESERVED 1024
-#define IPPORT_USERRESERVED 5000
+static inline uint32_t ntohl(uint32_t value)
+{
+    return htonl(value);
+}
 
-typedef uint16_t in_port_t;
+#define IN6_IS_ADDR_LOOPBACK(addr) \
+    ((addr)->s6_addr[0] == 0 && (addr)->s6_addr[1] == 0 && (addr)->s6_addr[2] == 0 && (addr)->s6_addr[3] == 0 && (addr)->s6_addr[4] == 0 && (addr)->s6_addr[5] == 0 && (addr)->s6_addr[6] == 0 && (addr)->s6_addr[7] == 0 && (addr)->s6_addr[8] == 0 && (addr)->s6_addr[9] == 0 && (addr)->s6_addr[10] == 0 && (addr)->s6_addr[11] == 0 && (addr)->s6_addr[12] == 0 && (addr)->s6_addr[13] == 0 && (addr)->s6_addr[14] == 0 && (addr)->s6_addr[15] == 1)
 
-struct in_addr {
-    uint32_t s_addr;
-};
-
-struct sockaddr_in {
-    sa_family_t sin_family;
-    in_port_t sin_port;
-    struct in_addr sin_addr;
-    char sin_zero[8];
-};
-
-struct ip_mreq {
-    struct in_addr imr_multiaddr;
-    struct in_addr imr_interface;
-};
-
-struct in6_addr {
-    uint8_t s6_addr[16];
-};
-
-struct sockaddr_in6 {
-    sa_family_t sin6_family;   // AF_INET6.
-    in_port_t sin6_port;       // Port number.
-    uint32_t sin6_flowinfo;    // IPv6 traffic class and flow information.
-    struct in6_addr sin6_addr; // IPv6 address.
-    uint32_t sin6_scope_id;    // Set of interfaces for a scop
-};
+#define IN6_IS_ADDR_V4MAPPED(addr) \
+    ((((addr)->s6_addr[0]) == 0) && (((addr)->s6_addr[1]) == 0) && (((addr)->s6_addr[2]) == 0) && (((addr)->s6_addr[3]) == 0) && (((addr)->s6_addr[4]) == 0) && (((addr)->s6_addr[5]) == 0) && (((addr)->s6_addr[6]) == 0) && (((addr)->s6_addr[7]) == 0) && (((addr)->s6_addr[8]) == 0) && (((addr)->s6_addr[9]) == 0) && (((addr)->s6_addr[10]) == 0xFF) && (((addr)->s6_addr[11]) == 0xFF))
 
 __END_DECLS

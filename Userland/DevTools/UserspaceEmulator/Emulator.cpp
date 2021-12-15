@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Leon Albrecht <leon2002.l@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,9 +10,12 @@
 #include "SimpleRegion.h"
 #include "SoftCPU.h"
 #include <AK/Debug.h>
+#include <AK/FileStream.h>
 #include <AK/Format.h>
 #include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
+#include <AK/StringUtils.h>
+#include <LibCore/File.h>
+#include <LibCore/MappedFile.h>
 #include <LibELF/AuxiliaryVector.h>
 #include <LibELF/Image.h>
 #include <LibELF/Validation.h>
@@ -37,12 +41,13 @@ Emulator& Emulator::the()
     return *s_the;
 }
 
-Emulator::Emulator(const String& executable_path, const Vector<String>& arguments, const Vector<String>& environment)
+Emulator::Emulator(String const& executable_path, Vector<StringView> const& arguments, Vector<String> const& environment)
     : m_executable_path(executable_path)
     , m_arguments(arguments)
     , m_environment(environment)
     , m_mmu(*this)
     , m_cpu(*this)
+    , m_editor(Line::Editor::construct())
 {
     m_malloc_tracer = make<MallocTracer>(*this);
 
@@ -98,7 +103,7 @@ void Emulator::setup_stack(Vector<ELF::AuxiliaryValue> aux_vector)
     Vector<u32> argv_entries;
 
     for (auto& argument : m_arguments) {
-        m_cpu.push_string(argument.characters());
+        m_cpu.push_string(argument);
         argv_entries.append(m_cpu.esp().value());
     }
 
@@ -111,14 +116,14 @@ void Emulator::setup_stack(Vector<ELF::AuxiliaryValue> aux_vector)
 
     for (auto& auxv : aux_vector) {
         if (!auxv.optional_string.is_empty()) {
-            m_cpu.push_string(auxv.optional_string.characters());
+            m_cpu.push_string(auxv.optional_string);
             auxv.auxv.a_un.a_ptr = (void*)m_cpu.esp().value();
         }
     }
 
     for (ssize_t i = aux_vector.size() - 1; i >= 0; --i) {
         auto& value = aux_vector[i].auxv;
-        m_cpu.push_buffer((const u8*)&value, sizeof(value));
+        m_cpu.push_buffer((u8 const*)&value, sizeof(value));
     }
 
     m_cpu.push32(shadow_wrap_as_initialized<u32>(0)); // char** envp = { envv_entries..., nullptr }
@@ -131,18 +136,20 @@ void Emulator::setup_stack(Vector<ELF::AuxiliaryValue> aux_vector)
         m_cpu.push32(shadow_wrap_as_initialized(argv_entries[i]));
     u32 argv = m_cpu.esp().value();
 
-    m_cpu.push32(shadow_wrap_as_initialized<u32>(0)); // (alignment)
+    while ((m_cpu.esp().value() + 4) % 16 != 0)
+        m_cpu.push32(shadow_wrap_as_initialized<u32>(0)); // (alignment)
 
     u32 argc = argv_entries.size();
     m_cpu.push32(shadow_wrap_as_initialized(envp));
     m_cpu.push32(shadow_wrap_as_initialized(argv));
     m_cpu.push32(shadow_wrap_as_initialized(argc));
-    m_cpu.push32(shadow_wrap_as_initialized<u32>(0)); // (alignment)
+
+    VERIFY(m_cpu.esp().value() % 16 == 0);
 }
 
 bool Emulator::load_elf()
 {
-    auto file_or_error = MappedFile::map(m_executable_path);
+    auto file_or_error = Core::MappedFile::map(m_executable_path);
     if (file_or_error.is_error()) {
         reportln("Unable to map {}: {}", m_executable_path, file_or_error.error());
         return false;
@@ -157,7 +164,7 @@ bool Emulator::load_elf()
     }
 
     String interpreter_path;
-    if (!ELF::validate_program_headers(*(const Elf32_Ehdr*)elf_image_data.data(), elf_image_data.size(), (const u8*)elf_image_data.data(), elf_image_data.size(), &interpreter_path)) {
+    if (!ELF::validate_program_headers(*(Elf32_Ehdr const*)elf_image_data.data(), elf_image_data.size(), (u8 const*)elf_image_data.data(), elf_image_data.size(), &interpreter_path)) {
         reportln("failed to validate ELF file");
         return false;
     }
@@ -165,13 +172,13 @@ bool Emulator::load_elf()
     VERIFY(!interpreter_path.is_null());
     dbgln("interpreter: {}", interpreter_path);
 
-    auto interpreter_file_or_error = MappedFile::map(interpreter_path);
+    auto interpreter_file_or_error = Core::MappedFile::map(interpreter_path);
     VERIFY(!interpreter_file_or_error.is_error());
     auto interpreter_image_data = interpreter_file_or_error.value()->bytes();
     ELF::Image interpreter_image(interpreter_image_data);
 
     constexpr FlatPtr interpreter_load_offset = 0x08000000;
-    interpreter_image.for_each_program_header([&](const ELF::Image::ProgramHeader& program_header) {
+    interpreter_image.for_each_program_header([&](ELF::Image::ProgramHeader const& program_header) {
         // Loader is not allowed to have its own TLS regions
         VERIFY(program_header.type() != PT_TLS);
 
@@ -213,23 +220,42 @@ int Emulator::exec()
 
     constexpr bool trace = false;
 
+    size_t instructions_until_next_profile_dump = profile_instruction_interval();
+    if (is_profiling() && m_loader_text_size.has_value())
+        emit_profile_event(profile_stream(), "mmap", String::formatted(R"("ptr": {}, "size": {}, "name": "/usr/lib/Loader.so")", *m_loader_text_base, *m_loader_text_size));
+
     while (!m_shutdown) {
-        m_cpu.save_base_eip();
+        if (m_steps_til_pause) [[likely]] {
+            m_cpu.save_base_eip();
+            auto insn = X86::Instruction::from_stream(m_cpu, true, true);
+            // Exec cycle
+            if constexpr (trace) {
+                outln("{:p}  \033[33;1m{}\033[0m", m_cpu.base_eip(), insn.to_string(m_cpu.base_eip(), symbol_provider));
+            }
 
-        auto insn = X86::Instruction::from_stream(m_cpu, true, true);
+            (m_cpu.*insn.handler())(insn);
 
-        if constexpr (trace) {
-            outln("{:p}  \033[33;1m{}\033[0m", m_cpu.base_eip(), insn.to_string(m_cpu.base_eip(), symbol_provider));
-        }
+            if (is_profiling()) {
+                if (instructions_until_next_profile_dump == 0) {
+                    instructions_until_next_profile_dump = profile_instruction_interval();
+                    emit_profile_sample(profile_stream());
+                } else {
+                    --instructions_until_next_profile_dump;
+                }
+            }
 
-        (m_cpu.*insn.handler())(insn);
+            if constexpr (trace) {
+                m_cpu.dump();
+            }
 
-        if constexpr (trace) {
-            m_cpu.dump();
-        }
+            if (m_pending_signals) [[unlikely]] {
+                dispatch_one_pending_signal();
+            }
+            if (m_steps_til_pause > 0)
+                m_steps_til_pause--;
 
-        if (m_pending_signals) [[unlikely]] {
-            dispatch_one_pending_signal();
+        } else {
+            handle_repl();
         }
     }
 
@@ -237,6 +263,95 @@ int Emulator::exec()
         tracer->dump_leak_report();
 
     return m_exit_status;
+}
+
+void Emulator::handle_repl()
+{
+    // Console interface
+    // FIXME: Previous Instruction**s**
+    // FIXME: Function names (base, call, jump)
+    auto saved_eip = m_cpu.eip();
+    m_cpu.save_base_eip();
+    auto insn = X86::Instruction::from_stream(m_cpu, true, true);
+    // FIXME: This does not respect inlining
+    //        another way of getting the current function is at need
+    if (auto symbol = symbol_at(m_cpu.base_eip()); symbol.has_value()) {
+        outln("[{}]: {}", symbol->lib_name, symbol->symbol);
+    }
+
+    outln("==> {}", create_instruction_line(m_cpu.base_eip(), insn));
+    for (int i = 0; i < 7; ++i) {
+        m_cpu.save_base_eip();
+        insn = X86::Instruction::from_stream(m_cpu, true, true);
+        outln("    {}", create_instruction_line(m_cpu.base_eip(), insn));
+    }
+    // We don't want to increase EIP here, we just want the instructions
+    m_cpu.set_eip(saved_eip);
+
+    outln();
+    m_cpu.dump();
+    outln();
+
+    auto line_or_error = m_editor->get_line(">> ");
+    if (line_or_error.is_error())
+        return;
+
+    // FIXME: find a way to find a global symbol-address for run-until-call
+    auto help = [] {
+        outln("Available commands:");
+        outln("continue, c: Continue the execution");
+        outln("quit, q: Quit the execution (this will \"kill\" the program and run checks)");
+        outln("ret, r: Run until function returns");
+        outln("step, s [count]: Execute [count] instructions and then halt");
+        outln("signal, sig [number:int], send signal to emulated program (default: sigint:2)");
+    };
+    auto line = line_or_error.release_value();
+    if (line.is_empty()) {
+        if (m_editor->history().is_empty()) {
+            help();
+            return;
+        }
+        line = m_editor->history().last().entry;
+    }
+
+    auto parts = line.split_view(' ', false);
+    m_editor->add_to_history(line);
+
+    if (parts[0].is_one_of("s"sv, "step"sv)) {
+        if (parts.size() == 1) {
+            m_steps_til_pause = 1;
+            return;
+        }
+        auto number = AK::StringUtils::convert_to_int<i64>(parts[1]);
+        if (!number.has_value()) {
+            outln("usage \"step [count]\"\n\tcount can't be less than 1");
+            return;
+        }
+        m_steps_til_pause = number.value();
+    } else if (parts[0].is_one_of("c"sv, "continue"sv)) {
+        m_steps_til_pause = -1;
+    } else if (parts[0].is_one_of("r"sv, "ret"sv)) {
+        m_run_til_return = true;
+        // FIXME: This may be uninitialized
+        m_watched_addr = m_mmu.read32({ 0x23, m_cpu.ebp().value() + 4 }).value();
+        m_steps_til_pause = -1;
+    } else if (parts[0].is_one_of("q"sv, "quit"sv)) {
+        m_shutdown = true;
+    } else if (parts[0].is_one_of("sig"sv, "signal"sv)) {
+        if (parts.size() == 1) {
+            did_receive_signal(SIGINT);
+            return;
+        } else if (parts.size() == 2) {
+            auto number = AK::StringUtils::convert_to_int<i32>(parts[1]);
+            if (number.has_value()) {
+                did_receive_signal(number.value());
+                return;
+            }
+        }
+        outln("Usage: sig [signal:int], default: SINGINT:2");
+    } else {
+        help();
+    }
 }
 
 Vector<FlatPtr> Emulator::raw_backtrace()
@@ -257,59 +372,94 @@ Vector<FlatPtr> Emulator::raw_backtrace()
     return backtrace;
 }
 
-const MmapRegion* Emulator::find_text_region(FlatPtr address)
+MmapRegion const* Emulator::find_text_region(FlatPtr address)
 {
-    const MmapRegion* matching_region = nullptr;
-    mmu().for_each_region([&](auto& region) {
-        if (!is<MmapRegion>(region))
+    MmapRegion const* matching_region = nullptr;
+    mmu().for_each_region_of_type<MmapRegion>([&](auto& region) {
+        if (!(region.is_executable() && address >= region.base() && address < region.base() + region.size()))
             return IterationDecision::Continue;
-        const auto& mmap_region = static_cast<const MmapRegion&>(region);
-        if (!(mmap_region.is_executable() && address >= mmap_region.base() && address < mmap_region.base() + mmap_region.size()))
-            return IterationDecision::Continue;
-        matching_region = &mmap_region;
+        matching_region = &region;
         return IterationDecision::Break;
     });
     return matching_region;
 }
 
-String Emulator::create_backtrace_line(FlatPtr address)
+// FIXME: This interface isn't the nicest
+MmapRegion const* Emulator::load_library_from_address(FlatPtr address)
 {
-    auto minimal = String::formatted("=={{{}}}==    {:p}", getpid(), (void*)address);
-    const auto* region = find_text_region(address);
+    auto const* region = find_text_region(address);
     if (!region)
-        return minimal;
-    auto separator_index = region->name().index_of(":");
-    if (!separator_index.has_value())
-        return minimal;
+        return {};
 
-    String lib_name = region->name().substring(0, separator_index.value());
+    String lib_name = region->lib_name();
+    if (lib_name.is_null())
+        return {};
+
     String lib_path = lib_name;
-    if (region->name().contains(".so"))
+    if (Core::File::looks_like_shared_library(lib_name))
         lib_path = String::formatted("/usr/lib/{}", lib_path);
 
     if (!m_dynamic_library_cache.contains(lib_path)) {
-        auto file_or_error = MappedFile::map(lib_path);
+        auto file_or_error = Core::MappedFile::map(lib_path);
         if (file_or_error.is_error())
-            return minimal;
+            return {};
 
-        auto debug_info = make<Debug::DebugInfo>(make<ELF::Image>(file_or_error.value()->bytes()));
-        m_dynamic_library_cache.set(lib_path, CachedELF { file_or_error.release_value(), move(debug_info) });
+        auto image = make<ELF::Image>(file_or_error.value()->bytes());
+        auto debug_info = make<Debug::DebugInfo>(*image);
+        m_dynamic_library_cache.set(lib_path, CachedELF { file_or_error.release_value(), move(debug_info), move(image) });
+    }
+    return region;
+}
+
+MmapRegion const* Emulator::first_region_for_object(StringView name)
+{
+    MmapRegion* ret = nullptr;
+    mmu().for_each_region_of_type<MmapRegion>([&](auto& region) {
+        if (region.lib_name() == name) {
+            ret = &region;
+            return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
+    });
+    return ret;
+}
+
+// FIXME: This disregards function inlining.
+Optional<Emulator::SymbolInfo> Emulator::symbol_at(FlatPtr address)
+{
+    auto const* address_region = load_library_from_address(address);
+    if (!address_region)
+        return {};
+    auto lib_name = address_region->lib_name();
+    auto const* first_region = (lib_name.is_null() || lib_name.is_empty()) ? address_region : first_region_for_object(lib_name);
+    VERIFY(first_region);
+    auto lib_path = lib_name;
+    if (Core::File::looks_like_shared_library(lib_name)) {
+        lib_path = String::formatted("/usr/lib/{}", lib_name);
     }
 
     auto it = m_dynamic_library_cache.find(lib_path);
-    auto& elf = it->value.debug_info->elf();
-    String symbol = elf.symbolicate(address - region->base());
+    auto const& elf = it->value.debug_info->elf();
+    auto symbol = elf.symbolicate(address - first_region->base());
 
-    auto line_without_source_info = String::formatted("=={{{}}}==    {:p}  [{}]: {}", getpid(), (void*)address, lib_name, symbol);
-
-    auto source_position = it->value.debug_info->get_source_position(address - region->base());
-    if (source_position.has_value())
-        return String::formatted("=={{{}}}==    {:p}  [{}]: {} (\e[34;1m{}\e[0m:{})", getpid(), (void*)address, lib_name, symbol, LexicalPath(source_position.value().file_path).basename(), source_position.value().line_number);
-
-    return line_without_source_info;
+    auto source_position = it->value.debug_info->get_source_position(address - first_region->base());
+    return { { lib_name, symbol, source_position } };
 }
 
-void Emulator::dump_backtrace(const Vector<FlatPtr>& backtrace)
+String Emulator::create_backtrace_line(FlatPtr address)
+{
+    auto maybe_symbol = symbol_at(address);
+    if (!maybe_symbol.has_value()) {
+        return String::formatted("=={}==    {:p}", getpid(), address);
+    } else if (!maybe_symbol->source_position.has_value()) {
+        return String::formatted("=={}==    {:p}  [{}]: {}", getpid(), address, maybe_symbol->lib_name, maybe_symbol->symbol);
+    } else {
+        auto const& source_position = maybe_symbol->source_position.value();
+        return String::formatted("=={}==    {:p}  [{}]: {} (\e[34;1m{}\e[0m:{})", getpid(), address, maybe_symbol->lib_name, maybe_symbol->symbol, LexicalPath::basename(source_position.file_path), source_position.line_number);
+    }
+}
+
+void Emulator::dump_backtrace(Vector<FlatPtr> const& backtrace)
 {
     for (auto& address : backtrace) {
         reportln("{}", create_backtrace_line(address));
@@ -321,15 +471,53 @@ void Emulator::dump_backtrace()
     dump_backtrace(raw_backtrace());
 }
 
+void Emulator::emit_profile_sample(AK::OutputStream& output)
+{
+    if (!is_in_region_of_interest())
+        return;
+    StringBuilder builder;
+    timeval tv {};
+    gettimeofday(&tv, nullptr);
+    builder.appendff(R"~(, {{"type": "sample", "pid": {}, "tid": {}, "timestamp": {}, "lost_samples": 0, "stack": [)~", getpid(), gettid(), tv.tv_sec * 1000 + tv.tv_usec / 1000);
+    builder.join(',', raw_backtrace());
+    builder.append("]}\n");
+    output.write_or_error(builder.string_view().bytes());
+}
+
+void Emulator::emit_profile_event(AK::OutputStream& output, StringView event_name, String contents)
+{
+    StringBuilder builder;
+    timeval tv {};
+    gettimeofday(&tv, nullptr);
+    builder.appendff(R"~(, {{"type": "{}", "pid": {}, "tid": {}, "timestamp": {}, "lost_samples": 0, "stack": [], {}}})~", event_name, getpid(), gettid(), tv.tv_sec * 1000 + tv.tv_usec / 1000, contents);
+    builder.append('\n');
+    output.write_or_error(builder.string_view().bytes());
+}
+
+String Emulator::create_instruction_line(FlatPtr address, X86::Instruction insn)
+{
+    auto symbol = symbol_at(address);
+    if (!symbol.has_value() || !symbol->source_position.has_value())
+        return String::formatted("{:p}: {}", address, insn.to_string(address));
+    else
+        return String::formatted("{:p}: {} \e[34;1m{}\e[0m:{}", address, insn.to_string(address), LexicalPath::basename(symbol->source_position->file_path), symbol->source_position.value().line_number);
+}
+
 static void emulator_signal_handler(int signum)
 {
     Emulator::the().did_receive_signal(signum);
+}
+
+static void emulator_sigint_handler(int signum)
+{
+    Emulator::the().did_receive_sigint(signum);
 }
 
 void Emulator::register_signal_handlers()
 {
     for (int signum = 0; signum < NSIG; ++signum)
         signal(signum, emulator_signal_handler);
+    signal(SIGINT, emulator_sigint_handler);
 }
 
 enum class DefaultSignalAction {
@@ -418,7 +606,7 @@ void Emulator::dispatch_one_pending_signal()
 
     auto old_esp = m_cpu.esp();
 
-    u32 stack_alignment = (m_cpu.esp().value() - 56) % 16;
+    u32 stack_alignment = (m_cpu.esp().value() - 52) % 16;
     m_cpu.set_esp(shadow_wrap_as_initialized(m_cpu.esp().value() - stack_alignment));
 
     m_cpu.push32(shadow_wrap_as_initialized(m_cpu.eflags()));
@@ -437,16 +625,17 @@ void Emulator::dispatch_one_pending_signal()
 
     m_cpu.push32(shadow_wrap_as_initialized((u32)signum));
     m_cpu.push32(shadow_wrap_as_initialized(handler.handler));
-    m_cpu.push32(shadow_wrap_as_initialized(0u));
 
     VERIFY((m_cpu.esp().value() % 16) == 0);
+
+    m_cpu.push32(shadow_wrap_as_initialized(0u));
 
     m_cpu.set_eip(m_signal_trampoline);
 }
 
 // Make sure the compiler doesn't "optimize away" this function:
-extern void signal_trampoline_dummy();
-void signal_trampoline_dummy()
+static void signal_trampoline_dummy() __attribute__((used));
+NEVER_INLINE void signal_trampoline_dummy()
 {
     // The trampoline preserves the current eax, pushes the signal code and
     // then calls the signal handler. We do this because, when interrupting a
@@ -488,44 +677,16 @@ void Emulator::setup_signal_trampoline()
     mmu().add_region(move(trampoline_region));
 }
 
-bool Emulator::find_malloc_symbols(const MmapRegion& libc_text)
-{
-    auto file_or_error = MappedFile::map("/usr/lib/libc.so");
-    if (file_or_error.is_error())
-        return false;
-
-    ELF::Image image(file_or_error.value()->bytes());
-    auto malloc_symbol = image.find_demangled_function("malloc");
-    auto free_symbol = image.find_demangled_function("free");
-    auto realloc_symbol = image.find_demangled_function("realloc");
-    auto calloc_symbol = image.find_demangled_function("calloc");
-    auto malloc_size_symbol = image.find_demangled_function("malloc_size");
-    if (!malloc_symbol.has_value() || !free_symbol.has_value() || !realloc_symbol.has_value() || !malloc_size_symbol.has_value())
-        return false;
-
-    m_malloc_symbol_start = malloc_symbol.value().value() + libc_text.base();
-    m_malloc_symbol_end = m_malloc_symbol_start + malloc_symbol.value().size();
-    m_free_symbol_start = free_symbol.value().value() + libc_text.base();
-    m_free_symbol_end = m_free_symbol_start + free_symbol.value().size();
-    m_realloc_symbol_start = realloc_symbol.value().value() + libc_text.base();
-    m_realloc_symbol_end = m_realloc_symbol_start + realloc_symbol.value().size();
-    m_calloc_symbol_start = calloc_symbol.value().value() + libc_text.base();
-    m_calloc_symbol_end = m_calloc_symbol_start + calloc_symbol.value().size();
-    m_malloc_size_symbol_start = malloc_size_symbol.value().value() + libc_text.base();
-    m_malloc_size_symbol_end = m_malloc_size_symbol_start + malloc_size_symbol.value().size();
-    return true;
-}
-
 void Emulator::dump_regions() const
 {
-    const_cast<SoftMMU&>(m_mmu).for_each_region([&](const Region& region) {
+    const_cast<SoftMMU&>(m_mmu).for_each_region([&](Region const& region) {
         reportln("{:p}-{:p}  {:c}{:c}{:c} {}  {}{}{} ",
             region.base(),
             region.end() - 1,
             region.is_readable() ? 'R' : '-',
             region.is_writable() ? 'W' : '-',
             region.is_executable() ? 'X' : '-',
-            is<MmapRegion>(region) ? static_cast<const MmapRegion&>(region).name() : "",
+            is<MmapRegion>(region) ? static_cast<MmapRegion const&>(region).name() : "",
             is<MmapRegion>(region) ? "(mmap) " : "",
             region.is_stack() ? "(stack) " : "",
             region.is_text() ? "(text) " : "");

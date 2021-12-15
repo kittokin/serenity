@@ -7,7 +7,7 @@
 #pragma once
 
 #include "../AutoCompleteResponse.h"
-#include "AutoCompleteEngine.h"
+#include "CodeComprehensionEngine.h"
 #include "FileDB.h"
 #include <AK/HashMap.h>
 #include <AK/LexicalPath.h>
@@ -18,10 +18,9 @@
 
 namespace LanguageServers {
 
-class ClientConnection
-    : public IPC::ClientConnection<LanguageClientEndpoint, LanguageServerEndpoint> {
+class ClientConnection : public IPC::ClientConnection<LanguageClientEndpoint, LanguageServerEndpoint> {
 public:
-    explicit ClientConnection(NonnullRefPtr<Core::LocalSocket>, int client_id);
+    explicit ClientConnection(NonnullRefPtr<Core::LocalSocket>);
     ~ClientConnection() override;
 
     virtual void die() override;
@@ -34,12 +33,10 @@ protected:
     virtual void set_file_content(String const&, String const&) override;
     virtual void auto_complete_suggestions(GUI::AutocompleteProvider::ProjectLocation const&) override;
     virtual void find_declaration(GUI::AutocompleteProvider::ProjectLocation const&) override;
-    virtual void set_auto_complete_mode(String const&) override = 0;
-
-    static void set_declarations_of_document_callback(ClientConnection&, const String&, Vector<GUI::AutocompleteProvider::Declaration>&&);
+    virtual void get_parameters_hint(GUI::AutocompleteProvider::ProjectLocation const&) override;
 
     FileDB m_filedb;
-    OwnPtr<AutoCompleteEngine> m_autocomplete_engine;
+    OwnPtr<CodeComprehensionEngine> m_autocomplete_engine;
 };
 
 }

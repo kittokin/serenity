@@ -8,14 +8,14 @@
 
 #include <AK/Atomic.h>
 #include <AK/CircularQueue.h>
+#include <AK/Error.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/RefPtr.h>
 #include <AK/Time.h>
 #include <AK/Types.h>
 #include <Kernel/API/KeyCode.h>
 #include <Kernel/API/MousePacket.h>
-#include <Kernel/KResult.h>
-#include <Kernel/SpinLock.h>
+#include <Kernel/Locking/Spinlock.h>
 #include <Kernel/UnixTypes.h>
 #include <LibKeyboard/CharacterMap.h>
 
@@ -60,7 +60,7 @@ private:
 
 class KeyboardClient {
 public:
-    virtual ~KeyboardClient();
+    virtual ~KeyboardClient() = default;
     virtual void on_key_pressed(KeyEvent) = 0;
 };
 

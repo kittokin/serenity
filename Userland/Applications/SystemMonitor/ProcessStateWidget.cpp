@@ -23,9 +23,14 @@ public:
         : m_target(target)
         , m_pid(pid)
     {
+        m_target.register_client(*this);
         refresh();
     }
-    virtual ~ProcessStateModel() override { }
+
+    virtual ~ProcessStateModel() override
+    {
+        m_target.unregister_client(*this);
+    }
 
     virtual int row_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return m_target.column_count({}); }
     virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return 2; }
@@ -45,16 +50,11 @@ public:
 
         if (role == GUI::ModelRole::Font) {
             if (index.column() == 0) {
-                return Gfx::FontDatabase::default_bold_font();
+                return Gfx::FontDatabase::default_font().bold_variant();
             }
         }
 
         return {};
-    }
-
-    virtual void update() override
-    {
-        did_update(GUI::Model::DontInvalidateIndices);
     }
 
     virtual void model_did_update([[maybe_unused]] unsigned flags) override
@@ -72,7 +72,7 @@ public:
                 break;
             }
         }
-        update();
+        invalidate();
     }
 
 private:
@@ -84,11 +84,11 @@ private:
 ProcessStateWidget::ProcessStateWidget(pid_t pid)
 {
     set_layout<GUI::VerticalBoxLayout>();
-    layout()->set_margins({ 4, 4, 4, 4 });
+    layout()->set_margins(4);
     m_table_view = add<GUI::TableView>();
+    m_table_view->set_model(adopt_ref(*new ProcessStateModel(ProcessModel::the(), pid)));
     m_table_view->column_header().set_visible(false);
     m_table_view->column_header().set_section_size(0, 90);
-    m_table_view->set_model(adopt_ref(*new ProcessStateModel(ProcessModel::the(), pid)));
 }
 
 ProcessStateWidget::~ProcessStateWidget()

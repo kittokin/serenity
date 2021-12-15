@@ -5,8 +5,8 @@
  */
 
 #include <LibGfx/Bitmap.h>
-#include <LibWeb/CSS/Parser/DeprecatedCSSParser.h>
-#include <LibWeb/CSS/StyleResolver.h>
+#include <LibWeb/CSS/Parser/Parser.h>
+#include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/HTML/EventNames.h>
@@ -21,14 +21,18 @@ HTMLImageElement::HTMLImageElement(DOM::Document& document, QualifiedName qualif
     , m_image_loader(*this)
 {
     m_image_loader.on_load = [this] {
-        this->document().update_layout();
-        dispatch_event(DOM::Event::create(EventNames::load));
+        set_needs_style_update(true);
+        queue_an_element_task(HTML::Task::Source::DOMManipulation, [this] {
+            dispatch_event(DOM::Event::create(EventNames::load));
+        });
     };
 
     m_image_loader.on_fail = [this] {
         dbgln("HTMLImageElement: Resource did fail: {}", src());
-        this->document().update_layout();
-        dispatch_event(DOM::Event::create(EventNames::error));
+        set_needs_style_update(true);
+        queue_an_element_task(HTML::Task::Source::DOMManipulation, [this] {
+            dispatch_event(DOM::Event::create(EventNames::error));
+        });
     };
 
     m_image_loader.on_animate = [this] {
@@ -60,14 +64,14 @@ void HTMLImageElement::parse_attribute(const FlyString& name, const String& valu
 {
     HTMLElement::parse_attribute(name, value);
 
-    if (name == HTML::AttributeNames::src)
-        m_image_loader.load(document().complete_url(value));
+    if (name == HTML::AttributeNames::src && !value.is_empty())
+        m_image_loader.load(document().parse_url(value));
 }
 
 RefPtr<Layout::Node> HTMLImageElement::create_layout_node()
 {
-    auto style = document().style_resolver().resolve_style(*this);
-    if (style->display() == CSS::Display::None)
+    auto style = document().style_computer().compute_style(*this);
+    if (style->display().is_none())
         return nullptr;
     return adopt_ref(*new Layout::ImageBox(document(), *this, move(style), m_image_loader));
 }

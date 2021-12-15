@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/System.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Icon.h>
@@ -16,6 +17,7 @@
 #include <LibGfx/FontDatabase.h>
 #include <LibGfx/Painter.h>
 #include <LibGfx/Path.h>
+#include <LibMain/Main.h>
 #include <unistd.h>
 
 const int WIDTH = 780;
@@ -36,7 +38,7 @@ private:
 
 Canvas::Canvas()
 {
-    m_bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, { WIDTH, HEIGHT });
+    m_bitmap = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRx8888, { WIDTH, HEIGHT }).release_value_but_fixme_should_propagate_errors();
     draw();
 }
 
@@ -47,7 +49,8 @@ Canvas::~Canvas()
 void Canvas::paint_event(GUI::PaintEvent& event)
 {
     GUI::Painter painter(*this);
-    painter.draw_scaled_bitmap(event.rect(), *m_bitmap, m_bitmap->rect());
+    painter.add_clip_rect(event.rect());
+    painter.draw_scaled_bitmap(rect(), *m_bitmap, m_bitmap->rect());
 }
 
 void Canvas::draw()
@@ -107,7 +110,7 @@ void Canvas::draw()
     painter.draw_line({ 740, 140 }, { 640, 240 }, Color::Red, 5, Gfx::Painter::LineStyle::Solid);
     painter.draw_line({ 690, 140 }, { 640, 240 }, Color::Blue, 10, Gfx::Painter::LineStyle::Solid);
 
-    auto bg = Gfx::Bitmap::load_from_file("/res/html/misc/90s-bg.png");
+    auto bg = Gfx::Bitmap::try_load_from_file("/res/html/misc/90s-bg.png").release_value_but_fixme_should_propagate_errors();
     painter.draw_tiled_bitmap({ 20, 260, 480, 320 }, *bg);
 
     painter.draw_line({ 40, 480 }, { 20, 260 }, Color::Red);
@@ -128,7 +131,7 @@ void Canvas::draw()
     path.close();
     painter.fill_path(path, Color::Yellow, Gfx::Painter::WindingRule::EvenOdd);
 
-    auto buggie = Gfx::Bitmap::load_from_file("/res/graphics/buggie.png");
+    auto buggie = Gfx::Bitmap::try_load_from_file("/res/graphics/buggie.png").release_value_but_fixme_should_propagate_errors();
     painter.blit({ 280, 280 }, *buggie, buggie->rect(), 0.5);
     painter.draw_scaled_bitmap({ 360, 280, buggie->rect().width() * 2, buggie->rect().height() * 2 }, *buggie, buggie->rect());
 
@@ -140,15 +143,17 @@ void Canvas::draw()
     painter.draw_text({ 520, 260, 240, 80 }, "CenterRight", Gfx::TextAlignment::CenterRight, Color::White);
     painter.draw_text({ 520, 260, 240, 80 }, "TopLeft", Gfx::TextAlignment::TopLeft, Color::White);
     painter.draw_text({ 520, 260, 240, 80 }, "TopRight", Gfx::TextAlignment::TopRight, Color::White);
+    painter.draw_text({ 520, 260, 240, 80 }, "BottomLeft", Gfx::TextAlignment::BottomLeft, Color::White);
+    painter.draw_text({ 520, 260, 240, 80 }, "BottomRight", Gfx::TextAlignment::BottomRight, Color::White);
 
     painter.draw_rect({ 520, 360, 240, 30 }, Color::DarkGray);
     painter.draw_text({ 520, 360, 240, 30 }, "Emojis! 🙂😂🐞🦄", Gfx::TextAlignment::Center, Color::White);
 
     painter.draw_rect({ 520, 410, 240, 80 }, Color::DarkGray);
     painter.draw_text({ 520, 415, 240, 20 }, "Normal text", Gfx::FontDatabase::default_font(), Gfx::TextAlignment::CenterLeft, Color::Red);
-    painter.draw_text({ 520, 430, 240, 20 }, "Bold text", Gfx::FontDatabase::default_bold_font(), Gfx::TextAlignment::CenterLeft, Color::Green);
+    painter.draw_text({ 520, 430, 240, 20 }, "Bold text", Gfx::FontDatabase::default_font().bold_variant(), Gfx::TextAlignment::CenterLeft, Color::Green);
     painter.draw_text({ 520, 450, 240, 20 }, "Normal text (fixed width)", Gfx::FontDatabase::default_fixed_width_font(), Gfx::TextAlignment::CenterLeft, Color::Blue);
-    painter.draw_text({ 520, 465, 240, 20 }, "Bold text (fixed width)", Gfx::FontDatabase::default_bold_fixed_width_font(), Gfx::TextAlignment::CenterLeft, Color::Yellow);
+    painter.draw_text({ 520, 465, 240, 20 }, "Bold text (fixed width)", Gfx::FontDatabase::default_fixed_width_font().bold_variant(), Gfx::TextAlignment::CenterLeft, Color::Yellow);
 
     auto font = Gfx::BitmapFont::load_from_file("/res/fonts/PebbletonBold14.font");
     painter.draw_rect({ 520, 510, 240, 30 }, Color::DarkGray);
@@ -179,39 +184,26 @@ void Canvas::draw()
     update();
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    auto app = GUI::Application::construct(argc, argv);
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    if (pledge("stdio recvfd sendfd rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio recvfd sendfd rpath"));
+    TRY(Core::System::unveil("/res", "r"));
+    TRY(Core::System::unveil(nullptr, nullptr));
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    if (unveil(nullptr, nullptr) < 0) {
-        perror("unveil");
-        return 1;
-    }
-
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_double_buffering_enabled(true);
     window->set_title("LibGfx Demo");
     window->set_resizable(false);
     window->resize(WIDTH, HEIGHT);
 
-    auto menubar = GUI::Menubar::construct();
-    auto& app_menu = menubar->add_menu("File");
-    app_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); }));
-    window->set_menubar(move(menubar));
+    auto file_menu = TRY(window->try_add_menu("&File"));
+    TRY(file_menu->try_add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); })));
 
     auto app_icon = GUI::Icon::default_icon("app-libgfx-demo");
     window->set_icon(app_icon.bitmap_for_size(16));
-    window->set_main_widget<Canvas>();
+    (void)TRY(window->try_set_main_widget<Canvas>());
     window->show();
 
     return app->exec();

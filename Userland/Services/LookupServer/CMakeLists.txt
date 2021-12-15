@@ -1,3 +1,9 @@
+serenity_component(
+    LookupServer
+    REQUIRED
+    TARGETS LookupServer
+)
+
 compile_ipc(LookupServer.ipc LookupServerEndpoint.h)
 compile_ipc(LookupClient.ipc LookupClientEndpoint.h)
 
@@ -15,4 +21,4 @@ set(SOURCES
 )
 
 serenity_bin(LookupServer)
-target_link_libraries(LookupServer LibCore LibIPC)
+target_link_libraries(LookupServer LibCore LibIPC LibMain)

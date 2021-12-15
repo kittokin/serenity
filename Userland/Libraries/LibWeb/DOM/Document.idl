@@ -2,6 +2,9 @@ interface Document : Node {
 
     constructor();
 
+    // FIXME: These attributes currently don't do anything.
+    [PutForwards=href, LegacyUnforgeable] readonly attribute Location? location;
+
     readonly attribute DOMImplementation implementation;
 
     readonly attribute DOMString characterSet;
@@ -13,9 +16,14 @@ interface Document : Node {
 
     attribute DOMString cookie;
 
+    readonly attribute USVString referrer;
+
+    readonly attribute Element? activeElement;
+
     Element? getElementById(DOMString id);
     HTMLCollection getElementsByName(DOMString name);
     HTMLCollection getElementsByTagName(DOMString tagName);
+    HTMLCollection getElementsByTagNameNS(DOMString? namespace, DOMString localName);
     HTMLCollection getElementsByClassName(DOMString className);
 
     readonly attribute HTMLCollection applets;
@@ -35,6 +43,7 @@ interface Document : Node {
     Range createRange();
     Event createEvent(DOMString interface);
 
+    [CEReactions, NewObject] Node importNode(Node node, optional boolean deep = false);
     [CEReactions, ImplementedAs=adopt_node_binding] Node adoptNode(Node node);
 
     [ImplementedAs=style_sheets_for_bindings] readonly attribute StyleSheetList styleSheets;
@@ -57,7 +66,9 @@ interface Document : Node {
     readonly attribute unsigned long childElementCount;
 
     Element? querySelector(DOMString selectors);
-    ArrayFromVector querySelectorAll(DOMString selectors);
+    [NewObject] NodeList querySelectorAll(DOMString selectors);
+
+    [SameObject] readonly attribute HTMLCollection children;
 
     // FIXME: These should all come from a GlobalEventHandlers mixin
     attribute EventHandler onabort;
@@ -129,5 +140,8 @@ interface Document : Node {
     attribute EventHandler onwebkitanimationstart;
     attribute EventHandler onwebkittransitionend;
     attribute EventHandler onwheel;
+
+    readonly boolean hidden;
+    readonly DOMString visibilityState;
 
 };

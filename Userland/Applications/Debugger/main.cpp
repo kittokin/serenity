@@ -6,11 +6,11 @@
 
 #include <AK/Assertions.h>
 #include <AK/ByteBuffer.h>
-#include <AK/Demangle.h>
+#include <AK/OwnPtr.h>
+#include <AK/Platform.h>
 #include <AK/StringBuilder.h>
 #include <LibC/sys/arch/i386/regs.h>
 #include <LibCore/ArgsParser.h>
-#include <LibCore/File.h>
 #include <LibDebug/DebugInfo.h>
 #include <LibDebug/DebugSession.h>
 #include <LibLine/Editor.h>
@@ -19,7 +19,6 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 RefPtr<Line::Editor> editor;
@@ -36,9 +35,17 @@ static void handle_sigint(int)
 
 static void handle_print_registers(const PtraceRegisters& regs)
 {
-    outln("eax={:08x} ebx={:08x} ecx={:08x} edx={:08x}", regs.eax, regs.ebx, regs.ecx, regs.edx);
-    outln("esp={:08x} ebp={:08x} esi={:08x} edi={:08x}", regs.esp, regs.ebp, regs.esi, regs.edi);
-    outln("eip={:08x} eflags={:08x}", regs.eip, regs.eflags);
+#if ARCH(I386)
+    outln("eax={:p} ebx={:p} ecx={:p} edx={:p}", regs.eax, regs.ebx, regs.ecx, regs.edx);
+    outln("esp={:p} ebp={:p} esi={:p} edi={:p}", regs.esp, regs.ebp, regs.esi, regs.edi);
+    outln("eip={:p} eflags={:p}", regs.eip, regs.eflags);
+#else
+    outln("rax={:p} rbx={:p} rcx={:p} rdx={:p}", regs.rax, regs.rbx, regs.rcx, regs.rdx);
+    outln("rsp={:p} rbp={:p} rsi={:p} rdi={:p}", regs.rsp, regs.rbp, regs.rsi, regs.rdi);
+    outln("r8 ={:p} r9 ={:p} r10={:p} r11={:p}", regs.r8, regs.r9, regs.r10, regs.r11);
+    outln("r12={:p} r13={:p} r14={:p} r15={:p}", regs.r12, regs.r13, regs.r14, regs.r15);
+    outln("rip={:p} rflags={:p}", regs.rip, regs.rflags);
+#endif
 }
 
 static bool handle_disassemble_command(const String& command, void* first_instruction)
@@ -60,7 +67,8 @@ static bool handle_disassemble_command(const String& command, void* first_instru
         auto value = g_debug_session->peek(reinterpret_cast<u32*>(first_instruction) + i);
         if (!value.has_value())
             break;
-        code.append(&value, sizeof(u32));
+        if (code.try_append(&value, sizeof(u32)).is_error())
+            break;
     }
 
     X86::SimpleInstructionStream stream(code.data(), code.size());
@@ -75,6 +83,33 @@ static bool handle_disassemble_command(const String& command, void* first_instru
         outln("    {:p} <+{}>:\t{}", offset + reinterpret_cast<size_t>(first_instruction), offset, insn.value().to_string(offset));
     }
 
+    return true;
+}
+
+static bool handle_backtrace_command(const PtraceRegisters& regs)
+{
+#if ARCH(I386)
+    auto ebp_val = regs.ebp;
+    auto eip_val = regs.eip;
+    outln("Backtrace:");
+    while (g_debug_session->peek((u32*)eip_val).has_value() && g_debug_session->peek((u32*)ebp_val).has_value()) {
+        auto eip_symbol = g_debug_session->symbolicate(eip_val);
+        auto source_position = g_debug_session->get_source_position(eip_val);
+        String symbol_location = (eip_symbol.has_value() && eip_symbol->symbol != "") ? eip_symbol->symbol : "???";
+        if (source_position.has_value()) {
+            outln("{:p} in {} ({}:{})", eip_val, symbol_location, source_position->file_path, source_position->line_number);
+        } else {
+            outln("{:p} in {}", eip_val, symbol_location);
+        }
+        auto next_eip = g_debug_session->peek((u32*)(ebp_val + 4));
+        auto next_ebp = g_debug_session->peek((u32*)ebp_val);
+        eip_val = (u32)next_eip.value();
+        ebp_val = (u32)next_ebp.value();
+    }
+#else
+    (void)regs;
+    TODO();
+#endif
     return true;
 }
 
@@ -145,13 +180,13 @@ static bool handle_examine_command(const String& command)
     if (!(argument.starts_with("0x"))) {
         return false;
     }
-    u32 address = strtoul(argument.characters() + 2, nullptr, 16);
+    FlatPtr address = strtoul(argument.characters() + 2, nullptr, 16);
     auto res = g_debug_session->peek((u32*)address);
     if (!res.has_value()) {
-        printf("could not examine memory at address 0x%x\n", address);
+        outln("Could not examine memory at address {:p}", address);
         return true;
     }
-    printf("0x%x\n", res.value());
+    outln("{:#x}", res.value());
     return true;
 }
 
@@ -165,6 +200,7 @@ static void print_help()
         "regs - Print registers\n"
         "dis [number of instructions] - Print disassembly\n"
         "bp <address/symbol/file:line> - Insert a breakpoint\n"
+        "bt - show backtrace for current thread\n"
         "x <address> - examine dword in memory\n");
 }
 
@@ -172,7 +208,7 @@ int main(int argc, char** argv)
 {
     editor = Line::Editor::construct();
 
-    if (pledge("stdio proc ptrace exec rpath tty sigaction cpath unix fattr", nullptr) < 0) {
+    if (pledge("stdio proc ptrace exec rpath tty sigaction cpath unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -207,10 +243,15 @@ int main(int argc, char** argv)
 
         VERIFY(optional_regs.has_value());
         const PtraceRegisters& regs = optional_regs.value();
+#if ARCH(I386)
+        const FlatPtr ip = regs.eip;
+#else
+        const FlatPtr ip = regs.rip;
+#endif
 
-        auto symbol_at_ip = g_debug_session->symbolicate(regs.eip);
+        auto symbol_at_ip = g_debug_session->symbolicate(ip);
 
-        auto source_position = g_debug_session->get_source_position(regs.eip);
+        auto source_position = g_debug_session->get_source_position(ip);
 
         if (in_step_line) {
             bool no_source_info = !source_position.has_value();
@@ -224,9 +265,9 @@ int main(int argc, char** argv)
         }
 
         if (symbol_at_ip.has_value())
-            outln("Program is stopped at: {:p} ({}:{})", regs.eip, symbol_at_ip.value().library_name, symbol_at_ip.value().symbol);
+            outln("Program is stopped at: {:p} ({}:{})", ip, symbol_at_ip.value().library_name, symbol_at_ip.value().symbol);
         else
-            outln("Program is stopped at: {:p}", regs.eip);
+            outln("Program is stopped at: {:p}", ip);
 
         if (source_position.has_value()) {
             previous_source_position = source_position.value();
@@ -268,12 +309,14 @@ int main(int argc, char** argv)
                 success = true;
 
             } else if (command.starts_with("dis")) {
-                success = handle_disassemble_command(command, reinterpret_cast<void*>(regs.eip));
+                success = handle_disassemble_command(command, reinterpret_cast<void*>(ip));
 
             } else if (command.starts_with("bp")) {
                 success = handle_breakpoint_command(command);
             } else if (command.starts_with("x")) {
                 success = handle_examine_command(command);
+            } else if (command.starts_with("bt")) {
+                success = handle_backtrace_command(regs);
             }
 
             if (success && !command.is_empty()) {

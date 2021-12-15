@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2021, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,6 +7,7 @@
 #include "Parser.h"
 #include "Shell.h"
 #include <AK/AllOf.h>
+#include <AK/GenericLexer.h>
 #include <AK/ScopeGuard.h>
 #include <AK/ScopedValueRollback.h>
 #include <AK/TemporaryChange.h>
@@ -62,7 +63,7 @@ bool Parser::expect(char ch)
     return expect(StringView { &ch, 1 });
 }
 
-bool Parser::expect(const StringView& expected)
+bool Parser::expect(StringView expected)
 {
     auto offset_at_start = m_offset;
     auto line_at_start = line();
@@ -160,7 +161,6 @@ NonnullRefPtrVector<AST::Node> Parser::parse_as_multiple_expressions()
             return nodes;
         nodes.append(node.release_nonnull());
     }
-    return nodes;
 }
 
 RefPtr<AST::Node> Parser::parse_toplevel()
@@ -175,8 +175,8 @@ RefPtr<AST::Node> Parser::parse_toplevel()
         if (result.entries.is_empty())
             break;
 
-        sequence.append(move(result.entries));
-        positions.append(move(result.separator_positions));
+        sequence.extend(move(result.entries));
+        positions.extend(move(result.separator_positions));
     } while (result.decision == ShouldReadMoreSequences::Yes);
 
     if (sequence.is_empty())
@@ -353,7 +353,7 @@ RefPtr<AST::Node> Parser::parse_variable_decls()
     VERIFY(rest->is_variable_decls());
     auto* rest_decl = static_cast<AST::VariableDeclarations*>(rest.ptr());
 
-    variables.append(rest_decl->variables());
+    variables.extend(rest_decl->variables());
 
     return create<AST::VariableDeclarations>(move(variables));
 }
@@ -1166,8 +1166,10 @@ RefPtr<AST::Node> Parser::parse_expression()
         if (auto immediate = parse_immediate_expression())
             return read_concat(immediate.release_nonnull());
 
-        if (auto inline_exec = parse_evaluate())
+        auto inline_exec = parse_evaluate();
+        if (inline_exec && !inline_exec->is_syntax_error())
             return read_concat(inline_exec.release_nonnull());
+        return inline_exec;
     }
 
     if (starting_char == '#')
@@ -1257,7 +1259,7 @@ RefPtr<AST::Node> Parser::parse_string()
 
     if (peek() == '"') {
         consume();
-        auto inner = parse_doublequoted_string_inner();
+        auto inner = parse_string_inner(StringEndCondition::DoubleQuote);
         if (!inner)
             inner = create<AST::SyntaxError>("Unexpected EOF in string", true);
         if (!expect('"')) {
@@ -1283,14 +1285,18 @@ RefPtr<AST::Node> Parser::parse_string()
     return nullptr;
 }
 
-RefPtr<AST::Node> Parser::parse_doublequoted_string_inner()
+RefPtr<AST::Node> Parser::parse_string_inner(StringEndCondition condition)
 {
     auto rule_start = push_start();
     if (at_end())
         return nullptr;
 
     StringBuilder builder;
-    while (!at_end() && peek() != '"') {
+    while (!at_end()) {
+        if (condition == StringEndCondition::DoubleQuote && peek() == '"') {
+            break;
+        }
+
         if (peek() == '\\') {
             consume();
             if (at_end()) {
@@ -1315,6 +1321,18 @@ RefPtr<AST::Node> Parser::parse_doublequoted_string_inner()
                 builder.append(to_byte(first_nibble, second_nibble));
                 break;
             }
+            case 'u': {
+                if (m_input.length() <= m_offset + 8)
+                    break;
+                size_t counter = 8;
+                auto chars = consume_while([&](auto) { return counter-- > 0; });
+                if (auto number = AK::StringUtils::convert_to_uint_from_hex(chars); number.has_value())
+                    builder.append(Utf32View { &number.value(), 1 });
+                else
+                    builder.append(chars);
+
+                break;
+            }
             case 'a':
                 builder.append('\a');
                 break;
@@ -1333,6 +1351,9 @@ RefPtr<AST::Node> Parser::parse_doublequoted_string_inner()
             case 'n':
                 builder.append('\n');
                 break;
+            case 't':
+                builder.append('\t');
+                break;
             }
             continue;
         }
@@ -1343,7 +1364,7 @@ RefPtr<AST::Node> Parser::parse_doublequoted_string_inner()
                     move(string_literal),
                     move(node)); // Compose String Node
 
-                if (auto string = parse_doublequoted_string_inner()) {
+                if (auto string = parse_string_inner(condition)) {
                     return create<AST::StringPartCompose>(move(inner), string.release_nonnull()); // Compose Composition Composition
                 }
 
@@ -1411,7 +1432,7 @@ RefPtr<AST::Node> Parser::parse_variable_ref()
     return create<AST::SimpleVariable>(move(name)); // Variable Simple
 }
 
-RefPtr<AST::Node> Parser::parse_slice()
+RefPtr<AST::Slice> Parser::parse_slice()
 {
     auto rule_start = push_start();
     if (!next_is("["))
@@ -1574,7 +1595,17 @@ RefPtr<AST::Node> Parser::parse_history_designator()
             nullptr }
     };
 
+    bool is_word_selector = false;
+
     switch (peek()) {
+    case ':':
+        consume();
+        [[fallthrough]];
+    case '^':
+    case '$':
+    case '*':
+        is_word_selector = true;
+        break;
     case '!':
         consume();
         selector.event.kind = AST::HistorySelector::EventKind::IndexFromEnd;
@@ -1586,7 +1617,7 @@ RefPtr<AST::Node> Parser::parse_history_designator()
         selector.event.kind = AST::HistorySelector::EventKind::ContainingStringLookup;
         [[fallthrough]];
     default: {
-        TemporaryChange chars_change { m_extra_chars_not_allowed_in_barewords, { ':' } };
+        TemporaryChange chars_change { m_extra_chars_not_allowed_in_barewords, { ':', '^', '$', '*' } };
 
         auto bareword = parse_bareword();
         if (!bareword || !bareword->is_bareword()) {
@@ -1607,91 +1638,102 @@ RefPtr<AST::Node> Parser::parse_history_designator()
                 selector.event.kind = AST::HistorySelector::EventKind::IndexFromEnd;
             else
                 selector.event.kind = AST::HistorySelector::EventKind::IndexFromStart;
-            auto number = selector.event.text.to_int();
-            if (number.has_value())
-                selector.event.index = abs(number.value());
+            auto number = abs(selector.event.text.to_int().value_or(0));
+            if (number != 0)
+                selector.event.index = number - 1;
             else
                 syntax_error = create<AST::SyntaxError>("History entry index value invalid or out of range");
         }
-        break;
+        if (":^$*"sv.contains(peek())) {
+            is_word_selector = true;
+            if (peek() == ':')
+                consume();
+        }
     }
     }
 
-    if (peek() != ':') {
+    if (!is_word_selector) {
         auto node = create<AST::HistoryEvent>(move(selector));
         if (syntax_error)
             node->set_is_syntax_error(*syntax_error);
         return node;
     }
 
-    consume();
-
     // Word selectors
     auto parse_word_selector = [&]() -> Optional<AST::HistorySelector::WordSelector> {
-        auto rule_start = push_start();
         auto c = peek();
+        AST::HistorySelector::WordSelectorKind word_selector_kind;
+        ssize_t offset = -1;
         if (isdigit(c)) {
             auto num = consume_while(is_digit);
             auto value = num.to_uint();
-            if (!value.has_value()) {
-                return AST::HistorySelector::WordSelector {
-                    AST::HistorySelector::WordSelectorKind::Index,
-                    0,
-                    { m_rule_start_offsets.last(), m_offset, m_rule_start_lines.last(), line() },
-                    syntax_error ? NonnullRefPtr(*syntax_error) : create<AST::SyntaxError>("Word selector value invalid or out of range")
-                };
-            }
-            return AST::HistorySelector::WordSelector {
-                AST::HistorySelector::WordSelectorKind::Index,
-                value.value(),
-                { m_rule_start_offsets.last(), m_offset, m_rule_start_lines.last(), line() },
-                syntax_error
-            };
-        }
-        if (c == '^') {
+            if (!value.has_value())
+                return {};
+            word_selector_kind = AST::HistorySelector::WordSelectorKind::Index;
+            offset = value.value();
+        } else if (c == '^') {
             consume();
-            return AST::HistorySelector::WordSelector {
-                AST::HistorySelector::WordSelectorKind::Index,
-                0,
-                { m_rule_start_offsets.last(), m_offset, m_rule_start_lines.last(), line() },
-                syntax_error
-            };
-        }
-        if (c == '$') {
+            word_selector_kind = AST::HistorySelector::WordSelectorKind::Index;
+            offset = 1;
+        } else if (c == '$') {
             consume();
-            return AST::HistorySelector::WordSelector {
-                AST::HistorySelector::WordSelectorKind::Last,
-                0,
-                { m_rule_start_offsets.last(), m_offset, m_rule_start_lines.last(), line() },
-                syntax_error
-            };
+            word_selector_kind = AST::HistorySelector::WordSelectorKind::Last;
+            offset = 0;
         }
-        return {};
+        if (offset == -1)
+            return {};
+        return AST::HistorySelector::WordSelector {
+            word_selector_kind,
+            static_cast<size_t>(offset),
+            { m_rule_start_offsets.last(), m_offset, m_rule_start_lines.last(), line() },
+            syntax_error
+        };
     };
 
-    auto start = parse_word_selector();
-    if (!start.has_value()) {
+    auto make_word_selector = [&](AST::HistorySelector::WordSelectorKind word_selector_kind, size_t offset) {
+        return AST::HistorySelector::WordSelector {
+            word_selector_kind,
+            offset,
+            { m_rule_start_offsets.last(), m_offset, m_rule_start_lines.last(), line() },
+            syntax_error
+        };
+    };
+
+    auto first_char = peek();
+    if (!(is_digit(first_char) || "^$-*"sv.contains(first_char))) {
         if (!syntax_error)
             syntax_error = create<AST::SyntaxError>("Expected a word selector after ':' in a history event designator", true);
-        auto node = create<AST::HistoryEvent>(move(selector));
-        node->set_is_syntax_error(*syntax_error);
-        return node;
-    }
-    selector.word_selector_range.start = start.release_value();
-
-    if (peek() == '-') {
+    } else if (first_char == '*') {
         consume();
-        auto end = parse_word_selector();
-        if (!end.has_value()) {
-            if (!syntax_error)
-                syntax_error = create<AST::SyntaxError>("Expected a word selector after '-' in a history event designator word selector", true);
-            auto node = create<AST::HistoryEvent>(move(selector));
-            node->set_is_syntax_error(*syntax_error);
-            return node;
-        }
-        selector.word_selector_range.end = move(end);
+        selector.word_selector_range.start = make_word_selector(AST::HistorySelector::WordSelectorKind::Index, 1);
+        selector.word_selector_range.end = make_word_selector(AST::HistorySelector::WordSelectorKind::Last, 0);
+    } else if (first_char == '-') {
+        consume();
+        selector.word_selector_range.start = make_word_selector(AST::HistorySelector::WordSelectorKind::Index, 0);
+        auto last_selector = parse_word_selector();
+        if (!last_selector.has_value())
+            selector.word_selector_range.end = make_word_selector(AST::HistorySelector::WordSelectorKind::Last, 1);
+        else
+            selector.word_selector_range.end = last_selector.release_value();
     } else {
-        selector.word_selector_range.end.clear();
+        auto first_selector = parse_word_selector();
+        // peek() should be a digit, ^, or $ here, so this should always have value.
+        VERIFY(first_selector.has_value());
+        selector.word_selector_range.start = first_selector.release_value();
+        if (peek() == '-') {
+            consume();
+            auto last_selector = parse_word_selector();
+            if (last_selector.has_value()) {
+                selector.word_selector_range.end = last_selector.release_value();
+            } else {
+                selector.word_selector_range.end = make_word_selector(AST::HistorySelector::WordSelectorKind::Last, 1);
+            }
+        } else if (peek() == '*') {
+            consume();
+            selector.word_selector_range.end = make_word_selector(AST::HistorySelector::WordSelectorKind::Last, 0);
+        } else {
+            selector.word_selector_range.end.clear();
+        }
     }
 
     auto node = create<AST::HistoryEvent>(move(selector));
@@ -1757,7 +1799,7 @@ RefPtr<AST::Node> Parser::parse_bareword()
         String username;
         RefPtr<AST::Node> tilde, text;
 
-        auto first_slash_index = string.index_of("/");
+        auto first_slash_index = string.find('/');
         if (first_slash_index.has_value()) {
             username = string.substring_view(1, first_slash_index.value() - 1);
             string = string.substring_view(first_slash_index.value(), string.length() - first_slash_index.value());
@@ -2022,7 +2064,7 @@ bool Parser::parse_heredoc_entries()
             // until we find a line that contains the key
             auto end_condition = move(m_end_condition);
             found_key = false;
-            set_end_condition([this, end = record.end, &found_key] {
+            set_end_condition(make<Function<bool()>>([this, end = record.end, &found_key] {
                 if (found_key)
                     return true;
                 auto offset = current_position();
@@ -2045,9 +2087,9 @@ bool Parser::parse_heredoc_entries()
                 }
                 restore_to(offset.offset, offset.line);
                 return false;
-            });
+            }));
 
-            auto expr = parse_doublequoted_string_inner();
+            auto expr = parse_string_inner(StringEndCondition::Heredoc);
             set_end_condition(move(end_condition));
 
             if (found_key) {
@@ -2088,7 +2130,7 @@ StringView Parser::consume_while(Function<bool(char)> condition)
     return m_input.substring_view(start_offset, m_offset - start_offset);
 }
 
-bool Parser::next_is(const StringView& next)
+bool Parser::next_is(StringView next)
 {
     auto start = current_position();
     auto res = expect(next);

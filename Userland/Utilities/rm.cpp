@@ -27,15 +27,20 @@ int main(int argc, char** argv)
     args_parser.add_option(recursive, "Delete directories recursively", "recursive", 'r');
     args_parser.add_option(force, "Force", "force", 'f');
     args_parser.add_option(verbose, "Verbose", "verbose", 'v');
-    args_parser.add_positional_argument(paths, "Path(s) to remove", "path");
+    args_parser.add_positional_argument(paths, "Path(s) to remove", "path", Core::ArgsParser::Required::No);
     args_parser.parse(argc, argv);
+
+    if (!force && paths.is_empty()) {
+        args_parser.print_usage(stderr, argv[0]);
+        return 1;
+    }
 
     bool had_errors = false;
     for (auto& path : paths) {
         auto result = Core::File::remove(path, recursive ? Core::File::RecursionMode::Allowed : Core::File::RecursionMode::Disallowed, force);
 
         if (result.is_error()) {
-            warnln("rm: cannot remove '{}': {}", path, result.error().error_code);
+            warnln("rm: cannot remove '{}': {}", path, static_cast<Error const&>(result.error()));
             had_errors = true;
         }
 

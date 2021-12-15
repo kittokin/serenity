@@ -20,18 +20,23 @@ enum ShouldChomp {
     Chomp
 };
 
+size_t allocation_size_for_stringimpl(size_t length);
+
 class StringImpl : public RefCounted<StringImpl> {
 public:
     static NonnullRefPtr<StringImpl> create_uninitialized(size_t length, char*& buffer);
     static RefPtr<StringImpl> create(const char* cstring, ShouldChomp = NoChomp);
     static RefPtr<StringImpl> create(const char* cstring, size_t length, ShouldChomp = NoChomp);
     static RefPtr<StringImpl> create(ReadonlyBytes, ShouldChomp = NoChomp);
+    static RefPtr<StringImpl> create_lowercased(char const* cstring, size_t length);
+    static RefPtr<StringImpl> create_uppercased(char const* cstring, size_t length);
+
     NonnullRefPtr<StringImpl> to_lowercase() const;
     NonnullRefPtr<StringImpl> to_uppercase() const;
 
     void operator delete(void* ptr)
     {
-        kfree(ptr);
+        kfree_sized(ptr, allocation_size_for_stringimpl(static_cast<StringImpl*>(ptr)->m_length));
     }
 
     static StringImpl& the_empty_stringimpl();
@@ -43,6 +48,7 @@ public:
     const char* characters() const { return &m_inline_buffer[0]; }
 
     ALWAYS_INLINE ReadonlyBytes bytes() const { return { characters(), length() }; }
+    ALWAYS_INLINE StringView view() const { return { characters(), length() }; }
 
     const char& operator[](size_t i) const
     {
@@ -54,7 +60,7 @@ public:
     {
         if (length() != other.length())
             return false;
-        return !__builtin_memcmp(characters(), other.characters(), length());
+        return __builtin_memcmp(characters(), other.characters(), length()) == 0;
     }
 
     unsigned hash() const
@@ -96,25 +102,16 @@ private:
     char m_inline_buffer[0];
 };
 
-constexpr u32 string_hash(const char* characters, size_t length)
+inline size_t allocation_size_for_stringimpl(size_t length)
 {
-    u32 hash = 0;
-    for (size_t i = 0; i < length; ++i) {
-        hash += (u32)characters[i];
-        hash += (hash << 10);
-        hash ^= (hash >> 6);
-    }
-    hash += hash << 3;
-    hash ^= hash >> 11;
-    hash += hash << 15;
-    return hash;
+    return sizeof(StringImpl) + (sizeof(char) * length) + sizeof(char);
 }
 
 template<>
 struct Formatter<StringImpl> : Formatter<StringView> {
-    void format(FormatBuilder& builder, const StringImpl& value)
+    ErrorOr<void> format(FormatBuilder& builder, StringImpl const& value)
     {
-        Formatter<StringView>::format(builder, { value.characters(), value.length() });
+        return Formatter<StringView>::format(builder, { value.characters(), value.length() });
     }
 };
 
@@ -122,5 +119,4 @@ struct Formatter<StringImpl> : Formatter<StringView> {
 
 using AK::Chomp;
 using AK::NoChomp;
-using AK::string_hash;
 using AK::StringImpl;

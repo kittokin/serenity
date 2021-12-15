@@ -5,11 +5,15 @@
  */
 
 #include <AK/PrintfImplementation.h>
+#include <AK/StringView.h>
 #include <AK/Types.h>
-#include <Kernel/Console.h>
-#include <Kernel/IO.h>
-#include <Kernel/Process.h>
-#include <Kernel/SpinLock.h>
+#include <Kernel/Arch/x86/IO.h>
+#include <Kernel/Devices/ConsoleDevice.h>
+#include <Kernel/Devices/DeviceManagement.h>
+#include <Kernel/Devices/PCISerialDevice.h>
+#include <Kernel/Graphics/GraphicsManagement.h>
+#include <Kernel/Locking/Spinlock.h>
+#include <Kernel/TTY/ConsoleManagement.h>
 #include <Kernel/kstdio.h>
 
 #include <LibC/stdarg.h>
@@ -17,7 +21,7 @@
 static bool serial_debug;
 // A recursive spinlock allows us to keep writing in the case where a
 // page fault happens in the middle of a dbgln(), etc
-static RecursiveSpinLock s_log_lock;
+static RecursiveSpinlock s_log_lock;
 
 void set_serial_debug(bool on_or_off)
 {
@@ -31,6 +35,9 @@ int get_serial_debug()
 
 static void serial_putch(char ch)
 {
+    if (PCISerialDevice::is_available())
+        return PCISerialDevice::the().put_char(ch);
+
     static bool serial_ready = false;
     static bool was_cr = false;
 
@@ -60,17 +67,34 @@ static void serial_putch(char ch)
         was_cr = false;
 }
 
+static void critical_console_out(char ch)
+{
+    if (serial_debug)
+        serial_putch(ch);
+    // No need to output things to the real ConsoleDevice as no one is likely
+    // to read it (because we are in a fatal situation, so only print things and halt)
+    IO::out8(IO::BOCHS_DEBUG_PORT, ch);
+    // We emit chars directly to the string. this is necessary in few cases,
+    // especially when we want to avoid any memory allocations...
+    if (GraphicsManagement::is_initialized() && GraphicsManagement::the().console()) {
+        GraphicsManagement::the().console()->write(ch, true);
+    }
+}
+
 static void console_out(char ch)
 {
     if (serial_debug)
         serial_putch(ch);
 
-    // It would be bad to reach the assert in Console()::the() and do a stack overflow
+    // It would be bad to reach the assert in ConsoleDevice()::the() and do a stack overflow
 
-    if (Console::is_initialized()) {
-        Console::the().put_char(ch);
+    if (DeviceManagement::the().is_console_device_attached()) {
+        DeviceManagement::the().console_device().put_char(ch);
     } else {
-        IO::out8(0xe9, ch);
+        IO::out8(IO::BOCHS_DEBUG_PORT, ch);
+    }
+    if (ConsoleManagement::is_initialized()) {
+        ConsoleManagement::the().debug_tty()->emit_char(ch);
     }
 }
 
@@ -121,27 +145,52 @@ int snprintf(char* buffer, size_t size, const char* fmt, ...)
     return ret;
 }
 
-static void debugger_out(char ch)
+static inline void internal_dbgputch(char ch)
 {
     if (serial_debug)
         serial_putch(ch);
-    IO::out8(0xe9, ch);
+    IO::out8(IO::BOCHS_DEBUG_PORT, ch);
 }
 
 extern "C" void dbgputstr(const char* characters, size_t length)
 {
     if (!characters)
         return;
-    ScopedSpinLock lock(s_log_lock);
+    SpinlockLocker lock(s_log_lock);
     for (size_t i = 0; i < length; ++i)
-        debugger_out(characters[i]);
+        internal_dbgputch(characters[i]);
+}
+
+void dbgputstr(StringView view)
+{
+    ::dbgputstr(view.characters_without_null_termination(), view.length());
 }
 
 extern "C" void kernelputstr(const char* characters, size_t length)
 {
     if (!characters)
         return;
-    ScopedSpinLock lock(s_log_lock);
+    SpinlockLocker lock(s_log_lock);
     for (size_t i = 0; i < length; ++i)
         console_out(characters[i]);
+}
+
+extern "C" void kernelcriticalputstr(const char* characters, size_t length)
+{
+    if (!characters)
+        return;
+    SpinlockLocker lock(s_log_lock);
+    for (size_t i = 0; i < length; ++i)
+        critical_console_out(characters[i]);
+}
+
+extern "C" void kernelearlyputstr(const char* characters, size_t length)
+{
+    if (!characters)
+        return;
+    // NOTE: We do not lock the log lock here, as this function is called before this or any other processor was initialized, meaning:
+    //  A) The $gs base was not setup yet, so we cannot enter into critical sections, and as a result we cannot use SpinLocks
+    //  B) No other processors may try to print at the same time anyway
+    for (size_t i = 0; i < length; ++i)
+        internal_dbgputch(characters[i]);
 }

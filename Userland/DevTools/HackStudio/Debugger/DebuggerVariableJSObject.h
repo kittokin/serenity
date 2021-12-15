@@ -9,6 +9,7 @@
 
 #include "DebuggerGlobalJSObject.h"
 #include <LibDebug/DebugInfo.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/Object.h>
 
 namespace HackStudio {
@@ -24,14 +25,12 @@ public:
 
     virtual const char* class_name() const override { return m_variable_info.type_name.characters(); }
 
-    virtual bool put(const JS::PropertyName& name, JS::Value value, JS::Value) override;
-    void finish_writing_properties() { m_is_writing_properties = false; }
+    JS::ThrowCompletionOr<bool> internal_set(JS::PropertyKey const&, JS::Value value, JS::Value receiver) override;
 
 private:
     DebuggerGlobalJSObject& debugger_object() const;
 
     const Debug::DebugInfo::VariableInfo& m_variable_info;
-    bool m_is_writing_properties { true };
 };
 
 }

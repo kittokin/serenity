@@ -7,15 +7,14 @@
 #include "SamplesModel.h"
 #include "Profile.h"
 #include <AK/StringBuilder.h>
-#include <stdio.h>
 
 namespace Profiler {
 
 SamplesModel::SamplesModel(Profile& profile)
     : m_profile(profile)
 {
-    m_user_frame_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/inspector-object.png"));
-    m_kernel_frame_icon.set_bitmap_for_size(16, Gfx::Bitmap::load_from_file("/res/icons/16x16/inspector-object-red.png"));
+    m_user_frame_icon.set_bitmap_for_size(16, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/inspector-object.png").release_value_but_fixme_should_propagate_errors());
+    m_kernel_frame_icon.set_bitmap_for_size(16, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/inspector-object-red.png").release_value_but_fixme_should_propagate_errors());
 }
 
 SamplesModel::~SamplesModel()
@@ -45,6 +44,8 @@ String SamplesModel::column_name(int column) const
         return "TID";
     case Column::ExecutableName:
         return "Executable";
+    case Column::LostSamples:
+        return "Lost Samples";
     case Column::InnermostStackFrame:
         return "Innermost Frame";
     default:
@@ -72,7 +73,7 @@ GUI::Variant SamplesModel::data(const GUI::ModelIndex& index, GUI::ModelRole rol
             return event.tid;
 
         if (index.column() == Column::ExecutableName) {
-            if (auto* process = m_profile.find_process(event.pid, event.timestamp))
+            if (auto* process = m_profile.find_process(event.pid, event.serial))
                 return process->executable;
             return "";
         }
@@ -81,17 +82,16 @@ GUI::Variant SamplesModel::data(const GUI::ModelIndex& index, GUI::ModelRole rol
             return (u32)event.timestamp;
         }
 
+        if (index.column() == Column::LostSamples) {
+            return event.lost_samples;
+        }
+
         if (index.column() == Column::InnermostStackFrame) {
             return event.frames.last().symbol;
         }
         return {};
     }
     return {};
-}
-
-void SamplesModel::update()
-{
-    did_update(Model::InvalidateAllIndices);
 }
 
 }

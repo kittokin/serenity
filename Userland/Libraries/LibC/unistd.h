@@ -13,18 +13,13 @@
 
 #pragma once
 
-#include <errno.h>
+#include <Kernel/API/POSIX/unistd.h>
 #include <fd_set.h>
 #include <limits.h>
-#include <sys/cdefs.h>
-#include <sys/types.h>
 
 __BEGIN_DECLS
 
 #define HZ 1000
-#define STDIN_FILENO 0
-#define STDOUT_FILENO 1
-#define STDERR_FILENO 2
 
 /* lseek whence values */
 #ifndef _STDIO_H       /* also defined in stdio.h */
@@ -41,7 +36,6 @@ void dump_backtrace();
 int fsync(int fd);
 void sysbeep();
 int gettid();
-int donate(int tid);
 int getpagesize();
 pid_t fork();
 pid_t vfork();
@@ -50,9 +44,8 @@ int execve(const char* filename, char* const argv[], char* const envp[]);
 int execvpe(const char* filename, char* const argv[], char* const envp[]);
 int execvp(const char* filename, char* const argv[]);
 int execl(const char* filename, const char* arg, ...);
+int execle(const char* filename, const char* arg, ...);
 int execlp(const char* filename, const char* arg, ...);
-int chroot(const char* path);
-int chroot_with_mount_flags(const char* path, int mount_flags);
 void sync();
 __attribute__((noreturn)) void _exit(int status);
 pid_t getsid(pid_t);
@@ -115,34 +108,25 @@ int chown(const char* pathname, uid_t, gid_t);
 int fchown(int fd, uid_t, gid_t);
 int ftruncate(int fd, off_t length);
 int truncate(const char* path, off_t length);
-int halt();
-int reboot();
 int mount(int source_fd, const char* target, const char* fs_type, int flags);
 int umount(const char* mountpoint);
 int pledge(const char* promises, const char* execpromises);
 int unveil(const char* path, const char* permissions);
 char* getpass(const char* prompt);
+int pause();
+int chroot(const char*);
 
 enum {
     _PC_NAME_MAX,
     _PC_PATH_MAX,
     _PC_PIPE_BUF,
-    _PC_VDISABLE
+    _PC_VDISABLE,
+    _PC_LINK_MAX
 };
 
-#define R_OK 4
-#define W_OK 2
-#define X_OK 1
-#define F_OK 0
-
-#define MS_NODEV (1 << 0)
-#define MS_NOEXEC (1 << 1)
-#define MS_NOSUID (1 << 2)
-#define MS_BIND (1 << 3)
-#define MS_RDONLY (1 << 4)
-#define MS_REMOUNT (1 << 5)
-
+#define _POSIX_MONOTONIC_CLOCK 200112L
 #define _POSIX_SAVED_IDS
+#define _POSIX_TIMERS 200809L
 
 /*
  * We aren't fully compliant (don't support policies, and don't have a wide
@@ -150,24 +134,6 @@ enum {
  */
 #define _POSIX_PRIORITY_SCHEDULING
 #define _POSIX_VDISABLE '\0'
-
-enum {
-    _SC_NPROCESSORS_CONF,
-    _SC_NPROCESSORS_ONLN,
-    _SC_OPEN_MAX,
-    _SC_TTY_NAME_MAX,
-    _SC_PAGESIZE,
-    _SC_GETPW_R_SIZE_MAX,
-    _SC_CLK_TCK,
-};
-
-#define _SC_NPROCESSORS_CONF _SC_NPROCESSORS_CONF
-#define _SC_NPROCESSORS_ONLN _SC_NPROCESSORS_ONLN
-#define _SC_OPEN_MAX _SC_OPEN_MAX
-#define _SC_PAGESIZE _SC_PAGESIZE
-#define _SC_TTY_NAME_MAX _SC_TTY_NAME_MAX
-#define _SC_GETPW_R_SIZE_MAX _SC_GETPW_R_SIZE_MAX
-#define _SC_CLK_TCK _SC_CLK_TCK
 
 long sysconf(int name);
 

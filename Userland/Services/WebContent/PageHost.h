@@ -28,21 +28,23 @@ public:
 
     void set_palette_impl(const Gfx::PaletteImpl&);
     void set_viewport_rect(const Gfx::IntRect&);
-    void set_screen_rect(const Gfx::IntRect& rect) { m_screen_rect = rect; };
+    void set_screen_rects(const Vector<Gfx::IntRect, 4>& rects, size_t main_screen_index) { m_screen_rect = rects[main_screen_index]; };
+    void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
 
     void set_should_show_line_box_borders(bool b) { m_should_show_line_box_borders = b; }
 
 private:
     // ^PageClient
-    virtual bool is_multi_process() const override { return true; }
     virtual Gfx::Palette palette() const override;
     virtual Gfx::IntRect screen_rect() const override { return m_screen_rect; }
+    virtual Web::CSS::PreferredColorScheme preferred_color_scheme() const override { return m_preferred_color_scheme; }
     virtual void page_did_invalidate(const Gfx::IntRect&) override;
     virtual void page_did_change_selection() override;
     virtual void page_did_request_cursor_change(Gfx::StandardCursor) override;
     virtual void page_did_layout() override;
     virtual void page_did_change_title(const String&) override;
-    virtual void page_did_request_scroll(int) override;
+    virtual void page_did_request_scroll(i32, i32) override;
+    virtual void page_did_request_scroll_to(Gfx::IntPoint const&) override;
     virtual void page_did_request_scroll_into_view(const Gfx::IntRect&) override;
     virtual void page_did_enter_tooltip_area(const Gfx::IntPoint&, const String&) override;
     virtual void page_did_leave_tooltip_area() override;
@@ -64,7 +66,7 @@ private:
 
     explicit PageHost(ClientConnection&);
 
-    Web::Layout::InitialContainingBlockBox* layout_root();
+    Web::Layout::InitialContainingBlock* layout_root();
     void setup_palette();
 
     ClientConnection& m_client;
@@ -72,6 +74,10 @@ private:
     RefPtr<Gfx::PaletteImpl> m_palette_impl;
     Gfx::IntRect m_screen_rect;
     bool m_should_show_line_box_borders { false };
+
+    RefPtr<Core::Timer> m_invalidation_coalescing_timer;
+    Gfx::IntRect m_invalidation_rect;
+    Web::CSS::PreferredColorScheme m_preferred_color_scheme { Web::CSS::PreferredColorScheme::Auto };
 };
 
 }

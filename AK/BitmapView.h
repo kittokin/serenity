@@ -6,53 +6,46 @@
 
 #pragma once
 
-#include <AK/Noncopyable.h>
+#include <AK/Array.h>
 #include <AK/Optional.h>
 #include <AK/Platform.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Types.h>
-#include <AK/kmalloc.h>
 
 namespace AK {
 
+static constexpr Array bitmask_first_byte = { 0xFF, 0xFE, 0xFC, 0xF8, 0xF0, 0xE0, 0xC0, 0x80 };
+static constexpr Array bitmask_last_byte = { 0x00, 0x1, 0x3, 0x7, 0xF, 0x1F, 0x3F, 0x7F };
+
 class BitmapView {
 public:
+    BitmapView() = default;
+
     BitmapView(u8* data, size_t size)
         : m_data(data)
         , m_size(size)
     {
     }
 
-    size_t size() const { return m_size; }
-    size_t size_in_bytes() const { return ceil_div(m_size, static_cast<size_t>(8)); }
-    bool get(size_t index) const
+    [[nodiscard]] size_t size() const { return m_size; }
+    [[nodiscard]] size_t size_in_bytes() const { return ceil_div(m_size, static_cast<size_t>(8)); }
+    [[nodiscard]] bool get(size_t index) const
     {
         VERIFY(index < m_size);
         return 0 != (m_data[index / 8] & (1u << (index % 8)));
     }
-    void set(size_t index, bool value) const
-    {
-        VERIFY(index < m_size);
-        if (value)
-            m_data[index / 8] |= static_cast<u8>((1u << (index % 8)));
-        else
-            m_data[index / 8] &= static_cast<u8>(~(1u << (index % 8)));
-    }
 
-    size_t count_slow(bool value) const
+    [[nodiscard]] size_t count_slow(bool value) const
     {
         return count_in_range(0, m_size, value);
     }
 
-    size_t count_in_range(size_t start, size_t len, bool value) const
+    [[nodiscard]] size_t count_in_range(size_t start, size_t len, bool value) const
     {
         VERIFY(start < m_size);
         VERIFY(start + len <= m_size);
         if (len == 0)
             return 0;
-
-        static const u8 bitmask_first_byte[8] = { 0xFF, 0xFE, 0xFC, 0xF8, 0xF0, 0xE0, 0xC0, 0x80 };
-        static const u8 bitmask_last_byte[8] = { 0x0, 0x1, 0x3, 0x7, 0xF, 0x1F, 0x3F, 0x7F };
 
         size_t count;
         const u8* first = &m_data[start / 8];
@@ -64,9 +57,12 @@ public:
             count = __builtin_popcount(byte);
         } else {
             count = __builtin_popcount(byte);
-            byte = *last;
-            byte &= bitmask_last_byte[(start + len) % 8];
-            count += __builtin_popcount(byte);
+            // Don't access *last if it's out of bounds
+            if (last < &m_data[size_in_bytes()]) {
+                byte = *last;
+                byte &= bitmask_last_byte[(start + len) % 8];
+                count += __builtin_popcount(byte);
+            }
             if (++first < last) {
                 const u32* ptr32 = (const u32*)(((FlatPtr)first + sizeof(u32) - 1) & ~(sizeof(u32) - 1));
                 if ((const u8*)ptr32 > last)
@@ -90,91 +86,9 @@ public:
         return count;
     }
 
-    bool is_null() const { return !m_data; }
+    [[nodiscard]] bool is_null() const { return m_data == nullptr; }
 
-    u8* data() { return m_data; }
-    const u8* data() const { return m_data; }
-
-    template<bool VALUE, bool verify_that_all_bits_flip>
-    void set_range(size_t start, size_t len)
-    {
-        VERIFY(start < m_size);
-        VERIFY(start + len <= m_size);
-        if (len == 0)
-            return;
-
-        static const u8 bitmask_first_byte[8] = { 0xFF, 0xFE, 0xFC, 0xF8, 0xF0, 0xE0, 0xC0, 0x80 };
-        static const u8 bitmask_last_byte[8] = { 0x0, 0x1, 0x3, 0x7, 0xF, 0x1F, 0x3F, 0x7F };
-
-        u8* first = &m_data[start / 8];
-        u8* last = &m_data[(start + len) / 8];
-        u8 byte_mask = bitmask_first_byte[start % 8];
-        if (first == last) {
-            byte_mask &= bitmask_last_byte[(start + len) % 8];
-            if constexpr (verify_that_all_bits_flip) {
-                if constexpr (VALUE) {
-                    VERIFY((*first & byte_mask) == 0);
-                } else {
-                    VERIFY((*first & byte_mask) == byte_mask);
-                }
-            }
-            if constexpr (VALUE)
-                *first |= byte_mask;
-            else
-                *first &= ~byte_mask;
-        } else {
-            if constexpr (verify_that_all_bits_flip) {
-                if constexpr (VALUE) {
-                    VERIFY((*first & byte_mask) == 0);
-                } else {
-                    VERIFY((*first & byte_mask) == byte_mask);
-                }
-            }
-            if constexpr (VALUE)
-                *first |= byte_mask;
-            else
-                *first &= ~byte_mask;
-            byte_mask = bitmask_last_byte[(start + len) % 8];
-            if constexpr (verify_that_all_bits_flip) {
-                if constexpr (VALUE) {
-                    VERIFY((*last & byte_mask) == 0);
-                } else {
-                    VERIFY((*last & byte_mask) == byte_mask);
-                }
-            }
-            if constexpr (VALUE)
-                *last |= byte_mask;
-            else
-                *last &= ~byte_mask;
-            if (++first < last) {
-                if constexpr (VALUE)
-                    __builtin_memset(first, 0xFF, last - first);
-                else
-                    __builtin_memset(first, 0x0, last - first);
-            }
-        }
-    }
-
-    void set_range(size_t start, size_t len, bool value)
-    {
-        if (value)
-            set_range<true, false>(start, len);
-        else
-            set_range<false, false>(start, len);
-    }
-
-    void set_range_and_verify_that_all_bits_flip(size_t start, size_t len, bool value)
-    {
-        if (value)
-            set_range<true, true>(start, len);
-        else
-            set_range<false, true>(start, len);
-    }
-
-    void fill(bool value)
-    {
-        __builtin_memset(m_data, value ? 0xff : 0x00, size_in_bytes());
-    }
+    [[nodiscard]] const u8* data() const { return m_data; }
 
     template<bool VALUE>
     Optional<size_t> find_one_anywhere(size_t hint = 0) const
@@ -365,7 +279,7 @@ public:
             size_t trailing_bits = size() % 32;
             for (size_t i = 0; i < trailing_bits; ++i) {
                 if (!get(first_trailing_bit + i)) {
-                    if (!free_chunks)
+                    if (free_chunks == 0)
                         *start_of_free_chunks = first_trailing_bit + i;
                     if (++free_chunks >= min_length)
                         return min(free_chunks, max_length);
@@ -399,7 +313,7 @@ public:
         }
 
         found_range_size = max_region_size;
-        if (max_region_size) {
+        if (max_region_size != 0) {
             return max_region_start;
         }
         return {};
@@ -446,7 +360,7 @@ public:
 
     static constexpr size_t max_size = 0xffffffff;
 
-private:
+protected:
     u8* m_data { nullptr };
     size_t m_size { 0 };
 };

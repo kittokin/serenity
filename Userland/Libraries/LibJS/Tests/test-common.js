@@ -1,10 +1,10 @@
-let describe;
-let test;
-let expect;
+var describe;
+var test;
+var expect;
 
 // Stores the results of each test and suite. Has a terrible
 // name to avoid name collision.
-let __TestResults__ = {};
+var __TestResults__ = {};
 
 // So test names like "toString" don't automatically produce an error
 Object.setPrototypeOf(__TestResults__, null);
@@ -12,7 +12,7 @@ Object.setPrototypeOf(__TestResults__, null);
 // This array is used to communicate with the C++ program. It treats
 // each message in this array as a separate message. Has a terrible
 // name to avoid name collision.
-let __UserOutput__ = [];
+var __UserOutput__ = [];
 
 // We also rebind console.log here to use the array above
 console.log = (...args) => {
@@ -51,6 +51,15 @@ class ExpectationError extends Error {
         return true;
     };
 
+    const valueToString = value => {
+        try {
+            return String(value);
+        } catch {
+            // e.g for objects without a prototype, the above throws.
+            return Object.prototype.toString.call(value);
+        }
+    };
+
     class Expector {
         constructor(target, inverted) {
             this.target = target;
@@ -65,7 +74,10 @@ class ExpectationError extends Error {
             this.__doMatcher(() => {
                 this.__expect(
                     Object.is(this.target, value),
-                    () => `toBe: expected _${String(value)}_, got _${String(this.target)}_`
+                    () =>
+                        `toBe: expected _${valueToString(value)}_, got _${valueToString(
+                            this.target
+                        )}_`
                 );
             });
         }
@@ -94,6 +106,17 @@ class ExpectationError extends Error {
 
             this.__doMatcher(() => {
                 this.__expect(Object.is(this.target.length, length));
+            });
+        }
+
+        toHaveSize(size) {
+            this.__expect(
+                typeof this.target.size === "number",
+                () => "toHaveSize: target.size not of type number"
+            );
+
+            this.__doMatcher(() => {
+                this.__expect(Object.is(this.target.size, size));
             });
         }
 
@@ -156,7 +179,7 @@ class ExpectationError extends Error {
                 this.__expect(
                     this.target === undefined,
                     () =>
-                        `toBeUndefined: expected target to be undefined, got _${String(
+                        `toBeUndefined: expected target to be undefined, got _${valueToString(
                             this.target
                         )}_`
                 );
@@ -167,20 +190,30 @@ class ExpectationError extends Error {
             this.__doMatcher(() => {
                 this.__expect(
                     isNaN(this.target),
-                    () => `toBeNaN: expected target to be NaN, got _${String(this.target)}_`
+                    () => `toBeNaN: expected target to be NaN, got _${valueToString(this.target)}_`
                 );
             });
         }
 
         toBeTrue() {
             this.__doMatcher(() => {
-                this.__expect(this.target === true);
+                this.__expect(
+                    this.target === true,
+                    () =>
+                        `toBeTrue: expected target to be true, got _${valueToString(this.target)}_`
+                );
             });
         }
 
         toBeFalse() {
             this.__doMatcher(() => {
-                this.__expect(this.target === false);
+                this.__expect(
+                    this.target === false,
+                    () =>
+                        `toBeFalse: expected target to be false, got _${valueToString(
+                            this.target
+                        )}_`
+                );
             });
         }
 
@@ -296,10 +329,22 @@ class ExpectationError extends Error {
             this.__doMatcher(() => {
                 try {
                     this.target();
-                    this.__expect(false);
+                    this.__expect(false, () => "toThrowWithMessage: target function did not throw");
                 } catch (e) {
-                    this.__expect(e instanceof class_);
-                    this.__expect(e.message.includes(message));
+                    this.__expect(
+                        e instanceof class_,
+                        () =>
+                            `toThrowWithMessage: expected error to be instance of ${valueToString(
+                                class_.name
+                            )}, got ${valueToString(e.name)}`
+                    );
+                    this.__expect(
+                        e.message.includes(message),
+                        () =>
+                            `toThrowWithMessage: expected error message to include _${valueToString(
+                                message
+                            )}_, got _${valueToString(e.message)}_`
+                    );
                 }
             });
         }
@@ -308,7 +353,12 @@ class ExpectationError extends Error {
         toEval() {
             this.__expect(typeof this.target === "string");
             const success = canParseSource(this.target);
-            this.__expect(this.inverted ? !success : success);
+            this.__expect(
+                this.inverted ? !success : success,
+                () =>
+                    `Expected _${valueToString(this.target)}_` +
+                    (this.inverted ? "not to eval but it did" : "to eval but it didn't")
+            );
         }
 
         // Must compile regardless of inverted-ness
@@ -318,13 +368,20 @@ class ExpectationError extends Error {
             let result;
 
             try {
-                result = new Function(this.target)();
+                result = eval(this.target);
             } catch (e) {
-                throw new ExpectationError();
+                throw new ExpectationError(
+                    `Expected _${valueToString(this.target)}_ to eval but it failed with ${e}`
+                );
             }
 
             this.__doMatcher(() => {
-                this.__expect(deepEquals(value, result));
+                this.__expect(
+                    deepEquals(value, result),
+                    () =>
+                        `Expected _${valueToString(this.target)}_ to eval to ` +
+                        `_${valueToString(value)}_ but got _${valueToString(result)}_`
+                );
             });
         }
 
@@ -423,7 +480,15 @@ class ExpectationError extends Error {
 
     describe = (message, callback) => {
         suiteMessage = message;
-        callback();
+        if (!__TestResults__[suiteMessage]) __TestResults__[suiteMessage] = {};
+        try {
+            callback();
+        } catch (e) {
+            __TestResults__[suiteMessage][defaultSuiteMessage] = {
+                result: "fail",
+                details: String(e),
+            };
+        }
         suiteMessage = defaultSuiteMessage;
     };
 

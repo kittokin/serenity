@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2021, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,6 +9,8 @@
 #include "Shell/Formatter.h"
 #include <AK/LexicalPath.h>
 #include <AK/ScopeGuard.h>
+#include <AK/Statistics.h>
+#include <AK/String.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
@@ -39,7 +41,7 @@ int Shell::builtin_alias(int argc, const char** argv)
     Core::ArgsParser parser;
     parser.add_positional_argument(arguments, "List of name[=values]'s", "name[=value]", Core::ArgsParser::Required::No);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (arguments.is_empty()) {
@@ -65,6 +67,45 @@ int Shell::builtin_alias(int argc, const char** argv)
     }
 
     return fail ? 1 : 0;
+}
+
+int Shell::builtin_unalias(int argc, const char** argv)
+{
+    bool remove_all { false };
+    Vector<const char*> arguments;
+
+    Core::ArgsParser parser;
+    parser.set_general_help("Remove alias from the list of aliases");
+    parser.add_option(remove_all, "Remove all aliases", nullptr, 'a');
+    parser.add_positional_argument(arguments, "List of aliases to remove", "alias", Core::ArgsParser::Required::No);
+
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
+        return 1;
+
+    if (remove_all) {
+        m_aliases.clear();
+        cache_path();
+        return 0;
+    }
+
+    if (arguments.is_empty()) {
+        warnln("unalias: not enough arguments");
+        parser.print_usage(stderr, argv[0]);
+        return 1;
+    }
+
+    bool failed { false };
+    for (auto& argument : arguments) {
+        if (!m_aliases.contains(argument)) {
+            warnln("unalias: {}: alias not found", argument);
+            failed = true;
+            continue;
+        }
+        m_aliases.remove(argument);
+        remove_entry_from_cache(argument);
+    }
+
+    return failed ? 1 : 0;
 }
 
 int Shell::builtin_bg(int argc, const char** argv)
@@ -96,7 +137,7 @@ int Shell::builtin_bg(int argc, const char** argv)
             return false;
         } });
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (job_id == -1 && !jobs.is_empty())
@@ -141,7 +182,7 @@ int Shell::builtin_type(int argc, const char** argv)
     parser.add_positional_argument(commands, "Command(s) to list info about", "command");
     parser.add_option(dont_show_function_source, "Do not show functions source.", "no-fn-source", 'f');
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     bool something_not_found = false;
@@ -207,7 +248,7 @@ int Shell::builtin_cd(int argc, const char** argv)
     Core::ArgsParser parser;
     parser.add_positional_argument(arg_path, "Path to change to", "path", Core::ArgsParser::Required::No);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     String new_path;
@@ -234,7 +275,10 @@ int Shell::builtin_cd(int argc, const char** argv)
     if (cd_history.is_empty() || cd_history.last() != real_path)
         cd_history.enqueue(real_path);
 
-    const char* path = real_path.characters();
+    auto path_relative_to_current_directory = LexicalPath::relative_path(real_path, cwd);
+    if (path_relative_to_current_directory.is_empty())
+        path_relative_to_current_directory = real_path;
+    const char* path = path_relative_to_current_directory.characters();
 
     int rc = chdir(path);
     if (rc < 0) {
@@ -246,7 +290,7 @@ int Shell::builtin_cd(int argc, const char** argv)
         return 1;
     }
     setenv("OLDPWD", cwd.characters(), 1);
-    cwd = real_path;
+    cwd = move(real_path);
     setenv("PWD", cwd.characters(), 1);
     return 0;
 }
@@ -258,7 +302,7 @@ int Shell::builtin_cdh(int argc, const char** argv)
     Core::ArgsParser parser;
     parser.add_positional_argument(index, "Index of the cd history entry (leave out for a list)", "index", Core::ArgsParser::Required::No);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (index == -1) {
@@ -268,7 +312,7 @@ int Shell::builtin_cdh(int argc, const char** argv)
         }
 
         for (ssize_t i = cd_history.size() - 1; i >= 0; --i)
-            printf("%lu: %s\n", cd_history.size() - i, cd_history.at(i).characters());
+            printf("%zu: %s\n", cd_history.size() - i, cd_history.at(i).characters());
         return 0;
     }
 
@@ -300,7 +344,7 @@ int Shell::builtin_dirs(int argc, const char** argv)
     parser.add_option(number_when_printing, "Number the directories in the stack when printing", "number", 'v');
     parser.add_positional_argument(paths, "Extra paths to put on the stack", "path", Core::ArgsParser::Required::No);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     // -v implies -p
@@ -354,7 +398,7 @@ int Shell::builtin_exit(int argc, const char** argv)
     int exit_code = 0;
     Core::ArgsParser parser;
     parser.add_positional_argument(exit_code, "Exit code", "code", Core::ArgsParser::Required::No);
-    if (!parser.parse(argc, const_cast<char**>(argv)))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (m_is_interactive) {
@@ -372,7 +416,6 @@ int Shell::builtin_exit(int argc, const char** argv)
         printf("Good-bye!\n");
     }
     exit(exit_code);
-    return 0;
 }
 
 int Shell::builtin_export(int argc, const char** argv)
@@ -382,7 +425,7 @@ int Shell::builtin_export(int argc, const char** argv)
     Core::ArgsParser parser;
     parser.add_positional_argument(vars, "List of variable[=value]'s", "values", Core::ArgsParser::Required::No);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (vars.is_empty()) {
@@ -427,7 +470,7 @@ int Shell::builtin_glob(int argc, const char** argv)
     Core::ArgsParser parser;
     parser.add_positional_argument(globs, "Globs to resolve", "glob");
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     for (auto& glob : globs) {
@@ -467,7 +510,7 @@ int Shell::builtin_fg(int argc, const char** argv)
             return false;
         } });
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (job_id == -1 && !jobs.is_empty())
@@ -538,7 +581,7 @@ int Shell::builtin_disown(int argc, const char** argv)
             return false;
         } });
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (job_ids.is_empty()) {
@@ -593,7 +636,7 @@ int Shell::builtin_jobs(int argc, const char** argv)
     parser.add_option(list, "List all information about jobs", "list", 'l');
     parser.add_option(show_pid, "Display the PID of the jobs", "pid", 'p');
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     Job::PrintStatusMode mode = Job::PrintStatusMode::Basic;
@@ -620,58 +663,23 @@ int Shell::builtin_popd(int argc, const char** argv)
     }
 
     bool should_not_switch = false;
-    String path = directory_stack.take_last();
-
     Core::ArgsParser parser;
     parser.add_option(should_not_switch, "Do not switch dirs", "no-switch", 'n');
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
-    bool should_switch = !should_not_switch;
+    auto popped_path = directory_stack.take_last();
 
-    // When no arguments are given, popd removes the top directory from the stack and performs a cd to the new top directory.
-    if (argc == 1) {
-        int rc = chdir(path.characters());
-        if (rc < 0) {
-            warnln("chdir({}) failed: {}", path, strerror(errno));
-            return 1;
-        }
-
-        cwd = path;
+    if (should_not_switch)
         return 0;
-    }
 
-    LexicalPath lexical_path(path.characters());
-    if (!lexical_path.is_valid()) {
-        warnln("LexicalPath failed to canonicalize '{}'", path);
+    auto new_path = LexicalPath::canonicalized_path(popped_path);
+    if (chdir(new_path.characters()) < 0) {
+        warnln("chdir({}) failed: {}", new_path, strerror(errno));
         return 1;
     }
-
-    const char* real_path = lexical_path.string().characters();
-
-    struct stat st;
-    int rc = stat(real_path, &st);
-    if (rc < 0) {
-        warnln("stat({}) failed: {}", real_path, strerror(errno));
-        return 1;
-    }
-
-    if (!S_ISDIR(st.st_mode)) {
-        warnln("Not a directory: {}", real_path);
-        return 1;
-    }
-
-    if (should_switch) {
-        int rc = chdir(real_path);
-        if (rc < 0) {
-            warnln("chdir({}) failed: {}", real_path, strerror(errno));
-            return 1;
-        }
-
-        cwd = lexical_path.string();
-    }
-
+    cwd = new_path;
     return 0;
 }
 
@@ -710,7 +718,7 @@ int Shell::builtin_pushd(int argc, const char** argv)
         if (argv[1][0] == '/') {
             path_builder.append(argv[1]);
         } else {
-            path_builder.appendf("%s/%s", cwd.characters(), argv[1]);
+            path_builder.appendff("{}/{}", cwd, argv[1]);
         }
     } else if (argc == 3) {
         directory_stack.append(cwd.characters());
@@ -721,7 +729,7 @@ int Shell::builtin_pushd(int argc, const char** argv)
                 if (arg[0] == '/') {
                     path_builder.append(arg);
                 } else
-                    path_builder.appendf("%s/%s", cwd.characters(), arg);
+                    path_builder.appendff("{}/{}", cwd, arg);
             }
 
             if (!strcmp(arg, "-n"))
@@ -729,16 +737,10 @@ int Shell::builtin_pushd(int argc, const char** argv)
         }
     }
 
-    LexicalPath lexical_path(path_builder.to_string());
-    if (!lexical_path.is_valid()) {
-        warnln("LexicalPath failed to canonicalize '{}'", path_builder.string_view());
-        return 1;
-    }
-
-    const char* real_path = lexical_path.string().characters();
+    auto real_path = LexicalPath::canonicalized_path(path_builder.to_string());
 
     struct stat st;
-    int rc = stat(real_path, &st);
+    int rc = stat(real_path.characters(), &st);
     if (rc < 0) {
         warnln("stat({}) failed: {}", real_path, strerror(errno));
         return 1;
@@ -750,13 +752,13 @@ int Shell::builtin_pushd(int argc, const char** argv)
     }
 
     if (should_switch) {
-        int rc = chdir(real_path);
+        int rc = chdir(real_path.characters());
         if (rc < 0) {
             warnln("chdir({}) failed: {}", real_path, strerror(errno));
             return 1;
         }
 
-        cwd = lexical_path.string();
+        cwd = real_path;
     }
 
     return 0;
@@ -792,7 +794,7 @@ int Shell::builtin_setopt(int argc, const char** argv)
 
 #undef __ENUMERATE_SHELL_OPTION
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
 #define __ENUMERATE_SHELL_OPTION(name, default_, description) \
@@ -815,7 +817,7 @@ int Shell::builtin_shift(int argc, const char** argv)
     Core::ArgsParser parser;
     parser.add_positional_argument(count, "Shift count", "count", Core::ArgsParser::Required::No);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (count < 1)
@@ -837,7 +839,7 @@ int Shell::builtin_shift(int argc, const char** argv)
     }
 
     for (auto i = 0; i < count; ++i)
-        values.take_first();
+        (void)values.take_first();
 
     return 0;
 }
@@ -865,7 +867,7 @@ int Shell::builtin_source(int argc, const char** argv)
     } };
 
     if (!args.is_empty())
-        set_local_variable("ARGV", AST::create<AST::ListValue>(move(string_argv)));
+        set_local_variable("ARGV", AST::make_ref_counted<AST::ListValue>(move(string_argv)));
 
     if (!run_file(file_to_source, true))
         return 126;
@@ -877,10 +879,17 @@ int Shell::builtin_time(int argc, const char** argv)
 {
     Vector<const char*> args;
 
+    int number_of_iterations = 1;
+
     Core::ArgsParser parser;
+    parser.add_option(number_of_iterations, "Number of iterations", "iterations", 'n', "iterations");
+    parser.set_stop_on_first_non_option(true);
     parser.add_positional_argument(args, "Command to execute with arguments", "command", Core::ArgsParser::Required::Yes);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
+        return 1;
+
+    if (number_of_iterations < 1)
         return 1;
 
     AST::Command command;
@@ -889,14 +898,38 @@ int Shell::builtin_time(int argc, const char** argv)
 
     auto commands = expand_aliases({ move(command) });
 
-    Core::ElapsedTimer timer;
+    AK::Statistics iteration_times;
+
     int exit_code = 1;
-    timer.start();
-    for (auto& job : run_commands(commands)) {
-        block_on_job(job);
-        exit_code = job.exit_code();
+    for (int i = 0; i < number_of_iterations; ++i) {
+        auto timer = Core::ElapsedTimer::start_new();
+        for (auto& job : run_commands(commands)) {
+            block_on_job(job);
+            exit_code = job.exit_code();
+        }
+        iteration_times.add(timer.elapsed());
     }
-    warnln("Time: {} ms", timer.elapsed());
+
+    if (number_of_iterations == 1) {
+        warnln("Time: {} ms", iteration_times.values().first());
+    } else {
+        AK::Statistics iteration_times_excluding_first;
+        for (size_t i = 1; i < iteration_times.size(); i++)
+            iteration_times_excluding_first.add(iteration_times.values()[i]);
+
+        warnln("Timing report:");
+        warnln("==============");
+        warnln("Command:         {}", String::join(' ', args));
+        warnln("Average time:    {:.2} ms (median: {}, stddev: {:.2}, min: {}, max:{})",
+            iteration_times.average(), iteration_times.median(),
+            iteration_times.standard_deviation(),
+            iteration_times.min(), iteration_times.max());
+        warnln("Excluding first: {:.2} ms (median: {}, stddev: {:.2}, min: {}, max:{})",
+            iteration_times_excluding_first.average(), iteration_times_excluding_first.median(),
+            iteration_times_excluding_first.standard_deviation(),
+            iteration_times_excluding_first.min(), iteration_times_excluding_first.max());
+    }
+
     return exit_code;
 }
 
@@ -907,7 +940,7 @@ int Shell::builtin_umask(int argc, const char** argv)
     Core::ArgsParser parser;
     parser.add_positional_argument(mask_text, "New mask (omit to get current mask)", "octal-mask", Core::ArgsParser::Required::No);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     if (!mask_text) {
@@ -957,7 +990,7 @@ int Shell::builtin_wait(int argc, const char** argv)
             return false;
         } });
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     Vector<NonnullRefPtr<Job>> jobs_to_wait_for;
@@ -992,7 +1025,7 @@ int Shell::builtin_unset(int argc, const char** argv)
     Core::ArgsParser parser;
     parser.add_positional_argument(vars, "List of variables", "variables", Core::ArgsParser::Required::Yes);
 
-    if (!parser.parse(argc, const_cast<char**>(argv), false))
+    if (!parser.parse(argc, const_cast<char**>(argv), Core::ArgsParser::FailureBehavior::PrintUsage))
         return 1;
 
     for (auto& value : vars) {
@@ -1112,7 +1145,7 @@ bool Shell::run_builtin(const AST::Command& command, const NonnullRefPtrVector<A
     return false;
 }
 
-bool Shell::has_builtin(const StringView& name) const
+bool Shell::has_builtin(StringView name) const
 {
 #define __ENUMERATE_SHELL_BUILTIN(builtin) \
     if (name == #builtin) {                \

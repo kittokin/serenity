@@ -8,12 +8,6 @@
 #include "Mixer.h"
 #include <AudioServer/AudioClientEndpoint.h>
 #include <LibAudio/Buffer.h>
-#include <errno.h>
-#include <stdio.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/uio.h>
-#include <unistd.h>
 
 namespace AudioServer {
 
@@ -44,7 +38,7 @@ void ClientConnection::die()
     s_connections.remove(client_id());
 }
 
-void ClientConnection::did_finish_playing_buffer(Badge<BufferQueue>, int buffer_id)
+void ClientConnection::did_finish_playing_buffer(Badge<ClientAudioStream>, int buffer_id)
 {
     async_finished_playing_buffer(buffer_id);
 }
@@ -54,13 +48,14 @@ void ClientConnection::did_change_muted_state(Badge<Mixer>, bool muted)
     async_muted_state_changed(muted);
 }
 
-void ClientConnection::did_change_main_mix_volume(Badge<Mixer>, int volume)
+void ClientConnection::did_change_main_mix_volume(Badge<Mixer>, double volume)
 {
     async_main_mix_volume_changed(volume);
 }
 
-void ClientConnection::greet()
+void ClientConnection::did_change_client_volume(Badge<ClientAudioStream>, double volume)
 {
+    async_client_volume_changed(volume);
 }
 
 Messages::AudioServer::GetMainMixVolumeResponse ClientConnection::get_main_mix_volume()
@@ -68,9 +63,30 @@ Messages::AudioServer::GetMainMixVolumeResponse ClientConnection::get_main_mix_v
     return m_mixer.main_volume();
 }
 
-void ClientConnection::set_main_mix_volume(i32 volume)
+void ClientConnection::set_main_mix_volume(double volume)
 {
     m_mixer.set_main_volume(volume);
+}
+
+Messages::AudioServer::GetSampleRateResponse ClientConnection::get_sample_rate()
+{
+    return { m_mixer.audiodevice_get_sample_rate() };
+}
+
+void ClientConnection::set_sample_rate(u32 sample_rate)
+{
+    m_mixer.audiodevice_set_sample_rate(sample_rate);
+}
+
+Messages::AudioServer::GetSelfVolumeResponse ClientConnection::get_self_volume()
+{
+    return m_queue->volume().target();
+}
+
+void ClientConnection::set_self_volume(double volume)
+{
+    if (m_queue)
+        m_queue->set_volume(volume);
 }
 
 Messages::AudioServer::EnqueueBufferResponse ClientConnection::enqueue_buffer(Core::AnonymousBuffer const& buffer, i32 buffer_id, int sample_count)
@@ -81,7 +97,8 @@ Messages::AudioServer::EnqueueBufferResponse ClientConnection::enqueue_buffer(Co
     if (m_queue->is_full())
         return false;
 
-    m_queue->enqueue(Audio::Buffer::create_with_anonymous_buffer(buffer, buffer_id, sample_count));
+    // There's not a big allocation to worry about here.
+    m_queue->enqueue(MUST(Audio::Buffer::create_with_anonymous_buffer(buffer, buffer_id, sample_count)));
     return true;
 }
 

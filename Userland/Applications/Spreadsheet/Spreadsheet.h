@@ -31,9 +31,9 @@ public:
 
     ~Sheet();
 
-    Optional<Position> parse_cell_name(const StringView&) const;
-    Optional<size_t> column_index(const StringView& column_name) const;
-    Optional<String> column_arithmetic(const StringView& column_name, int offset);
+    Optional<Position> parse_cell_name(StringView) const;
+    Optional<size_t> column_index(StringView column_name) const;
+    Optional<String> column_arithmetic(StringView column_name, int offset);
 
     Cell* from_url(const URL&);
     const Cell* from_url(const URL& url) const { return const_cast<Sheet*>(this)->from_url(url); }
@@ -50,7 +50,7 @@ public:
     static RefPtr<Sheet> from_xsv(const Reader::XSV&, Workbook&);
 
     const String& name() const { return m_name; }
-    void set_name(const StringView& name) { m_name = name; }
+    void set_name(StringView name) { m_name = name; }
 
     JsonObject gather_documentation() const;
 
@@ -62,8 +62,8 @@ public:
     Cell* at(const Position& position);
     const Cell* at(const Position& position) const { return const_cast<Sheet*>(this)->at(position); }
 
-    const Cell* at(const StringView& name) const { return const_cast<Sheet*>(this)->at(name); }
-    Cell* at(const StringView&);
+    const Cell* at(StringView name) const { return const_cast<Sheet*>(this)->at(name); }
+    Cell* at(StringView);
 
     const Cell& ensure(const Position& position) const { return const_cast<Sheet*>(this)->ensure(position); }
     Cell& ensure(const Position& position)
@@ -111,7 +111,7 @@ public:
         JS::Value value;
         JS::Exception* exception { nullptr };
     };
-    ValueAndException evaluate(const StringView&, Cell* = nullptr);
+    ValueAndException evaluate(StringView, Cell* = nullptr);
     JS::Interpreter& interpreter() const;
     SheetGlobalObject& global_object() const { return *m_global_object; }
 
@@ -127,8 +127,8 @@ public:
 
     void copy_cells(Vector<Position> from, Vector<Position> to, Optional<Position> resolve_relative_to = {}, CopyOperation copy_operation = CopyOperation::Copy);
 
-    /// Gives the bottom-right corner of the smallest bounding box containing all the written data.
-    Position written_data_bounds() const;
+    /// Gives the bottom-right corner of the smallest bounding box containing all the written data, optionally limited to the given column.
+    Position written_data_bounds(Optional<size_t> column_index = {}) const;
 
     bool columns_are_standard() const;
 
@@ -136,7 +136,7 @@ public:
 
 private:
     explicit Sheet(Workbook&);
-    explicit Sheet(const StringView& name, Workbook&);
+    explicit Sheet(StringView name, Workbook&);
 
     String m_name;
     Vector<String> m_columns;
@@ -146,6 +146,8 @@ private:
 
     Workbook& m_workbook;
     mutable SheetGlobalObject* m_global_object;
+
+    NonnullOwnPtr<JS::Interpreter> m_interpreter;
 
     Cell* m_current_cell_being_evaluated { nullptr };
 

@@ -29,6 +29,16 @@ DirIterator::~DirIterator()
     }
 }
 
+DirIterator::DirIterator(DirIterator&& other)
+    : m_dir(other.m_dir)
+    , m_error(other.m_error)
+    , m_next(move(other.m_next))
+    , m_path(move(other.m_path))
+    , m_flags(other.m_flags)
+{
+    other.m_dir = nullptr;
+}
+
 bool DirIterator::advance_next()
 {
     if (!m_dir)
@@ -77,7 +87,12 @@ String DirIterator::next_path()
 
 String DirIterator::next_full_path()
 {
-    return String::formatted("{}/{}", m_path, next_path());
+    StringBuilder builder;
+    builder.append(m_path);
+    if (!m_path.ends_with('/'))
+        builder.append('/');
+    builder.append(next_path());
+    return builder.to_string();
 }
 
 String find_executable_in_path(String filename)
@@ -97,6 +112,13 @@ String find_executable_in_path(String filename)
     }
 
     return {};
+}
+
+int DirIterator::fd() const
+{
+    if (!m_dir)
+        return -1;
+    return dirfd(m_dir);
 }
 
 }

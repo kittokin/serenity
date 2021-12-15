@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Nick Vella <nick@nxk.io>
+ * Copyright (c) 2021, sin-ack <sin-ack@protonmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,10 +10,8 @@
 #include <AK/LexicalPath.h>
 #include <AK/QuickSort.h>
 #include <LibCore/DirIterator.h>
-#include <LibGUI/Icon.h>
 #include <LibGUI/Variant.h>
 #include <LibGfx/TextAlignment.h>
-#include <ctype.h>
 #include <stdio.h>
 
 namespace HackStudio {
@@ -21,12 +20,21 @@ ProjectTemplatesModel::ProjectTemplatesModel()
     : m_templates()
     , m_mapping()
 {
-    auto watcher_or_error = Core::FileWatcher::watch(ProjectTemplate::templates_path());
+    auto watcher_or_error = Core::FileWatcher::create();
     if (!watcher_or_error.is_error()) {
         m_file_watcher = watcher_or_error.release_value();
         m_file_watcher->on_change = [&](auto) {
-            update();
+            invalidate();
         };
+
+        auto watch_result = m_file_watcher->add_watch(
+            ProjectTemplate::templates_path(),
+            Core::FileWatcherEvent::Type::ChildCreated
+                | Core::FileWatcherEvent::Type::ChildDeleted);
+
+        if (watch_result.is_error()) {
+            warnln("Unable to watch templates directory, templates will not automatically refresh. Error: {}", watch_result.error());
+        }
     } else {
         warnln("Unable to watch templates directory, templates will not automatically refresh. Error: {}", watcher_or_error.error());
     }

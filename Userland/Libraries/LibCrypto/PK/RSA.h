@@ -31,8 +31,6 @@ public:
     {
     }
 
-    //--stuff it should do
-
     const Integer& modulus() const { return m_modulus; }
     const Integer& public_exponent() const { return m_public_exponent; }
     size_t length() const { return m_length; }
@@ -62,11 +60,8 @@ public:
     {
     }
 
-    RSAPrivateKey()
-    {
-    }
+    RSAPrivateKey() = default;
 
-    //--stuff it should do
     const Integer& modulus() const { return m_modulus; }
     const Integer& private_exponent() const { return m_private_exponent; }
     const Integer& public_exponent() const { return m_public_exponent; }
@@ -146,7 +141,7 @@ public:
         import_private_key(privateKeyPEM);
     }
 
-    RSA(const StringView& privKeyPEM)
+    RSA(StringView privKeyPEM)
     {
         import_private_key(privKeyPEM.bytes());
         m_public_key.set(m_private_key.modulus(), m_private_key.public_exponent());

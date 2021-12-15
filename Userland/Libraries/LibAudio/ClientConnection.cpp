@@ -6,30 +6,35 @@
 
 #include <LibAudio/Buffer.h>
 #include <LibAudio/ClientConnection.h>
+#include <time.h>
 
 namespace Audio {
+
+// FIXME: We don't know what is a good value for this.
+// Real-time audio may be improved with a lower value.
+static timespec g_enqueue_wait_time { 0, 10'000'000 };
 
 ClientConnection::ClientConnection()
     : IPC::ServerConnection<AudioClientEndpoint, AudioServerEndpoint>(*this, "/tmp/portal/audio")
 {
 }
 
-void ClientConnection::handshake()
-{
-    greet();
-}
-
-void ClientConnection::enqueue(const Buffer& buffer)
+void ClientConnection::enqueue(Buffer const& buffer)
 {
     for (;;) {
         auto success = enqueue_buffer(buffer.anonymous_buffer(), buffer.id(), buffer.sample_count());
         if (success)
             break;
-        sleep(1);
+        nanosleep(&g_enqueue_wait_time, nullptr);
     }
 }
 
-bool ClientConnection::try_enqueue(const Buffer& buffer)
+void ClientConnection::async_enqueue(Buffer const& buffer)
+{
+    async_enqueue_buffer(buffer.anonymous_buffer(), buffer.id(), buffer.sample_count());
+}
+
+bool ClientConnection::try_enqueue(Buffer const& buffer)
 {
     return enqueue_buffer(buffer.anonymous_buffer(), buffer.id(), buffer.sample_count());
 }
@@ -46,10 +51,16 @@ void ClientConnection::muted_state_changed(bool muted)
         on_muted_state_change(muted);
 }
 
-void ClientConnection::main_mix_volume_changed(i32 volume)
+void ClientConnection::main_mix_volume_changed(double volume)
 {
     if (on_main_mix_volume_change)
         on_main_mix_volume_change(volume);
+}
+
+void ClientConnection::client_volume_changed(double volume)
+{
+    if (on_client_volume_change)
+        on_client_volume_change(volume);
 }
 
 }

@@ -10,16 +10,14 @@
 #include <AK/HashMap.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/Optional.h>
-#include <AK/StringView.h>
 #include <LibChess/Chess.h>
-#include <LibGUI/Widget.h>
+#include <LibGUI/Frame.h>
 #include <LibGfx/Bitmap.h>
 
-class ChessWidget final : public GUI::Widget {
-    C_OBJECT(ChessWidget)
+class ChessWidget final : public GUI::Frame {
+    C_OBJECT(ChessWidget);
+
 public:
-    ChessWidget();
-    ChessWidget(const StringView& set);
     virtual ~ChessWidget() override;
 
     virtual void paint_event(GUI::PaintEvent&) override;
@@ -37,7 +35,7 @@ public:
     Chess::Color side() const { return m_side; };
     void set_side(Chess::Color side) { m_side = side; };
 
-    void set_piece_set(const StringView& set);
+    void set_piece_set(StringView set);
     const String& piece_set() const { return m_piece_set; };
 
     Chess::Square mouse_to_square(GUI::MouseEvent& event) const;
@@ -50,8 +48,8 @@ public:
     void set_show_available_moves(bool e) { m_show_available_moves = e; }
 
     String get_fen() const;
-    bool import_pgn(const StringView& import_path);
-    bool export_pgn(const StringView& export_path) const;
+    bool import_pgn(StringView import_path);
+    bool export_pgn(StringView export_path) const;
 
     int resign();
     void flip_board();
@@ -65,7 +63,7 @@ public:
 
     const BoardTheme& board_theme() const { return m_board_theme; }
     void set_board_theme(const BoardTheme& theme) { m_board_theme = theme; }
-    void set_board_theme(const StringView& name);
+    void set_board_theme(StringView name);
 
     enum class PlaybackDirection {
         First,
@@ -107,6 +105,8 @@ public:
     };
 
 private:
+    ChessWidget();
+
     Chess::Board m_board;
     Chess::Board m_board_playback;
     bool m_playback { false };

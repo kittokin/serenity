@@ -20,13 +20,13 @@ class ClientConnection final
     C_OBJECT(ClientConnection);
 
 public:
-    explicit ClientConnection(NonnullRefPtr<Core::LocalSocket>, int client_id);
     ~ClientConnection() override;
 
     virtual void die() override;
 
 private:
-    virtual void greet() override;
+    explicit ClientConnection(NonnullRefPtr<Core::LocalSocket>);
+
     virtual Messages::ImageDecoderServer::DecodeImageResponse decode_image(Core::AnonymousBuffer const&) override;
 };
 

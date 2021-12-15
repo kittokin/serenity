@@ -6,6 +6,9 @@
 
 #pragma once
 
+#include <AK/Array.h>
+#include <stdint.h>
+
 namespace Compress {
 
 // RFC 1951 - 3.2.5

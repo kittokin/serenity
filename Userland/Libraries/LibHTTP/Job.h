@@ -18,11 +18,11 @@ namespace HTTP {
 
 class Job : public Core::NetworkJob {
 public:
-    explicit Job(const HttpRequest&, OutputStream&);
+    explicit Job(HttpRequest&&, OutputStream&);
     virtual ~Job() override;
 
-    virtual void start() override = 0;
-    virtual void shutdown() override = 0;
+    virtual void start(NonnullRefPtr<Core::Socket>) override = 0;
+    virtual void shutdown(ShutdownMode) override = 0;
 
     HttpResponse* response() { return static_cast<HttpResponse*>(Core::NetworkJob::response()); }
     const HttpResponse* response() const { return static_cast<const HttpResponse*>(Core::NetworkJob::response()); }
@@ -42,6 +42,7 @@ protected:
     virtual bool is_established() const = 0;
     virtual bool should_fail_on_empty_payload() const { return true; }
     virtual void read_while_data_available(Function<IterationDecision()> read) { read(); };
+    virtual void timer_event(Core::TimerEvent&) override;
 
     enum class State {
         InStatus,
@@ -55,14 +56,17 @@ protected:
     State m_state { State::InStatus };
     int m_code { -1 };
     HashMap<String, String, CaseInsensitiveStringTraits> m_headers;
+    Vector<String> m_set_cookie_headers;
     Vector<ByteBuffer, 2> m_received_buffers;
     size_t m_buffered_size { 0 };
     size_t m_received_size { 0 };
     bool m_sent_data { 0 };
+    Optional<u32> m_content_length;
     Optional<ssize_t> m_current_chunk_remaining_size;
     Optional<size_t> m_current_chunk_total_size;
     bool m_can_stream_response { true };
     bool m_should_read_chunk_ending_line { false };
+    bool m_has_scheduled_finish { false };
 };
 
 }

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -43,7 +44,7 @@ String PaletteImpl::path(PathRole role) const
 
 NonnullRefPtr<PaletteImpl> PaletteImpl::clone() const
 {
-    auto new_theme_buffer = Core::AnonymousBuffer::create_with_size(m_theme_buffer.size());
+    auto new_theme_buffer = Core::AnonymousBuffer::create_with_size(m_theme_buffer.size()).release_value();
     memcpy(new_theme_buffer.data<SystemTheme>(), &theme(), m_theme_buffer.size());
     return adopt_ref(*new PaletteImpl(move(new_theme_buffer)));
 }
@@ -54,6 +55,14 @@ void Palette::set_color(ColorRole role, Color color)
         m_impl = m_impl->clone();
     auto& theme = const_cast<SystemTheme&>(impl().theme());
     theme.color[(int)role] = color.value();
+}
+
+void Palette::set_flag(FlagRole role, bool value)
+{
+    if (m_impl->ref_count() != 1)
+        m_impl = m_impl->clone();
+    auto& theme = const_cast<SystemTheme&>(impl().theme());
+    theme.flag[(int)role] = value;
 }
 
 void Palette::set_metric(MetricRole role, int value)

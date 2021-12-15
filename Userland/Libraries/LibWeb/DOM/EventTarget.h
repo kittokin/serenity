@@ -31,7 +31,7 @@ public:
 
     void remove_from_event_listener_list(NonnullRefPtr<EventListener>);
 
-    virtual bool dispatch_event(NonnullRefPtr<Event>) = 0;
+    virtual bool dispatch_event(NonnullRefPtr<Event>);
     ExceptionOr<bool> dispatch_event_binding(NonnullRefPtr<Event>);
 
     virtual JS::Object* create_wrapper(JS::GlobalObject&) = 0;
@@ -47,11 +47,14 @@ public:
     Vector<EventListenerRegistration>& listeners() { return m_listeners; }
     const Vector<EventListenerRegistration>& listeners() const { return m_listeners; }
 
-    Function<void(const Event&)> activation_behaviour;
+    Function<void(const Event&)> activation_behavior;
 
     // NOTE: These only exist for checkbox and radio input elements.
-    Function<void()> legacy_pre_activation_behaviour;
-    Function<void()> legacy_cancelled_activation_behaviour;
+    Function<void()> legacy_pre_activation_behavior;
+    Function<void()> legacy_cancelled_activation_behavior;
+
+    HTML::EventHandler event_handler_attribute(FlyString const& name);
+    void set_event_handler_attribute(FlyString const& name, HTML::EventHandler);
 
 protected:
     explicit EventTarget(Bindings::ScriptExecutionContext&);

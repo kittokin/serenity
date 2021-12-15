@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -38,7 +38,7 @@ constexpr const char* posix1_tar_version = ""; // POSIX.1-1988 format version
 
 class [[gnu::packed]] TarFileHeader {
 public:
-    const StringView filename() const { return m_filename; }
+    const StringView filename() const { return StringView(m_filename, min(__builtin_strlen(m_filename), sizeof(m_filename))); }
     mode_t mode() const { return get_tar_field(m_mode); }
     uid_t uid() const { return get_tar_field(m_uid); }
     gid_t gid() const { return get_tar_field(m_gid); }
@@ -48,14 +48,14 @@ public:
     unsigned checksum() const { return get_tar_field(m_checksum); }
     TarFileType type_flag() const { return TarFileType(m_type_flag); }
     const StringView link_name() const { return m_link_name; }
-    const StringView magic() const { return StringView(m_magic, min(__builtin_strlen(m_magic), sizeof(m_magic))); }         // in some cases this is a null terminated string, in others its not
-    const StringView version() const { return StringView(m_version, min(__builtin_strlen(m_version), sizeof(m_version))); } // in some cases this is a null terminated string, in others its not
-    const StringView owner_name() const { return m_owner_name; }
-    const StringView group_name() const { return m_group_name; }
+    const StringView magic() const { return StringView(m_magic, min(__builtin_strlen(m_magic), sizeof(m_magic))); }
+    const StringView version() const { return StringView(m_version, min(__builtin_strlen(m_version), sizeof(m_version))); }
+    const StringView owner_name() const { return StringView(m_owner_name, min(__builtin_strlen(m_owner_name), sizeof(m_owner_name))); }
+    const StringView group_name() const { return StringView(m_group_name, min(__builtin_strlen(m_group_name), sizeof(m_group_name))); }
     int major() const { return get_tar_field(m_major); }
     int minor() const { return get_tar_field(m_minor); }
     // FIXME: support ustar filename prefix
-    const StringView prefix() const { return m_prefix; }
+    const StringView prefix() const { return StringView(m_prefix, min(__builtin_strlen(m_prefix), sizeof(m_prefix))); }
 
     void set_filename(const String& filename) { VERIFY(filename.copy_characters_to_buffer(m_filename, sizeof(m_filename))); }
     void set_mode(mode_t mode) { VERIFY(String::formatted("{:o}", mode).copy_characters_to_buffer(m_mode, sizeof(m_mode))); }
@@ -113,24 +113,4 @@ size_t TarFileHeader::get_tar_field(const char (&field)[N])
     return value;
 }
 
-unsigned TarFileHeader::expected_checksum() const
-{
-    auto checksum = 0u;
-    const u8* u8_this = reinterpret_cast<const u8*>(this);
-    const u8* u8_m_checksum = reinterpret_cast<const u8*>(&m_checksum);
-    for (auto i = 0u; i < sizeof(TarFileHeader); ++i) {
-        if (u8_this + i >= u8_m_checksum && u8_this + i < u8_m_checksum + sizeof(m_checksum)) {
-            checksum += ' ';
-        } else {
-            checksum += u8_this[i];
-        }
-    }
-    return checksum;
-}
-
-void TarFileHeader::calculate_checksum()
-{
-    memset(m_checksum, ' ', sizeof(m_checksum));
-    VERIFY(String::formatted("{:06o}", expected_checksum()).copy_characters_to_buffer(m_checksum, sizeof(m_checksum)));
-}
 }

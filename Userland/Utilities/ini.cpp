@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -30,11 +30,11 @@ int main(int argc, char** argv)
     args_parser.parse(argc, argv);
 
     if (!Core::File::exists(path)) {
-        fprintf(stderr, "File does not exist: '%s'\n", path);
+        warnln("File does not exist: '{}'", path);
         return 1;
     }
 
-    auto config = Core::ConfigFile::open(path);
+    auto config = Core::ConfigFile::open(path, value_to_write ? Core::ConfigFile::AllowWriting::Yes : Core::ConfigFile::AllowWriting::No);
 
     if (value_to_write) {
         config->write_entry(group, key, value_to_write);
@@ -44,7 +44,7 @@ int main(int argc, char** argv)
 
     auto value = config->read_entry(group, key);
     if (!value.is_empty())
-        printf("%s\n", value.characters());
+        outln("{}", value);
 
     return 0;
 }

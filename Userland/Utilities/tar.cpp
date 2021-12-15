@@ -1,9 +1,10 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Assertions.h>
 #include <AK/LexicalPath.h>
 #include <AK/Span.h>
 #include <AK/Vector.h>
@@ -11,6 +12,7 @@
 #include <LibCompress/Gzip.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/DirIterator.h>
+#include <LibCore/File.h>
 #include <LibCore/FileStream.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -48,7 +50,7 @@ int main(int argc, char** argv)
         auto file = Core::File::standard_input();
 
         if (archive_file) {
-            auto maybe_file = Core::File::open(archive_file, Core::IODevice::OpenMode::ReadOnly);
+            auto maybe_file = Core::File::open(archive_file, Core::OpenMode::ReadOnly);
             if (maybe_file.is_error()) {
                 warnln("Core::File::open: {}", maybe_file.error());
                 return 1;
@@ -74,10 +76,19 @@ int main(int argc, char** argv)
                 Archive::TarFileStream file_stream = tar_stream.file_contents();
 
                 const Archive::TarFileHeader& header = tar_stream.header();
+
+                LexicalPath path = LexicalPath(header.filename());
+                if (!header.prefix().is_empty())
+                    path = path.prepend(header.prefix());
+
+                String absolute_path = Core::File::absolute_path(path.string());
+
                 switch (header.type_flag()) {
                 case Archive::TarFileType::NormalFile:
                 case Archive::TarFileType::AlternateNormalFile: {
-                    int fd = open(String(header.filename()).characters(), O_CREAT | O_WRONLY, header.mode());
+                    Core::File::ensure_parent_directories(absolute_path);
+
+                    int fd = open(absolute_path.characters(), O_CREAT | O_WRONLY, header.mode());
                     if (fd < 0) {
                         perror("open");
                         return 1;
@@ -94,15 +105,36 @@ int main(int argc, char** argv)
                     close(fd);
                     break;
                 }
+                case Archive::TarFileType::SymLink: {
+                    Core::File::ensure_parent_directories(absolute_path);
+
+                    if (symlink(header.link_name().to_string().characters(), absolute_path.characters())) {
+                        perror("symlink");
+                        return 1;
+                    }
+
+                    break;
+                }
                 case Archive::TarFileType::Directory: {
-                    if (mkdir(String(header.filename()).characters(), header.mode())) {
+                    Core::File::ensure_parent_directories(absolute_path);
+
+                    if (mkdir(absolute_path.characters(), header.mode()) && errno != EEXIST) {
                         perror("mkdir");
                         return 1;
                     }
                     break;
                 }
+                case Archive::TarFileType::GlobalExtendedHeader: {
+                    dbgln("ignoring global extended header: {}", header.filename());
+                    break;
+                }
+                case Archive::TarFileType::ExtendedHeader: {
+                    dbgln("ignoring extended header: {}", header.filename());
+                    break;
+                }
                 default:
                     // FIXME: Implement other file types
+                    warnln("file type '{}' of {} is not yet supported", (char)header.type_flag(), header.filename());
                     VERIFY_NOT_REACHED();
                 }
             }
@@ -120,7 +152,7 @@ int main(int argc, char** argv)
         auto file = Core::File::standard_output();
 
         if (archive_file) {
-            auto maybe_file = Core::File::open(archive_file, Core::IODevice::OpenMode::WriteOnly);
+            auto maybe_file = Core::File::open(archive_file, Core::OpenMode::WriteOnly);
             if (maybe_file.is_error()) {
                 warnln("Core::File::open: {}", maybe_file.error());
                 return 1;
@@ -137,7 +169,7 @@ int main(int argc, char** argv)
 
         auto add_file = [&](String path) {
             auto file = Core::File::construct(path);
-            if (!file->open(Core::IODevice::ReadOnly)) {
+            if (!file->open(Core::OpenMode::ReadOnly)) {
                 warnln("Failed to open {}: {}", path, file->error_string());
                 return;
             }

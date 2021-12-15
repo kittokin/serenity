@@ -20,14 +20,15 @@ class FontEditorWidget final : public GUI::Widget {
 public:
     virtual ~FontEditorWidget() override;
 
-    bool save_as(const String&);
+    bool open_file(String const&);
+    bool save_as(String const&);
     bool request_close();
     void update_title();
 
-    const String& path() { return m_path; }
-    const Gfx::BitmapFont& edited_font() { return *m_edited_font; }
-    void initialize(const String& path, RefPtr<Gfx::BitmapFont>&&);
-    void initialize_menubar(GUI::Menubar&);
+    String const& path() { return m_path; }
+    Gfx::BitmapFont const& edited_font() { return *m_edited_font; }
+    void initialize(String const& path, RefPtr<Gfx::BitmapFont>&&);
+    void initialize_menubar(GUI::Window&);
 
     bool is_showing_font_metadata() { return m_font_metadata; }
     void set_show_font_metadata(bool b);
@@ -35,12 +36,16 @@ public:
     Function<void()> on_initialize;
 
 private:
-    FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&);
+    FontEditorWidget();
+
+    virtual void drop_event(GUI::DropEvent&) override;
 
     void undo();
     void redo();
-    void did_change_undo_stack();
     void did_modify_font();
+    void did_resize_glyph_editor();
+    void update_statusbar();
+    void update_preview();
 
     RefPtr<Gfx::BitmapFont> m_edited_font;
 
@@ -62,6 +67,10 @@ private:
     RefPtr<UndoGlyph> m_undo_glyph;
     OwnPtr<GUI::UndoStack> m_undo_stack;
 
+    RefPtr<GUI::Action> m_go_to_glyph_action;
+    RefPtr<GUI::Action> m_previous_glyph_action;
+    RefPtr<GUI::Action> m_next_glyph_action;
+
     RefPtr<GUI::Action> m_open_preview_action;
     RefPtr<GUI::Action> m_show_metadata_action;
 
@@ -70,11 +79,22 @@ private:
     RefPtr<GUI::Action> m_scale_ten_action;
     RefPtr<GUI::Action> m_scale_fifteen_action;
 
+    GUI::ActionGroup m_glyph_tool_actions;
+    RefPtr<GUI::Action> m_move_glyph_action;
+    RefPtr<GUI::Action> m_paint_glyph_action;
+
+    RefPtr<GUI::Action> m_flip_horizontal_action;
+    RefPtr<GUI::Action> m_flip_vertical_action;
+    RefPtr<GUI::Action> m_rotate_clockwise_action;
+    RefPtr<GUI::Action> m_rotate_counterclockwise_action;
+    RefPtr<GUI::Action> m_copy_character_action;
+
+    RefPtr<GUI::Statusbar> m_statusbar;
     RefPtr<GUI::Window> m_font_preview_window;
     RefPtr<GUI::Widget> m_left_column_container;
     RefPtr<GUI::Widget> m_glyph_editor_container;
     RefPtr<GUI::ComboBox> m_weight_combobox;
-    RefPtr<GUI::ComboBox> m_type_combobox;
+    RefPtr<GUI::ComboBox> m_slope_combobox;
     RefPtr<GUI::SpinBox> m_spacing_spinbox;
     RefPtr<GUI::SpinBox> m_baseline_spinbox;
     RefPtr<GUI::SpinBox> m_mean_line_spinbox;
@@ -88,8 +108,6 @@ private:
 
     String m_path;
     Vector<String> m_font_weight_list;
-    Vector<String> m_font_type_list;
+    Vector<String> m_font_slope_list;
     bool m_font_metadata { true };
-    bool m_font_modified { false };
-    bool m_font_newly_opened { true };
 };

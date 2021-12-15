@@ -7,6 +7,10 @@
 #pragma once
 
 #include <AK/String.h>
+#include <AK/Types.h>
+
+#include <AK/Platform.h>
+VALIDATE_IS_X86()
 
 namespace Kernel {
 

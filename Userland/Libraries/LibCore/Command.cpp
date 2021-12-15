@@ -5,13 +5,11 @@
  */
 
 #include "Command.h"
-#include <AK/ByteBuffer.h>
 #include <AK/Format.h>
 #include <AK/ScopeGuard.h>
 #include <LibCore/File.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -80,7 +78,7 @@ String command(const String& program, const Vector<String>& arguments, Optional<
 
     auto read_all_from_pipe = [](int pipe[2]) {
         auto result_file = Core::File::construct();
-        if (!result_file->open(pipe[0], Core::IODevice::ReadOnly, Core::File::ShouldCloseFileDescriptor::Yes)) {
+        if (!result_file->open(pipe[0], Core::OpenMode::ReadOnly, Core::File::ShouldCloseFileDescriptor::Yes)) {
             perror("open");
             VERIFY_NOT_REACHED();
         }

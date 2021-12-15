@@ -10,8 +10,6 @@
 #include <AK/Array.h>
 #include <AK/Debug.h>
 #include <AK/Endian.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
 #include <AK/ScopeGuard.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
@@ -113,7 +111,7 @@ static bool read_magic_number(TContext& context, Streamer& streamer)
 }
 
 template<typename TContext>
-static bool read_white_space(TContext& context, Streamer& streamer)
+static bool read_whitespace(TContext& context, Streamer& streamer)
 {
     bool exist = false;
     u8 byte {};
@@ -178,11 +176,12 @@ static bool read_max_val(TContext& context, Streamer& streamer)
 template<typename TContext>
 static bool create_bitmap(TContext& context)
 {
-    context.bitmap = Bitmap::create_purgeable(BitmapFormat::BGRx8888, { context.width, context.height });
-    if (!context.bitmap) {
+    auto bitmap_or_error = Bitmap::try_create(BitmapFormat::BGRx8888, { context.width, context.height });
+    if (bitmap_or_error.is_error()) {
         context.state = TContext::State::Error;
         return false;
     }
+    context.bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
     return true;
 }
 
@@ -213,13 +212,13 @@ static bool decode(TContext& context)
     if (!read_magic_number(context, streamer))
         return false;
 
-    if (!read_white_space(context, streamer))
+    if (!read_whitespace(context, streamer))
         return false;
 
     if (!read_width(context, streamer))
         return false;
 
-    if (!read_white_space(context, streamer))
+    if (!read_whitespace(context, streamer))
         return false;
 
     if (!read_height(context, streamer))
@@ -230,14 +229,14 @@ static bool decode(TContext& context)
         return false;
     }
 
-    if (!read_white_space(context, streamer))
+    if (!read_whitespace(context, streamer))
         return false;
 
     if constexpr (requires { context.max_val; }) {
         if (!read_max_val(context, streamer))
             return false;
 
-        if (!read_white_space(context, streamer))
+        if (!read_whitespace(context, streamer))
             return false;
     }
 
@@ -261,18 +260,13 @@ static RefPtr<Gfx::Bitmap> load_impl(const u8* data, size_t data_size)
     }
     return context.bitmap;
 }
+
 template<typename TContext>
-static RefPtr<Gfx::Bitmap> load(const StringView& path)
+static RefPtr<Gfx::Bitmap> load_from_memory(u8 const* data, size_t length, String const& mmap_name)
 {
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    auto bitmap = load_impl<TContext>((const u8*)file_or_error.value()->data(), file_or_error.value()->size());
+    auto bitmap = load_impl<TContext>(data, length);
     if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded {}: {}",
-            bitmap->size(),
-            TContext::image_type,
-            LexicalPath::canonicalized_path(path)));
+        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded {}: {}", bitmap->size(), TContext::image_type, mmap_name));
     return bitmap;
 }
 

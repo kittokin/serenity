@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2021, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -30,6 +30,7 @@
     __ENUMERATE_SHELL_BUILTIN(exit)    \
     __ENUMERATE_SHELL_BUILTIN(export)  \
     __ENUMERATE_SHELL_BUILTIN(glob)    \
+    __ENUMERATE_SHELL_BUILTIN(unalias) \
     __ENUMERATE_SHELL_BUILTIN(unset)   \
     __ENUMERATE_SHELL_BUILTIN(history) \
     __ENUMERATE_SHELL_BUILTIN(umask)   \
@@ -84,33 +85,33 @@ public:
         Optional<AST::Position> position;
     };
 
-    int run_command(const StringView&, Optional<SourcePosition> = {});
-    bool is_runnable(const StringView&);
+    int run_command(StringView, Optional<SourcePosition> = {});
+    bool is_runnable(StringView);
     RefPtr<Job> run_command(const AST::Command&);
     NonnullRefPtrVector<Job> run_commands(Vector<AST::Command>&);
     bool run_file(const String&, bool explicitly_invoked = true);
     bool run_builtin(const AST::Command&, const NonnullRefPtrVector<AST::Rewiring>&, int& retval);
-    bool has_builtin(const StringView&) const;
+    bool has_builtin(StringView) const;
     RefPtr<AST::Node> run_immediate_function(StringView name, AST::ImmediateExpression& invoking_node, const NonnullRefPtrVector<AST::Node>&);
-    static bool has_immediate_function(const StringView&);
+    static bool has_immediate_function(StringView);
     void block_on_job(RefPtr<Job>);
     void block_on_pipeline(RefPtr<AST::Pipeline>);
     String prompt() const;
 
     static String expand_tilde(const String&);
-    static Vector<String> expand_globs(const StringView& path, StringView base);
-    static Vector<String> expand_globs(Vector<StringView> path_segments, const StringView& base);
+    static Vector<String> expand_globs(StringView path, StringView base);
+    static Vector<String> expand_globs(Vector<StringView> path_segments, StringView base);
     Vector<AST::Command> expand_aliases(Vector<AST::Command>);
     String resolve_path(String) const;
     String resolve_alias(const String&) const;
 
-    static String find_in_path(const StringView& program_name);
+    static String find_in_path(StringView program_name);
 
     static bool has_history_event(StringView);
 
-    RefPtr<AST::Value> get_argument(size_t);
-    RefPtr<AST::Value> lookup_local_variable(const String&);
-    String local_variable_or(const String&, const String&);
+    RefPtr<AST::Value> get_argument(size_t) const;
+    RefPtr<AST::Value> lookup_local_variable(const String&) const;
+    String local_variable_or(const String&, const String&) const;
     void set_local_variable(const String&, RefPtr<AST::Value>, bool only_in_current_frame = false);
     void unset_local_variable(const String&, bool only_in_current_frame = false);
 
@@ -118,7 +119,7 @@ public:
     bool has_function(const String&);
     bool invoke_function(const AST::Command&, int& retval);
 
-    String format(const StringView&, ssize_t& cursor) const;
+    String format(StringView, ssize_t& cursor) const;
 
     RefPtr<Line::Editor> editor() const { return m_editor; }
 
@@ -156,10 +157,16 @@ public:
     static String escape_token_for_single_quotes(const String& token);
     static String escape_token(const String& token);
     static String unescape_token(const String& token);
-    static bool is_special(char c);
+    enum class SpecialCharacterEscapeMode {
+        Untouched,
+        Escaped,
+        QuotedAsEscape,
+        QuotedAsHex,
+    };
+    static SpecialCharacterEscapeMode special_character_escape_mode(u32 c);
 
-    static bool is_glob(const StringView&);
-    static Vector<StringView> split_path(const StringView&);
+    static bool is_glob(StringView);
+    static Vector<StringView> split_path(StringView);
 
     enum class ExecutableOnly {
         Yes,
@@ -226,6 +233,7 @@ public:
         InvalidGlobError,
         InvalidSliceContentsError,
         OpenFailure,
+        OutOfMemory,
     };
 
     void raise_error(ShellError kind, String description, Optional<AST::Position> position = {})
@@ -236,6 +244,7 @@ public:
             m_source_position.value().position = position.release_value();
     }
     bool has_error(ShellError err) const { return m_error == err; }
+    bool has_any_error() const { return !has_error(ShellError::None); }
     const String& error_description() const { return m_error_description; }
     ShellError take_error()
     {
@@ -270,6 +279,10 @@ private:
     Shell();
     virtual ~Shell() override;
 
+    void timer_event(Core::TimerEvent&) override;
+
+    bool is_allowed_to_modify_termios(const AST::Command&) const;
+
     // FIXME: Port to Core::Property
     void save_to(JsonObject&);
     void bring_cursor_to_beginning_of_a_line() const;
@@ -277,9 +290,14 @@ private:
     Optional<int> resolve_job_spec(const String&);
     void cache_path();
     void add_entry_to_cache(const String&);
+    void remove_entry_from_cache(const String&);
     void stop_all_jobs();
     const Job* m_current_job { nullptr };
     LocalFrame* find_frame_containing_local_variable(const String& name);
+    const LocalFrame* find_frame_containing_local_variable(const String& name) const
+    {
+        return const_cast<Shell*>(this)->find_frame_containing_local_variable(name);
+    }
 
     void run_tail(RefPtr<Job>);
     void run_tail(const AST::Command&, const AST::NodeWithAction&, int head_exit_code);
@@ -341,6 +359,8 @@ private:
     bool m_default_constructed { false };
 
     mutable bool m_last_continuation_state { false }; // false == not needed.
+
+    Optional<size_t> m_history_autosave_time;
 };
 
 [[maybe_unused]] static constexpr bool is_word_character(char c)
@@ -352,17 +372,37 @@ inline size_t find_offset_into_node(const String& unescaped_text, size_t escaped
 {
     size_t unescaped_offset = 0;
     size_t offset = 0;
-    for (auto& c : unescaped_text) {
-        if (offset == escaped_offset)
-            return unescaped_offset;
+    auto do_find_offset = [&](auto& unescaped_text) {
+        for (auto c : unescaped_text) {
+            if (offset == escaped_offset)
+                return unescaped_offset;
 
-        if (Shell::is_special(c))
+            switch (Shell::special_character_escape_mode(c)) {
+            case Shell::SpecialCharacterEscapeMode::Untouched:
+                break;
+            case Shell::SpecialCharacterEscapeMode::Escaped:
+                ++offset; // X -> \X
+                break;
+            case Shell::SpecialCharacterEscapeMode::QuotedAsEscape:
+                offset += 3; // X -> "\Y"
+                break;
+            case Shell::SpecialCharacterEscapeMode::QuotedAsHex:
+                if (c > NumericLimits<u8>::max())
+                    offset += 11; // X -> "\uhhhhhhhh"
+                else
+                    offset += 5; // X -> "\xhh"
+                break;
+            }
             ++offset;
-        ++offset;
-        ++unescaped_offset;
-    }
+            ++unescaped_offset;
+        }
+        return unescaped_offset;
+    };
 
-    return unescaped_offset;
+    Utf8View view { unescaped_text };
+    if (view.validate())
+        return do_find_offset(view);
+    return do_find_offset(unescaped_text);
 }
 
 }

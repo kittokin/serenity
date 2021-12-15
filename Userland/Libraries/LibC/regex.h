@@ -15,6 +15,8 @@ typedef ssize_t regoff_t;
 
 typedef struct {
     void* __data;
+    // Number of capture groups, Dr.POSIX requires this.
+    size_t re_nsub;
 } regex_t;
 
 enum __Regex_Error {
@@ -35,6 +37,7 @@ enum __Regex_Error {
     __Regex_EmptySubExpression,         // Sub expression has empty content.
     __Regex_InvalidCaptureGroup,        // Content of capture group is invalid.
     __Regex_InvalidNameForCaptureGroup, // Name of capture group is invalid.
+    __Regex_InvalidNameForProperty,     // Name of property is invalid.
 };
 
 enum ReError {

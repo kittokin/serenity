@@ -8,39 +8,26 @@
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$yield()
+ErrorOr<FlatPtr> Process::sys$yield()
 {
+    VERIFY_NO_PROCESS_BIG_LOCK(this);
     REQUIRE_PROMISE(stdio);
-    Thread::current()->yield_without_holding_big_lock();
+    Thread::current()->yield_without_releasing_big_lock();
     return 0;
 }
 
-KResultOr<int> Process::sys$donate(pid_t tid)
+ErrorOr<FlatPtr> Process::sys$sched_setparam(int pid, Userspace<const struct sched_param*> user_param)
 {
-    REQUIRE_PROMISE(stdio);
-    if (tid < 0)
-        return EINVAL;
-
-    ScopedCritical critical;
-    auto thread = Thread::from_tid(tid);
-    if (!thread || thread->pid() != pid())
-        return ESRCH;
-    Thread::current()->donate_without_holding_big_lock(thread, "sys$donate");
-    return 0;
-}
-
-KResultOr<int> Process::sys$sched_setparam(int pid, Userspace<const struct sched_param*> user_param)
-{
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(proc);
     struct sched_param desired_param;
-    if (!copy_from_user(&desired_param, user_param))
-        return EFAULT;
+    TRY(copy_from_user(&desired_param, user_param));
 
     if (desired_param.sched_priority < THREAD_PRIORITY_MIN || desired_param.sched_priority > THREAD_PRIORITY_MAX)
         return EINVAL;
 
     auto* peer = Thread::current();
-    ScopedSpinLock lock(g_scheduler_lock);
+    SpinlockLocker lock(g_scheduler_lock);
     if (pid != 0)
         peer = Thread::from_tid(pid);
 
@@ -54,13 +41,14 @@ KResultOr<int> Process::sys$sched_setparam(int pid, Userspace<const struct sched
     return 0;
 }
 
-KResultOr<int> Process::sys$sched_getparam(pid_t pid, Userspace<struct sched_param*> user_param)
+ErrorOr<FlatPtr> Process::sys$sched_getparam(pid_t pid, Userspace<struct sched_param*> user_param)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(proc);
     int priority;
     {
         auto* peer = Thread::current();
-        ScopedSpinLock lock(g_scheduler_lock);
+        SpinlockLocker lock(g_scheduler_lock);
         if (pid != 0) {
             // FIXME: PID/TID BUG
             // The entire process is supposed to be affected.
@@ -79,8 +67,8 @@ KResultOr<int> Process::sys$sched_getparam(pid_t pid, Userspace<struct sched_par
     struct sched_param param {
         priority
     };
-    if (!copy_to_user(user_param, &param))
-        return EFAULT;
+
+    TRY(copy_to_user(user_param, &param));
     return 0;
 }
 

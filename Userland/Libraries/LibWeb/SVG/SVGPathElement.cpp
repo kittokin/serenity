@@ -17,7 +17,7 @@
 
 namespace Web::SVG {
 
-static void print_instruction(const PathInstruction& instruction)
+[[maybe_unused]] static void print_instruction(const PathInstruction& instruction)
 {
     VERIFY(PATH_DEBUG);
 
@@ -279,23 +279,23 @@ Vector<Vector<float>> PathDataParser::parse_coordinate_pair_sequence()
 Vector<float> PathDataParser::parse_coordinate_pair_double()
 {
     Vector<float> coordinates;
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     if (match_comma_whitespace())
         parse_comma_whitespace();
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     return coordinates;
 }
 
 Vector<float> PathDataParser::parse_coordinate_pair_triplet()
 {
     Vector<float> coordinates;
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     if (match_comma_whitespace())
         parse_comma_whitespace();
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     if (match_comma_whitespace())
         parse_comma_whitespace();
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     return coordinates;
 }
 
@@ -316,7 +316,7 @@ Vector<float> PathDataParser::parse_elliptical_arg_argument()
     numbers.append(parse_flag());
     if (match_comma_whitespace())
         parse_comma_whitespace();
-    numbers.append(parse_coordinate_pair());
+    numbers.extend(parse_coordinate_pair());
 
     return numbers;
 }
@@ -445,8 +445,8 @@ SVGPathElement::SVGPathElement(DOM::Document& document, QualifiedName qualified_
 
 RefPtr<Layout::Node> SVGPathElement::create_layout_node()
 {
-    auto style = document().style_resolver().resolve_style(*this);
-    if (style->display() == CSS::Display::None)
+    auto style = document().style_computer().compute_style(*this);
+    if (style->display().is_none())
         return nullptr;
     return adopt_ref(*new Layout::SVGPathBox(document(), *this, move(style)));
 }
@@ -467,6 +467,9 @@ Gfx::Path& SVGPathElement::get_path()
     Gfx::Path path;
 
     for (auto& instruction : m_instructions) {
+        // If the first path element uses relative coordinates, we treat them as absolute by making them relative to (0, 0).
+        auto last_point = path.segments().is_empty() ? Gfx::FloatPoint { 0, 0 } : path.segments().last().point();
+
         auto& absolute = instruction.absolute;
         auto& data = instruction.data;
 
@@ -482,8 +485,7 @@ Gfx::Path& SVGPathElement::get_path()
             if (absolute) {
                 path.move_to(point);
             } else {
-                VERIFY(!path.segments().is_empty());
-                path.move_to(point + path.segments().last().point());
+                path.move_to(point + last_point);
             }
             break;
         }
@@ -495,29 +497,22 @@ Gfx::Path& SVGPathElement::get_path()
             if (absolute) {
                 path.line_to(point);
             } else {
-                VERIFY(!path.segments().is_empty());
-                path.line_to(point + path.segments().last().point());
+                path.line_to(point + last_point);
             }
             break;
         }
         case PathInstructionType::HorizontalLine: {
-            VERIFY(!path.segments().is_empty());
-            auto last_point = path.segments().last().point();
-            if (absolute) {
+            if (absolute)
                 path.line_to(Gfx::FloatPoint { data[0], last_point.y() });
-            } else {
+            else
                 path.line_to(Gfx::FloatPoint { data[0] + last_point.x(), last_point.y() });
-            }
             break;
         }
         case PathInstructionType::VerticalLine: {
-            VERIFY(!path.segments().is_empty());
-            auto last_point = path.segments().last().point();
-            if (absolute) {
+            if (absolute)
                 path.line_to(Gfx::FloatPoint { last_point.x(), data[0] });
-            } else {
+            else
                 path.line_to(Gfx::FloatPoint { last_point.x(), data[0] + last_point.y() });
-            }
             break;
         }
         case PathInstructionType::EllipticalArc: {
@@ -526,18 +521,15 @@ Gfx::Path& SVGPathElement::get_path()
             double x_axis_rotation = double { data[2] } * M_DEG2RAD;
             double large_arc_flag = data[3];
             double sweep_flag = data[4];
-            auto& last_point = path.segments().last().point();
 
             Gfx::FloatPoint next_point;
 
-            if (absolute) {
+            if (absolute)
                 next_point = { data[5], data[6] };
-            } else {
+            else
                 next_point = { data[5] + last_point.x(), data[6] + last_point.y() };
-            }
 
             path.elliptical_arc_to(next_point, { rx, ry }, x_axis_rotation, large_arc_flag != 0, sweep_flag != 0);
-
             break;
         }
         case PathInstructionType::QuadraticBezierCurve: {
@@ -550,8 +542,6 @@ Gfx::Path& SVGPathElement::get_path()
                 path.quadratic_bezier_curve_to(through, point);
                 m_previous_control_point = through;
             } else {
-                VERIFY(!path.segments().is_empty());
-                auto last_point = path.segments().last().point();
                 auto control_point = through + last_point;
                 path.quadratic_bezier_curve_to(control_point, point + last_point);
                 m_previous_control_point = control_point;
@@ -560,9 +550,6 @@ Gfx::Path& SVGPathElement::get_path()
         }
         case PathInstructionType::SmoothQuadraticBezierCurve: {
             clear_last_control_point = false;
-
-            VERIFY(!path.segments().is_empty());
-            auto last_point = path.segments().last().point();
 
             if (m_previous_control_point.is_null()) {
                 m_previous_control_point = last_point;
@@ -584,7 +571,19 @@ Gfx::Path& SVGPathElement::get_path()
             break;
         }
 
-        case PathInstructionType::Curve:
+        case PathInstructionType::Curve: {
+            Gfx::FloatPoint c1 = { data[0], data[1] };
+            Gfx::FloatPoint c2 = { data[2], data[3] };
+            Gfx::FloatPoint p2 = { data[4], data[5] };
+            if (!absolute) {
+                p2 += last_point;
+                c1 += last_point;
+                c2 += last_point;
+            }
+            path.cubic_bezier_curve_to(c1, c2, p2);
+            break;
+        }
+
         case PathInstructionType::SmoothCurve:
             // Instead of crashing the browser every time we come across an SVG
             // with these path instructions, let's just skip them

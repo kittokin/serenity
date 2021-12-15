@@ -8,8 +8,9 @@
 
 namespace Kernel {
 
-KResultOr<clock_t> Process::sys$times(Userspace<tms*> user_times)
+ErrorOr<FlatPtr> Process::sys$times(Userspace<tms*> user_times)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
     tms times = {};
     times.tms_utime = m_ticks_in_user;
@@ -17,9 +18,7 @@ KResultOr<clock_t> Process::sys$times(Userspace<tms*> user_times)
     times.tms_cutime = m_ticks_in_user_for_dead_children;
     times.tms_cstime = m_ticks_in_kernel_for_dead_children;
 
-    if (!copy_to_user(user_times, &times))
-        return EFAULT;
-
+    TRY(copy_to_user(user_times, &times));
     return TimeManagement::the().uptime_ms() & 0x7fffffff;
 }
 

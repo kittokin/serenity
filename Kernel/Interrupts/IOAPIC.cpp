@@ -5,12 +5,12 @@
  */
 
 #include <AK/Optional.h>
-#include <Kernel/ACPI/MultiProcessorParser.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/Interrupts/IOAPIC.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
+#include <Kernel/Sections.h>
 
 #define IOAPIC_REDIRECTION_ENTRY_OFFSET 0x10
 namespace Kernel {
@@ -25,7 +25,7 @@ enum DeliveryMode {
 
 UNMAP_AFTER_INIT IOAPIC::IOAPIC(PhysicalAddress address, u32 gsi_base)
     : m_address(address)
-    , m_regs(map_typed_writable<ioapic_mmio_regs>(m_address))
+    , m_regs(Memory::map_typed_writable<ioapic_mmio_regs>(m_address))
     , m_gsi_base(gsi_base)
     , m_id((read_register(0x0) >> 24) & 0xFF)
     , m_version(read_register(0x1) & 0xFF)
@@ -48,7 +48,7 @@ void IOAPIC::map_interrupt_redirection(u8 interrupt_vector)
     for (auto redirection_override : InterruptManagement::the().isa_overrides()) {
         if (redirection_override.source() != interrupt_vector)
             continue;
-        bool active_low;
+        bool active_low = false;
         // See ACPI spec Version 6.2, page 205 to learn more about Interrupt Overriding Flags.
         switch ((redirection_override.flags() & 0b11)) {
         case 0:
@@ -64,7 +64,7 @@ void IOAPIC::map_interrupt_redirection(u8 interrupt_vector)
             break;
         }
 
-        bool trigger_level_mode;
+        bool trigger_level_mode = false;
         // See ACPI spec Version 6.2, page 205 to learn more about Interrupt Overriding Flags.
         switch (((redirection_override.flags() >> 2) & 0b11)) {
         case 0:
@@ -116,7 +116,7 @@ void IOAPIC::map_isa_interrupts()
     for (auto redirection_override : InterruptManagement::the().isa_overrides()) {
         if ((redirection_override.gsi() < gsi_base()) || (redirection_override.gsi() >= (gsi_base() + m_redirection_entries_count)))
             continue;
-        bool active_low;
+        bool active_low = false;
         // See ACPI spec Version 6.2, page 205 to learn more about Interrupt Overriding Flags.
         switch ((redirection_override.flags() & 0b11)) {
         case 0:
@@ -132,7 +132,7 @@ void IOAPIC::map_isa_interrupts()
             break;
         }
 
-        bool trigger_level_mode;
+        bool trigger_level_mode = false;
         // See ACPI spec Version 6.2, page 205 to learn more about Interrupt Overriding Flags.
         switch (((redirection_override.flags() >> 2) & 0b11)) {
         case 0:

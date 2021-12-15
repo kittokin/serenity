@@ -33,9 +33,16 @@
 #pragma once
 
 #ifndef KERNEL
+#    include <stdint.h>
 #    include <sys/types.h>
 #else
 #    include <AK/Types.h>
+#endif
+
+#ifdef __x86_64__
+#    define ElfW(type) Elf64_##type
+#else
+#    define ElfW(type) Elf32_##type
 #endif
 
 typedef uint8_t Elf_Byte;
@@ -545,9 +552,14 @@ typedef struct {
 
 /* some other useful tags */
 #define DT_GNU_HASH 0x6ffffef5  /* address of GNU hash table */
+#define DT_VERSYM 0x6ffffff0    /* address of table provided by .gnu.version */
 #define DT_RELACOUNT 0x6ffffff9 /* if present, number of RELATIVE */
 #define DT_RELCOUNT 0x6ffffffa  /* relocs, which must come first */
 #define DT_FLAGS_1 0x6ffffffb
+#define DT_VERDEF 0x6ffffffc       /* address of version definition table */
+#define DT_VERDEFNUM 0x6ffffffd    /* number of version definitions */
+#define DT_VERNEEDED 0x6ffffffe    /* address of the dependency table */
+#define DT_VERNEEDEDNUM 0x6fffffff /* number of entries in VERNEEDED */
 
 /* Dynamic Flags - DT_FLAGS .dynamic entry */
 #define DF_ORIGIN 0x00000001
@@ -797,3 +809,4 @@ struct elf_args {
 #define R_X86_64_GLOB_DAT 6
 #define R_X86_64_JUMP_SLOT 7
 #define R_X86_64_RELATIVE 8
+#define R_X86_64_TPOFF64 18

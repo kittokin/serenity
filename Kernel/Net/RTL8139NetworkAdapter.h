@@ -7,10 +7,11 @@
 #pragma once
 
 #include <AK/OwnPtr.h>
-#include <Kernel/IO.h>
+#include <Kernel/Arch/x86/IO.h>
+#include <Kernel/Bus/PCI/Access.h>
+#include <Kernel/Bus/PCI/Device.h>
+#include <Kernel/Interrupts/IRQHandler.h>
 #include <Kernel/Net/NetworkAdapter.h>
-#include <Kernel/PCI/Access.h>
-#include <Kernel/PCI/Device.h>
 #include <Kernel/Random.h>
 
 namespace Kernel {
@@ -18,21 +19,24 @@ namespace Kernel {
 #define RTL8139_TX_BUFFER_COUNT 4
 
 class RTL8139NetworkAdapter final : public NetworkAdapter
-    , public PCI::Device {
+    , public PCI::Device
+    , public IRQHandler {
 public:
-    static void detect();
+    static RefPtr<RTL8139NetworkAdapter> try_to_initialize(PCI::DeviceIdentifier const&);
 
-    RTL8139NetworkAdapter(PCI::Address, u8 irq);
     virtual ~RTL8139NetworkAdapter() override;
 
     virtual void send_raw(ReadonlyBytes) override;
     virtual bool link_up() override { return m_link_up; }
+    virtual i32 link_speed() override;
+    virtual bool link_full_duplex() override;
 
-    virtual const char* purpose() const override { return class_name(); }
+    virtual StringView purpose() const override { return class_name(); }
 
 private:
-    virtual void handle_irq(const RegisterState&) override;
-    virtual const char* class_name() const override { return "RTL8139NetworkAdapter"; }
+    RTL8139NetworkAdapter(PCI::Address, u8 irq, NonnullOwnPtr<KString>);
+    virtual bool handle_irq(const RegisterState&) override;
+    virtual StringView class_name() const override { return "RTL8139NetworkAdapter"sv; }
 
     void reset();
     void read_mac_address();
@@ -48,11 +52,11 @@ private:
 
     IOAddress m_io_base;
     u8 m_interrupt_line { 0 };
-    OwnPtr<Region> m_rx_buffer;
+    OwnPtr<Memory::Region> m_rx_buffer;
     u16 m_rx_buffer_offset { 0 };
-    Vector<OwnPtr<Region>> m_tx_buffers;
+    Vector<OwnPtr<Memory::Region>> m_tx_buffers;
     u8 m_tx_next_buffer { 0 };
-    OwnPtr<Region> m_packet_buffer;
+    OwnPtr<Memory::Region> m_packet_buffer;
     bool m_link_up { false };
     EntropySource m_entropy_source;
 };

@@ -13,22 +13,25 @@ namespace Protocol {
 RequestClient::RequestClient()
     : IPC::ServerConnection<RequestClientEndpoint, RequestServerEndpoint>(*this, "/tmp/portal/request")
 {
-    handshake();
 }
 
-void RequestClient::handshake()
+void RequestClient::ensure_connection(URL const& url, ::RequestServer::CacheLevel cache_level)
 {
-    greet();
+    async_ensure_connection(url, cache_level);
 }
 
 template<typename RequestHashMapTraits>
-RefPtr<Request> RequestClient::start_request(const String& method, const String& url, const HashMap<String, String, RequestHashMapTraits>& request_headers, ReadonlyBytes request_body)
+RefPtr<Request> RequestClient::start_request(String const& method, URL const& url, HashMap<String, String, RequestHashMapTraits> const& request_headers, ReadonlyBytes request_body)
 {
     IPC::Dictionary header_dictionary;
     for (auto& it : request_headers)
         header_dictionary.add(it.key, it.value);
 
-    auto response = IPCProxy::start_request(method, url, header_dictionary, ByteBuffer::copy(request_body));
+    auto body_result = ByteBuffer::copy(request_body);
+    if (!body_result.has_value())
+        return nullptr;
+
+    auto response = IPCProxy::start_request(method, url, header_dictionary, body_result.release_value());
     auto request_id = response.request_id();
     if (request_id < 0 || !response.response_fd().has_value())
         return nullptr;
@@ -63,14 +66,14 @@ void RequestClient::request_finished(i32 request_id, bool success, u32 total_siz
     m_requests.remove(request_id);
 }
 
-void RequestClient::request_progress(i32 request_id, const Optional<u32>& total_size, u32 downloaded_size)
+void RequestClient::request_progress(i32 request_id, Optional<u32> const& total_size, u32 downloaded_size)
 {
     if (auto request = const_cast<Request*>(m_requests.get(request_id).value_or(nullptr))) {
         request->did_progress({}, total_size, downloaded_size);
     }
 }
 
-void RequestClient::headers_became_available(i32 request_id, const IPC::Dictionary& response_headers, const Optional<u32>& status_code)
+void RequestClient::headers_became_available(i32 request_id, IPC::Dictionary const& response_headers, Optional<u32> const& status_code)
 {
     if (auto request = const_cast<Request*>(m_requests.get(request_id).value_or(nullptr))) {
         HashMap<String, String, CaseInsensitiveStringTraits> headers;
@@ -88,5 +91,5 @@ void RequestClient::certificate_requested(i32 request_id)
 
 }
 
-template RefPtr<Protocol::Request> Protocol::RequestClient::start_request(const String& method, const String& url, const HashMap<String, String>& request_headers, ReadonlyBytes request_body);
-template RefPtr<Protocol::Request> Protocol::RequestClient::start_request(const String& method, const String& url, const HashMap<String, String, CaseInsensitiveStringTraits>& request_headers, ReadonlyBytes request_body);
+template RefPtr<Protocol::Request> Protocol::RequestClient::start_request(String const& method, URL const&, HashMap<String, String> const& request_headers, ReadonlyBytes request_body);
+template RefPtr<Protocol::Request> Protocol::RequestClient::start_request(String const& method, URL const&, HashMap<String, String, CaseInsensitiveStringTraits> const& request_headers, ReadonlyBytes request_body);

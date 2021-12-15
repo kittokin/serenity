@@ -5,10 +5,11 @@
  */
 
 #include <AK/Debug.h>
-#include <AK/MappedFile.h>
+#include <AK/OwnPtr.h>
 #include <AK/QuickSort.h>
 #include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/MappedFile.h>
 #include <LibELF/Image.h>
 #include <LibX86/Disassembler.h>
 #include <LibX86/ELFSymbolProvider.h>
@@ -25,9 +26,9 @@ int main(int argc, char** argv)
     args_parser.add_positional_argument(path, "Path to i386 binary file", "path");
     args_parser.parse(argc, argv);
 
-    auto file_or_error = MappedFile::map(path);
+    auto file_or_error = Core::MappedFile::map(path);
     if (file_or_error.is_error()) {
-        warnln("Could not map file: {}", file_or_error.error().string());
+        warnln("Could not map file: {}", file_or_error.error());
         return 1;
     }
 

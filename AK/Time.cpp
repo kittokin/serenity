@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Array.h>
 #include <AK/Checked.h>
 #include <AK/Time.h>
 
@@ -13,6 +14,7 @@
 #    include <Kernel/UnixTypes.h>
 #else
 #    include <sys/time.h>
+#    include <time.h>
 #endif
 
 namespace AK {
@@ -21,7 +23,7 @@ int day_of_year(int year, unsigned month, int day)
 {
     VERIFY(month >= 1 && month <= 12);
 
-    static const int seek_table[] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    constexpr Array seek_table = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
     int day_of_year = seek_table[month - 1] + day - 1;
 
     if (is_leap_year(year) && month >= 3)
@@ -43,7 +45,7 @@ int days_in_month(int year, unsigned month)
 unsigned day_of_week(int year, unsigned month, int day)
 {
     VERIFY(month >= 1 && month <= 12);
-    static const int seek_table[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
+    constexpr Array seek_table = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
     if (month < 3)
         --year;
 
@@ -168,12 +170,12 @@ i64 Time::to_nanoseconds() const
 timespec Time::to_timespec() const
 {
     VERIFY(m_nanoseconds < 1'000'000'000);
-    return { static_cast<i64>(m_seconds), static_cast<i32>(m_nanoseconds) };
+    return { static_cast<time_t>(m_seconds), static_cast<long>(m_nanoseconds) };
 }
 timeval Time::to_timeval() const
 {
     VERIFY(m_nanoseconds < 1'000'000'000);
-    return { static_cast<i64>(m_seconds), static_cast<i32>(m_nanoseconds) / 1000 };
+    return { static_cast<time_t>(m_seconds), static_cast<suseconds_t>(m_nanoseconds) / 1000 };
 }
 
 Time Time::operator+(const Time& other) const
@@ -202,7 +204,6 @@ Time Time::operator+(const Time& other) const
             /* If *both* are INT64_MAX, then adding them will overflow in any case. */
             return Time::max();
         }
-        extra_secs = 0;
     }
 
     Checked<i64> new_secs { this_secs };
@@ -286,5 +287,36 @@ Time Time::from_half_sanitized(i64 seconds, i32 extra_seconds, u32 nanoseconds)
 
     return Time { seconds + extra_seconds, nanoseconds };
 }
+
+#ifndef KERNEL
+namespace {
+static Time now_time_from_clock(clockid_t clock_id)
+{
+    timespec now_spec {};
+    ::clock_gettime(clock_id, &now_spec);
+    return Time::from_timespec(now_spec);
+}
+}
+Time Time::now_realtime()
+{
+    return now_time_from_clock(CLOCK_REALTIME);
+}
+
+Time Time::now_realtime_coarse()
+{
+    return now_time_from_clock(CLOCK_REALTIME_COARSE);
+}
+
+Time Time::now_monotonic()
+{
+    return now_time_from_clock(CLOCK_MONOTONIC);
+}
+
+Time Time::now_monotonic_coarse()
+{
+    return now_time_from_clock(CLOCK_MONOTONIC_COARSE);
+}
+
+#endif
 
 }

@@ -6,10 +6,11 @@
 
 #include <AK/StringBuilder.h>
 #include <LibMarkdown/Heading.h>
+#include <LibMarkdown/Visitor.h>
 
 namespace Markdown {
 
-String Heading::render_to_html() const
+String Heading::render_to_html(bool) const
 {
     return String::formatted("<h{}>{}</h{}>\n", m_level, m_text.render_to_html(), m_level);
 }
@@ -35,12 +36,21 @@ String Heading::render_for_terminal(size_t) const
     return builder.build();
 }
 
-OwnPtr<Heading> Heading::parse(Vector<StringView>::ConstIterator& lines)
+RecursionDecision Heading::walk(Visitor& visitor) const
+{
+    RecursionDecision rd = visitor.visit(*this);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
+
+    return m_text.walk(visitor);
+}
+
+OwnPtr<Heading> Heading::parse(LineIterator& lines)
 {
     if (lines.is_end())
         return {};
 
-    const StringView& line = *lines;
+    StringView line = *lines;
     size_t level;
 
     for (level = 0; level < line.length(); level++) {
@@ -53,10 +63,7 @@ OwnPtr<Heading> Heading::parse(Vector<StringView>::ConstIterator& lines)
 
     StringView title_view = line.substring_view(level + 1, line.length() - level - 1);
     auto text = Text::parse(title_view);
-    if (!text.has_value())
-        return {};
-
-    auto heading = make<Heading>(move(text.value()), level);
+    auto heading = make<Heading>(move(text), level);
 
     ++lines;
     return heading;

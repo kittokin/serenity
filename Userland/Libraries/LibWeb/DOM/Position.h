@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Max Wipfli <mail@maxwipfli.ch>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -17,15 +18,16 @@ public:
     Position() { }
     Position(Node&, unsigned offset);
 
-    ~Position();
-
     bool is_valid() const { return m_node; }
 
     Node* node() { return m_node; }
     const Node* node() const { return m_node; }
 
     unsigned offset() const { return m_offset; }
+    bool offset_is_at_end_of_node() const;
     void set_offset(unsigned value) { m_offset = value; }
+    bool increment_offset();
+    bool decrement_offset();
 
     bool operator==(const Position& other) const
     {
@@ -49,9 +51,9 @@ private:
 namespace AK {
 template<>
 struct Formatter<Web::DOM::Position> : Formatter<StringView> {
-    void format(FormatBuilder& builder, const Web::DOM::Position& value)
+    ErrorOr<void> format(FormatBuilder& builder, Web::DOM::Position const& value)
     {
-        Formatter<StringView>::format(builder, value.to_string());
+        return Formatter<StringView>::format(builder, value.to_string());
     }
 };
 

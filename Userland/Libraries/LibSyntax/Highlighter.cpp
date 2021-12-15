@@ -23,7 +23,7 @@ void Highlighter::highlight_matching_token_pair()
         Backward,
     };
 
-    auto find_span_of_type = [&](auto i, void* type, void* not_type, Direction direction) -> Optional<size_t> {
+    auto find_span_of_type = [&](auto i, u64 type, u64 not_type, Direction direction) -> Optional<size_t> {
         size_t nesting_level = 0;
         bool forward = direction == Direction::Forward;
 
@@ -91,11 +91,8 @@ void Highlighter::highlight_matching_token_pair()
             }
         }
 
-        auto right_of_end = span.range.end();
-        right_of_end.set_column(right_of_end.column() + 1);
-
         for (auto& pair : pairs) {
-            if (token_types_equal(token_type, pair.close) && right_of_end == m_client->get_cursor()) {
+            if (token_types_equal(token_type, pair.close) && span.range.end() == m_client->get_cursor()) {
                 auto buddy = find_span_of_type(i, pair.open, pair.close, Direction::Backward);
                 if (buddy.has_value())
                     make_buddies(i, buddy.value());
@@ -128,6 +125,21 @@ void Highlighter::cursor_did_change()
         m_client->do_update();
     }
     highlight_matching_token_pair();
+}
+
+Vector<Highlighter::MatchingTokenPair> Highlighter::matching_token_pairs() const
+{
+    auto own_pairs = matching_token_pairs_impl();
+    own_pairs.ensure_capacity(own_pairs.size() + m_nested_token_pairs.size());
+    for (auto& nested_pair : m_nested_token_pairs)
+        own_pairs.append(nested_pair);
+    return own_pairs;
+}
+
+void Highlighter::register_nested_token_pairs(Vector<MatchingTokenPair> pairs)
+{
+    for (auto& pair : pairs)
+        m_nested_token_pairs.set(pair);
 }
 
 }

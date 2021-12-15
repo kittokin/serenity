@@ -23,8 +23,11 @@ ContentFilter::~ContentFilter()
 {
 }
 
-bool ContentFilter::is_filtered(const URL& url) const
+bool ContentFilter::is_filtered(const AK::URL& url) const
 {
+    if (url.protocol() == "data")
+        return false;
+
     auto url_string = url.to_string();
 
     for (auto& pattern : m_patterns) {

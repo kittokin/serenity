@@ -6,13 +6,14 @@
 
 #pragma once
 
+#include <AK/Result.h>
 #include <AK/StringView.h>
 
 namespace AK {
 
 class GenericLexer {
 public:
-    constexpr explicit GenericLexer(const StringView& input)
+    constexpr explicit GenericLexer(StringView input)
         : m_input(input)
     {
     }
@@ -56,6 +57,12 @@ public:
         --m_index;
     }
 
+    constexpr void retreat(size_t count)
+    {
+        VERIFY(m_index >= count);
+        m_index -= count;
+    }
+
     constexpr char consume()
     {
         VERIFY(!is_eof());
@@ -86,7 +93,7 @@ public:
         return consume_specific(StringView { next });
     }
 
-    constexpr char consume_escaped_character(char escape_char = '\\', const StringView& escape_map = "n\nr\rt\tb\bf\f")
+    constexpr char consume_escaped_character(char escape_char = '\\', StringView escape_map = "n\nr\rt\tb\bf\f")
     {
         if (!consume_specific(escape_char))
             return consume();
@@ -108,6 +115,13 @@ public:
     StringView consume_until(const char*);
     StringView consume_quoted_string(char escape_char = 0);
     String consume_and_unescape_string(char escape_char = '\\');
+
+    enum class UnicodeEscapeError {
+        MalformedUnicodeEscape,
+        UnicodeEscapeOverflow,
+    };
+
+    Result<u32, UnicodeEscapeError> consume_escaped_code_point(bool combine_surrogate_pairs = true);
 
     constexpr void ignore(size_t count = 1)
     {
@@ -195,9 +209,13 @@ public:
 protected:
     StringView m_input;
     size_t m_index { 0 };
+
+private:
+    Result<u32, UnicodeEscapeError> decode_code_point();
+    Result<u32, UnicodeEscapeError> decode_single_or_paired_surrogate(bool combine_surrogate_pairs);
 };
 
-constexpr auto is_any_of(const StringView& values)
+constexpr auto is_any_of(StringView values)
 {
     return [values](auto c) { return values.contains(c); };
 }

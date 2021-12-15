@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -143,7 +143,7 @@ void TarOutputStream::add_directory(const String& path, mode_t mode)
     VERIFY(m_stream.write_or_error(Bytes { &padding, block_size - sizeof(header) }));
 }
 
-void TarOutputStream::add_file(const String& path, mode_t mode, const ReadonlyBytes& bytes)
+void TarOutputStream::add_file(const String& path, mode_t mode, ReadonlyBytes bytes)
 {
     VERIFY(!m_finished);
     TarFileHeader header;

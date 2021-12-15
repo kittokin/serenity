@@ -15,20 +15,26 @@ set(SOURCES
     IODevice.cpp
     LocalServer.cpp
     LocalSocket.cpp
+    LockFile.cpp
+    MappedFile.cpp
     MimeData.cpp
     NetworkJob.cpp
     NetworkResponse.cpp
     Notifier.cpp
     Object.cpp
+    Process.cpp
     ProcessStatisticsReader.cpp
     Property.cpp
+    SecretString.cpp
     Socket.cpp
     StandardPaths.cpp
+    System.cpp
     TCPServer.cpp
     TCPSocket.cpp
     Timer.cpp
     UDPServer.cpp
     UDPSocket.cpp
+    Version.cpp
 )
 
 serenity_lib(LibCore core)

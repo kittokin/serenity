@@ -18,8 +18,8 @@ public:
     virtual void initialize(GlobalObject&) override;
     virtual ~ArrayConstructor() override;
 
-    virtual Value call() override;
-    virtual Value construct(Function& new_target) override;
+    virtual ThrowCompletionOr<Value> call() override;
+    virtual ThrowCompletionOr<Object*> construct(FunctionObject& new_target) override;
 
 private:
     virtual bool has_constructor() const override { return true; }
@@ -27,6 +27,8 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(from);
     JS_DECLARE_NATIVE_FUNCTION(is_array);
     JS_DECLARE_NATIVE_FUNCTION(of);
+
+    JS_DECLARE_NATIVE_FUNCTION(symbol_species_getter);
 };
 
 }

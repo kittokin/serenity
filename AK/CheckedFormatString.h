@@ -14,7 +14,7 @@
 #ifdef ENABLE_COMPILETIME_FORMAT_CHECK
 // FIXME: Seems like clang doesn't like calling 'consteval' functions inside 'consteval' functions quite the same way as GCC does,
 //        it seems to entirely forget that it accepted that parameters to a 'consteval' function to begin with.
-#    ifdef __clang__
+#    if defined(__clang__) || defined(__CLION_IDE_)
 #        undef ENABLE_COMPILETIME_FORMAT_CHECK
 #    endif
 #endif
@@ -79,6 +79,7 @@ consteval auto count_fmt_params(const char (&fmt)[N])
 
         size_t unclosed_braces { 0 };
         size_t extra_closed_braces { 0 };
+        size_t nesting_level { 0 };
 
         Array<size_t, 4> last_format_specifier_start { 0 };
         size_t total_used_last_format_specifier_start_count { 0 };
@@ -100,13 +101,17 @@ consteval auto count_fmt_params(const char (&fmt)[N])
             result.last_format_specifier_start[result.total_used_last_format_specifier_start_count++] = i + 1;
 
             ++result.unclosed_braces;
+            ++result.nesting_level;
             break;
         case '}':
-            if (i + 1 < N && fmt[i + 1] == '}') {
-                ++i;
-                continue;
+            if (result.nesting_level == 0) {
+                if (i + 1 < N && fmt[i + 1] == '}') {
+                    ++i;
+                    continue;
+                }
             }
             if (result.unclosed_braces) {
+                --result.nesting_level;
                 --result.unclosed_braces;
 
                 if (result.total_used_last_format_specifier_start_count == 0)
@@ -194,8 +199,7 @@ private:
                 return false;
             };
             auto references_all_arguments = AK::all_of(
-                all_parameters.begin(),
-                all_parameters.end(),
+                all_parameters,
                 [&](auto& entry) {
                     return contains(
                         check.used_arguments.begin(),

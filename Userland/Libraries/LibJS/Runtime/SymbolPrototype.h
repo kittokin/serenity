@@ -19,10 +19,11 @@ public:
     virtual ~SymbolPrototype() override;
 
 private:
-    JS_DECLARE_NATIVE_GETTER(description_getter);
+    JS_DECLARE_NATIVE_FUNCTION(description_getter);
 
     JS_DECLARE_NATIVE_FUNCTION(to_string);
     JS_DECLARE_NATIVE_FUNCTION(value_of);
+    JS_DECLARE_NATIVE_FUNCTION(symbol_to_primitive);
 };
 
 }

@@ -9,10 +9,11 @@
 #include <AK/Assertions.h>
 #include <AK/Checked.h>
 #include <AK/Forward.h>
+#include <AK/Optional.h>
 #include <AK/Span.h>
 #include <AK/StdLibExtras.h>
+#include <AK/StringHash.h>
 #include <AK/StringUtils.h>
-#include <AK/Vector.h>
 
 namespace AK {
 
@@ -23,7 +24,8 @@ public:
         : m_characters(characters)
         , m_length(length)
     {
-        VERIFY(!Checked<uintptr_t>::addition_would_overflow((uintptr_t)characters, length));
+        if (!is_constant_evaluated())
+            VERIFY(!Checked<uintptr_t>::addition_would_overflow((uintptr_t)characters, length));
     }
     ALWAYS_INLINE StringView(const unsigned char* characters, size_t length)
         : m_characters((const char*)characters)
@@ -46,10 +48,14 @@ public:
     StringView(const String&);
     StringView(const FlyString&);
 
-    [[nodiscard]] constexpr bool is_null() const { return !m_characters; }
+    explicit StringView(ByteBuffer&&) = delete;
+    explicit StringView(String&&) = delete;
+    explicit StringView(FlyString&&) = delete;
+
+    [[nodiscard]] constexpr bool is_null() const { return m_characters == nullptr; }
     [[nodiscard]] constexpr bool is_empty() const { return m_length == 0; }
 
-    [[nodiscard]] const char* characters_without_null_termination() const { return m_characters; }
+    [[nodiscard]] constexpr char const* characters_without_null_termination() const { return m_characters; }
     [[nodiscard]] constexpr size_t length() const { return m_length; }
 
     [[nodiscard]] ReadonlyBytes bytes() const { return { m_characters, m_length }; }
@@ -61,65 +67,58 @@ public:
     [[nodiscard]] constexpr ConstIterator begin() const { return ConstIterator::begin(*this); }
     [[nodiscard]] constexpr ConstIterator end() const { return ConstIterator::end(*this); }
 
-    [[nodiscard]] unsigned hash() const;
+    [[nodiscard]] constexpr unsigned hash() const
+    {
+        if (is_empty())
+            return 0;
+        return string_hash(characters_without_null_termination(), length());
+    }
 
-    [[nodiscard]] bool starts_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
-    [[nodiscard]] bool ends_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool starts_with(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool ends_with(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     [[nodiscard]] bool starts_with(char) const;
     [[nodiscard]] bool ends_with(char) const;
-    [[nodiscard]] bool matches(const StringView& mask, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
-    [[nodiscard]] bool matches(const StringView& mask, Vector<MaskSpan>&, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
+    [[nodiscard]] bool matches(StringView mask, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
+    [[nodiscard]] bool matches(StringView mask, Vector<MaskSpan>&, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
     [[nodiscard]] bool contains(char) const;
-    [[nodiscard]] bool contains(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
-    [[nodiscard]] bool equals_ignoring_case(const StringView& other) const;
+    [[nodiscard]] bool contains(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool equals_ignoring_case(StringView other) const;
 
+    [[nodiscard]] StringView trim(StringView characters, TrimMode mode = TrimMode::Both) const { return StringUtils::trim(*this, characters, mode); }
     [[nodiscard]] StringView trim_whitespace(TrimMode mode = TrimMode::Both) const { return StringUtils::trim_whitespace(*this, mode); }
 
-    Optional<size_t> find_first_of(char) const;
-    Optional<size_t> find_first_of(const StringView&) const;
+    [[nodiscard]] String to_lowercase_string() const;
+    [[nodiscard]] String to_uppercase_string() const;
+    [[nodiscard]] String to_titlecase_string() const;
 
-    Optional<size_t> find_last_of(char) const;
-    Optional<size_t> find_last_of(const StringView&) const;
+    [[nodiscard]] Optional<size_t> find(char needle, size_t start = 0) const { return StringUtils::find(*this, needle, start); }
+    [[nodiscard]] Optional<size_t> find(StringView needle, size_t start = 0) const { return StringUtils::find(*this, needle, start); }
+    [[nodiscard]] Optional<size_t> find_last(char needle) const { return StringUtils::find_last(*this, needle); }
+    // FIXME: Implement find_last(StringView) for API symmetry.
 
-    Optional<size_t> find(const StringView&) const;
-    Optional<size_t> find(char c) const;
+    [[nodiscard]] Vector<size_t> find_all(StringView needle) const;
+
+    using SearchDirection = StringUtils::SearchDirection;
+    [[nodiscard]] Optional<size_t> find_any_of(StringView needles, SearchDirection direction = SearchDirection::Forward) const { return StringUtils::find_any_of(*this, needles, direction); }
 
     [[nodiscard]] constexpr StringView substring_view(size_t start, size_t length) const
     {
-        VERIFY(start + length <= m_length);
+        if (!is_constant_evaluated())
+            VERIFY(start + length <= m_length);
         return { m_characters + start, length };
     }
 
     [[nodiscard]] constexpr StringView substring_view(size_t start) const
     {
+        if (!is_constant_evaluated())
+            VERIFY(start <= length());
         return substring_view(start, length() - start);
     }
 
     [[nodiscard]] Vector<StringView> split_view(char, bool keep_empty = false) const;
-    [[nodiscard]] Vector<StringView> split_view(const StringView&, bool keep_empty = false) const;
+    [[nodiscard]] Vector<StringView> split_view(StringView, bool keep_empty = false) const;
 
-    template<typename UnaryPredicate>
-    [[nodiscard]] Vector<StringView> split_view_if(UnaryPredicate&& predicate, bool keep_empty = false) const
-    {
-        if (is_empty())
-            return {};
-
-        Vector<StringView> v;
-        size_t substart = 0;
-        for (size_t i = 0; i < length(); ++i) {
-            char ch = characters_without_null_termination()[i];
-            if (predicate(ch)) {
-                size_t sublen = i - substart;
-                if (sublen != 0 || keep_empty)
-                    v.append(substring_view(substart, sublen));
-                substart = i + 1;
-            }
-        }
-        size_t taillen = length() - substart;
-        if (taillen != 0 || keep_empty)
-            v.append(substring_view(substart, taillen));
-        return v;
-    }
+    [[nodiscard]] Vector<StringView> split_view_if(Function<bool(char)> const& predicate, bool keep_empty = false) const;
 
     // Create a Vector of StringViews split by line endings. As of CommonMark
     // 0.29, the spec defines a line ending as "a newline (U+000A), a carriage
@@ -148,34 +147,34 @@ public:
     //     StringView substr { "oo" };
     //
     // would not work.
-    [[nodiscard]] StringView substring_view_starting_from_substring(const StringView& substring) const;
-    [[nodiscard]] StringView substring_view_starting_after_substring(const StringView& substring) const;
+    [[nodiscard]] StringView substring_view_starting_from_substring(StringView substring) const;
+    [[nodiscard]] StringView substring_view_starting_after_substring(StringView substring) const;
 
-    bool operator==(const char* cstring) const
+    constexpr bool operator==(const char* cstring) const
     {
         if (is_null())
-            return !cstring;
+            return cstring == nullptr;
         if (!cstring)
             return false;
         // NOTE: `m_characters` is not guaranteed to be null-terminated, but `cstring` is.
         const char* cp = cstring;
         for (size_t i = 0; i < m_length; ++i) {
-            if (!*cp)
+            if (*cp == '\0')
                 return false;
             if (m_characters[i] != *(cp++))
                 return false;
         }
-        return !*cp;
+        return *cp == '\0';
     }
 
-    bool operator!=(const char* cstring) const
+    constexpr bool operator!=(const char* cstring) const
     {
         return !(*this == cstring);
     }
 
     bool operator==(const String&) const;
 
-    constexpr bool operator==(const StringView& other) const
+    constexpr bool operator==(StringView other) const
     {
         if (is_null())
             return other.is_null();
@@ -183,15 +182,15 @@ public:
             return false;
         if (length() != other.length())
             return false;
-        return !__builtin_memcmp(m_characters, other.m_characters, m_length);
+        return __builtin_memcmp(m_characters, other.m_characters, m_length) == 0;
     }
 
-    constexpr bool operator!=(const StringView& other) const
+    constexpr bool operator!=(StringView other) const
     {
         return !(*this == other);
     }
 
-    bool operator<(const StringView& other) const
+    bool operator<(StringView other) const
     {
         if (int c = __builtin_memcmp(m_characters, other.m_characters, min(m_length, other.m_length)))
             return c < 0;
@@ -202,25 +201,24 @@ public:
 
     [[nodiscard]] bool is_whitespace() const { return StringUtils::is_whitespace(*this); }
 
-    template<typename T, typename... Rest>
-    [[nodiscard]] bool is_one_of(const T& string, Rest... rest) const
+    [[nodiscard]] String replace(StringView needle, StringView replacement, bool all_occurrences = false) const;
+    [[nodiscard]] size_t count(StringView needle) const { return StringUtils::count(*this, needle); }
+
+    template<typename... Ts>
+    [[nodiscard]] ALWAYS_INLINE constexpr bool is_one_of(Ts&&... strings) const
     {
-        if (*this == string)
-            return true;
-        return is_one_of(rest...);
+        return (... || this->operator==(forward<Ts>(strings)));
     }
 
 private:
-    [[nodiscard]] bool is_one_of() const { return false; }
-
     friend class String;
     const char* m_characters { nullptr };
     size_t m_length { 0 };
 };
 
 template<>
-struct Traits<StringView> : public GenericTraits<String> {
-    static unsigned hash(const StringView& s) { return s.hash(); }
+struct Traits<StringView> : public GenericTraits<StringView> {
+    static unsigned hash(StringView s) { return s.hash(); }
 };
 
 }

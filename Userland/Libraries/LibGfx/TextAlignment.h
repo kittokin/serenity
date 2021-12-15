@@ -12,11 +12,12 @@
 namespace Gfx {
 
 #define GFX_ENUMERATE_TEXT_ALIGNMENTS(M) \
-    M(TopLeft)                           \
-    M(CenterLeft)                        \
     M(Center)                            \
+    M(CenterLeft)                        \
     M(CenterRight)                       \
+    M(TopLeft)                           \
     M(TopRight)                          \
+    M(BottomLeft)                        \
     M(BottomRight)
 
 enum class TextAlignment {
@@ -49,7 +50,7 @@ inline bool is_vertically_centered_text_alignment(TextAlignment alignment)
     }
 }
 
-inline Optional<TextAlignment> text_alignment_from_string(const StringView& string)
+inline Optional<TextAlignment> text_alignment_from_string(StringView string)
 {
 #define __ENUMERATE(x) \
     if (string == #x)  \

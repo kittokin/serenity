@@ -34,7 +34,13 @@ int listen(int sockfd, int backlog)
 
 int accept(int sockfd, sockaddr* addr, socklen_t* addrlen)
 {
-    int rc = syscall(SC_accept, sockfd, addr, addrlen);
+    return accept4(sockfd, addr, addrlen, 0);
+}
+
+int accept4(int sockfd, sockaddr* addr, socklen_t* addrlen, int flags)
+{
+    Syscall::SC_accept4_params params { addr, addrlen, sockfd, flags };
+    int rc = syscall(SC_accept4, &params);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
@@ -106,7 +112,7 @@ int getsockopt(int sockfd, int level, int option, void* value, socklen_t* value_
 
 int setsockopt(int sockfd, int level, int option, const void* value, socklen_t value_size)
 {
-    Syscall::SC_setsockopt_params params { sockfd, level, option, value, value_size };
+    Syscall::SC_setsockopt_params params { value, sockfd, level, option, value_size };
     int rc = syscall(SC_setsockopt, &params);
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }

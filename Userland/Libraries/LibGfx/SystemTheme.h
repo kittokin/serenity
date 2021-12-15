@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -10,11 +11,13 @@
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <LibCore/AnonymousBuffer.h>
+#include <LibCore/ConfigFile.h>
 #include <LibGfx/Color.h>
 
 namespace Gfx {
 
 #define ENUMERATE_COLOR_ROLES(C)   \
+    C(Accent)                      \
     C(ActiveLink)                  \
     C(ActiveWindowBorder1)         \
     C(ActiveWindowBorder2)         \
@@ -27,6 +30,8 @@ namespace Gfx {
     C(ButtonText)                  \
     C(DesktopBackground)           \
     C(FocusOutline)                \
+    C(Gutter)                      \
+    C(GutterBorder)                \
     C(HighlightWindowBorder1)      \
     C(HighlightWindowBorder2)      \
     C(HighlightWindowTitle)        \
@@ -85,6 +90,22 @@ namespace Gfx {
     C(Window)                      \
     C(WindowText)
 
+#define ENUMERATE_FLAG_ROLES(C) \
+    C(IsDark)
+
+#define ENUMERATE_METRIC_ROLES(C) \
+    C(TitleHeight)                \
+    C(TitleButtonWidth)           \
+    C(TitleButtonHeight)
+
+#define ENUMERATE_PATH_ROLES(C) \
+    C(TitleButtonIcons)         \
+    C(InactiveWindowShadow)     \
+    C(ActiveWindowShadow)       \
+    C(TaskbarShadow)            \
+    C(MenuShadow)               \
+    C(TooltipShadow)
+
 enum class ColorRole {
     NoRole,
 
@@ -115,35 +136,98 @@ inline const char* to_string(ColorRole role)
     }
 }
 
+enum class FlagRole {
+    NoRole,
+
+#undef __ENUMERATE_FLAG_ROLE
+#define __ENUMERATE_FLAG_ROLE(role) role,
+    ENUMERATE_FLAG_ROLES(__ENUMERATE_FLAG_ROLE)
+#undef __ENUMERATE_FLAG_ROLE
+
+        __Count,
+};
+
+inline const char* to_string(FlagRole role)
+{
+    switch (role) {
+    case FlagRole::NoRole:
+        return "NoRole";
+#undef __ENUMERATE_FLAG_ROLE
+#define __ENUMERATE_FLAG_ROLE(role) \
+    case FlagRole::role:            \
+        return #role;
+        ENUMERATE_FLAG_ROLES(__ENUMERATE_FLAG_ROLE)
+#undef __ENUMERATE_FLAG_ROLE
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
 enum class MetricRole {
     NoRole,
-    TitleHeight,
-    TitleButtonWidth,
-    TitleButtonHeight,
-    __Count,
+
+#undef __ENUMERATE_METRIC_ROLE
+#define __ENUMERATE_METRIC_ROLE(role) role,
+    ENUMERATE_METRIC_ROLES(__ENUMERATE_METRIC_ROLE)
+#undef __ENUMERATE_METRIC_ROLE
+
+        __Count,
 };
+
+inline const char* to_string(MetricRole role)
+{
+    switch (role) {
+    case MetricRole::NoRole:
+        return "NoRole";
+#undef __ENUMERATE_METRIC_ROLE
+#define __ENUMERATE_METRIC_ROLE(role) \
+    case MetricRole::role:            \
+        return #role;
+        ENUMERATE_METRIC_ROLES(__ENUMERATE_METRIC_ROLE)
+#undef __ENUMERATE_METRIC_ROLE
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
 
 enum class PathRole {
     NoRole,
-    TitleButtonIcons,
-    InactiveWindowShadow,
-    ActiveWindowShadow,
-    TaskbarShadow,
-    MenuShadow,
-    TooltipShadow,
-    __Count,
+
+#undef __ENUMERATE_PATH_ROLE
+#define __ENUMERATE_PATH_ROLE(role) role,
+    ENUMERATE_PATH_ROLES(__ENUMERATE_PATH_ROLE)
+#undef __ENUMERATE_PATH_ROLE
+
+        __Count,
 };
+
+inline const char* to_string(PathRole role)
+{
+    switch (role) {
+    case PathRole::NoRole:
+        return "NoRole";
+#undef __ENUMERATE_PATH_ROLE
+#define __ENUMERATE_PATH_ROLE(role) \
+    case PathRole::role:            \
+        return #role;
+        ENUMERATE_PATH_ROLES(__ENUMERATE_PATH_ROLE)
+#undef __ENUMERATE_PATH_ROLE
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
 
 struct SystemTheme {
     RGBA32 color[(int)ColorRole::__Count];
+    bool flag[(int)FlagRole::__Count];
     int metric[(int)MetricRole::__Count];
     char path[(int)PathRole::__Count][256]; // TODO: PATH_MAX?
 };
 
-const SystemTheme& current_system_theme();
 Core::AnonymousBuffer& current_system_theme_buffer();
 void set_system_theme(Core::AnonymousBuffer);
-Core::AnonymousBuffer load_system_theme(const String& path);
+Core::AnonymousBuffer load_system_theme(Core::ConfigFile const&);
+Core::AnonymousBuffer load_system_theme(String const& path);
 
 }
 

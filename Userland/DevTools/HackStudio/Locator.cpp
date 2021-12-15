@@ -74,7 +74,6 @@ public:
         }
         return {};
     }
-    virtual void update() override {};
 
     const Vector<Suggestion>& suggestions() const { return m_suggestions; }
 
@@ -103,9 +102,12 @@ Locator::Locator(Core::Object* parent)
     m_textbox->on_change = [this] {
         update_suggestions();
     };
+
     m_textbox->on_escape_pressed = [this] {
         m_popup_window->hide();
+        m_textbox->set_focus(false);
     };
+
     m_textbox->on_up_pressed = [this] {
         GUI::ModelIndex new_index = m_suggestion_view->selection().first();
         if (new_index.is_valid())
@@ -113,7 +115,7 @@ Locator::Locator(Core::Object* parent)
         else
             new_index = m_suggestion_view->model()->index(0);
 
-        if (m_suggestion_view->model()->is_valid(new_index)) {
+        if (m_suggestion_view->model()->is_within_range(new_index)) {
             m_suggestion_view->selection().set(new_index);
             m_suggestion_view->scroll_into_view(new_index, Orientation::Vertical);
         }
@@ -125,7 +127,7 @@ Locator::Locator(Core::Object* parent)
         else
             new_index = m_suggestion_view->model()->index(0);
 
-        if (m_suggestion_view->model()->is_valid(new_index)) {
+        if (m_suggestion_view->model()->is_within_range(new_index)) {
             m_suggestion_view->selection().set(new_index);
             m_suggestion_view->scroll_into_view(new_index, Orientation::Vertical);
         }
@@ -136,6 +138,10 @@ Locator::Locator(Core::Object* parent)
         if (!selected_index.is_valid())
             return;
         open_suggestion(selected_index);
+    };
+
+    m_textbox->on_focusout = [&]() {
+        close();
     };
 
     m_popup_window = GUI::Window::construct(parent);

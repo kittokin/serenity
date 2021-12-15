@@ -30,9 +30,7 @@ class Client final
     C_OBJECT(Client);
 
 public:
-    virtual void handshake() override;
-
-    Optional<DecodedImage> decode_image(const ByteBuffer&);
+    Optional<DecodedImage> decode_image(ReadonlyBytes);
 
     Function<void()> on_death;
 
@@ -40,8 +38,6 @@ private:
     Client();
 
     virtual void die() override;
-
-    virtual void dummy() override;
 };
 
 }

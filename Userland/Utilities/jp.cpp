@@ -4,14 +4,15 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ByteBuffer.h>
+#include <AK/Assertions.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
 #include <AK/StringBuilder.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
-#include <stdio.h>
+#include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <unistd.h>
 
 static void print(const JsonValue& value, int spaces_per_indent, int indent = 0, bool use_color = true);
@@ -21,14 +22,11 @@ static void print_indent(int indent, int spaces_per_indent)
         out(" ");
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio rpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio rpath"));
 
-    const char* path = nullptr;
+    StringView path;
     int spaces_in_indent = 4;
 
     Core::ArgsParser args_parser;
@@ -36,28 +34,19 @@ int main(int argc, char** argv)
     args_parser.add_option(spaces_in_indent, "Indent size", "indent-size", 'i', "spaces_in_indent");
     args_parser.add_positional_argument(path, "Path to JSON file", "path", Core::ArgsParser::Required::No);
     VERIFY(spaces_in_indent >= 0);
-    args_parser.parse(argc, argv);
-    if (path == nullptr)
-        path = "/dev/stdin";
-    auto file = Core::File::construct(path);
-    if (!file->open(Core::IODevice::ReadOnly)) {
-        warnln("Couldn't open {} for reading: {}", path, file->error_string());
-        return 1;
-    }
+    args_parser.parse(arguments);
 
-    if (pledge("stdio", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    if (path == nullptr)
+        path = "/dev/stdin"sv;
+
+    auto file = TRY(Core::File::open(path, Core::OpenMode::ReadOnly));
+
+    TRY(Core::System::pledge("stdio"));
 
     auto file_contents = file->read_all();
-    auto json = JsonValue::from_string(file_contents);
-    if (!json.has_value()) {
-        warnln("Couldn't parse {} as JSON", path);
-        return 1;
-    }
+    auto json = TRY(JsonValue::from_string(file_contents));
 
-    print(json.value(), spaces_in_indent, 0, isatty(STDOUT_FILENO));
+    print(json, spaces_in_indent, 0, isatty(STDOUT_FILENO));
     outln();
 
     return 0;
@@ -67,7 +56,7 @@ void print(const JsonValue& value, int spaces_per_indent, int indent, bool use_c
 {
     if (value.is_object()) {
         size_t printed_members = 0;
-        auto object = value.as_object();
+        auto& object = value.as_object();
         outln("{{");
         object.for_each_member([&](auto& member_name, auto& member_value) {
             ++printed_members;

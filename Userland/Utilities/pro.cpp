@@ -20,7 +20,7 @@
 // FIXME: Move this somewhere else when it's needed (e.g. in the Browser)
 class ContentDispositionParser {
 public:
-    ContentDispositionParser(const StringView& value)
+    ContentDispositionParser(StringView value)
     {
         GenericLexer lexer(value);
 
@@ -84,8 +84,8 @@ public:
         FormData,
     };
 
-    const StringView& filename() const { return m_filename; }
-    const StringView& name() const { return m_name; }
+    StringView filename() const { return m_filename; }
+    StringView name() const { return m_name; }
     Kind kind() const { return m_kind; }
     bool might_be_wrong() const { return m_might_be_wrong; }
 
@@ -122,7 +122,9 @@ private:
     {
         if (!m_condition()) {
         write_to_buffer:;
-            m_buffer.append(bytes.data(), bytes.size());
+            // FIXME: Propagate errors.
+            if (m_buffer.try_append(bytes.data(), bytes.size()).is_error())
+                return 0;
             return bytes.size();
         }
 
@@ -163,7 +165,7 @@ int main(int argc, char** argv)
         .value_name = "header-value",
         .accept_value = [&](auto* s) {
             StringView header { s };
-            auto split = header.find_first_of(':');
+            auto split = header.find(':');
             if (!split.has_value())
                 return false;
             request_headers.set(header.substring_view(0, split.value()), header.substring_view(split.value() + 1));
@@ -179,16 +181,16 @@ int main(int argc, char** argv)
 
     URL url(url_str);
     if (!url.is_valid()) {
-        fprintf(stderr, "'%s' is not a valid URL\n", url_str);
+        warnln("'{}' is not a valid URL", url_str);
         return 1;
     }
 
     Core::EventLoop loop;
     auto protocol_client = Protocol::RequestClient::construct();
 
-    auto request = protocol_client->start_request(method, url.to_string(), request_headers, data ? StringView { data }.bytes() : ReadonlyBytes {});
+    auto request = protocol_client->start_request(method, url, request_headers, data ? StringView { data }.bytes() : ReadonlyBytes {});
     if (!request) {
-        fprintf(stderr, "Failed to start request for '%s'\n", url_str);
+        warnln("Failed to start request for '{}'", url_str);
         return 1;
     }
 
@@ -201,12 +203,12 @@ int main(int argc, char** argv)
     bool received_actual_headers = false;
 
     request->on_progress = [&](Optional<u32> maybe_total_size, u32 downloaded_size) {
-        fprintf(stderr, "\r\033[2K");
+        warn("\r\033[2K");
         if (maybe_total_size.has_value()) {
-            fprintf(stderr, "\033]9;%d;%d;\033\\", downloaded_size, maybe_total_size.value());
-            fprintf(stderr, "Download progress: %s / %s", human_readable_size(downloaded_size).characters(), human_readable_size(maybe_total_size.value()).characters());
+            warn("\033]9;{};{};\033\\", downloaded_size, maybe_total_size.value());
+            warn("Download progress: {} / {}", human_readable_size(downloaded_size), human_readable_size(maybe_total_size.value()));
         } else {
-            fprintf(stderr, "Download progress: %s / ???", human_readable_size(downloaded_size).characters());
+            warn("Download progress: {} / ???", human_readable_size(downloaded_size));
         }
 
         gettimeofday(&current_time, nullptr);
@@ -215,7 +217,7 @@ int main(int argc, char** argv)
         auto time_diff_ms = time_diff.tv_sec * 1000 + time_diff.tv_usec / 1000;
         auto size_diff = downloaded_size - previous_downloaded_size;
 
-        fprintf(stderr, " at %s/s", human_readable_size(((float)size_diff / (float)time_diff_ms) * 1000).characters());
+        warn(" at {}/s", human_readable_size(((float)size_diff / (float)time_diff_ms) * 1000));
 
         if (time_diff_ms >= download_speed_rolling_average_time_in_ms) {
             previous_downloaded_size = previous_midpoint_downloaded_size;
@@ -264,10 +266,10 @@ int main(int argc, char** argv)
         };
     }
     request->on_finish = [&](bool success, auto) {
-        fprintf(stderr, "\033]9;-1;\033\\");
-        fprintf(stderr, "\n");
+        warn("\033]9;-1;\033\\");
+        warnln();
         if (!success)
-            fprintf(stderr, "Request failed :(\n");
+            warnln("Request failed :(");
         loop.quit(0);
     };
 

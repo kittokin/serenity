@@ -15,9 +15,9 @@ namespace AK {
 
 class UUID {
 public:
-    UUID();
+    UUID() = default;
     UUID(Array<u8, 16> uuid_buffer);
-    UUID(const StringView&);
+    UUID(StringView);
     ~UUID() = default;
 
     bool operator==(const UUID&) const;
@@ -31,8 +31,7 @@ public:
     bool is_zero() const;
 
 private:
-    void convert_string_view_to_uuid(const StringView&);
-    void fill_buffer(ByteBuffer);
+    void convert_string_view_to_uuid(StringView);
 
     Array<u8, 16> m_uuid_buffer {};
 };

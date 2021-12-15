@@ -6,10 +6,13 @@
 
 #pragma once
 
+#include <AK/LexicalPath.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/Vector.h>
 #include <LibCore/DirIterator.h>
 #include <LibGUI/Model.h>
+#include <LibGUI/WindowServerConnection.h>
+#include <LibGfx/CursorParams.h>
 
 class MouseCursorModel final : public GUI::Model {
 public:
@@ -34,6 +37,7 @@ public:
         }
         VERIFY_NOT_REACHED();
     }
+
     virtual GUI::Variant data(const GUI::ModelIndex& index, GUI::ModelRole role) const override
     {
         auto& cursor = m_cursors[index.row()];
@@ -51,25 +55,34 @@ public:
         }
         return {};
     }
-    virtual void update() override
+
+    virtual void invalidate() override
     {
         m_cursors.clear();
 
-        Core::DirIterator iterator("/res/cursors", Core::DirIterator::Flags::SkipDots);
+        Core::DirIterator iterator(String::formatted("/res/cursor-themes/{}", GUI::WindowServerConnection::the().get_cursor_theme()), Core::DirIterator::Flags::SkipDots);
 
         while (iterator.has_next()) {
             auto path = iterator.next_full_path();
+            if (path.ends_with(".ini"))
+                continue;
             if (path.contains("2x"))
                 continue;
             Cursor cursor;
             cursor.path = move(path);
-            cursor.bitmap = Gfx::Bitmap::load_from_file(cursor.path);
-            auto filename_split = cursor.path.split('/');
-            cursor.name = filename_split[2];
+            cursor.name = LexicalPath::basename(cursor.path);
+
+            // FIXME: Animated cursor bitmaps
+            auto cursor_bitmap = Gfx::Bitmap::try_load_from_file(cursor.path).release_value_but_fixme_should_propagate_errors();
+            auto cursor_bitmap_rect = cursor_bitmap->rect();
+
+            cursor.params = Gfx::CursorParams::parse_from_filename(cursor.name, cursor_bitmap_rect.center()).constrained(*cursor_bitmap);
+            cursor.bitmap = cursor_bitmap->cropped(Gfx::IntRect(Gfx::FloatRect(cursor_bitmap_rect).scaled(1.0 / cursor.params.frames(), 1.0))).release_value_but_fixme_should_propagate_errors();
+
             m_cursors.append(move(cursor));
         }
 
-        did_update();
+        Model::invalidate();
     }
 
 private:
@@ -79,6 +92,7 @@ private:
         RefPtr<Gfx::Bitmap> bitmap;
         String path;
         String name;
+        Gfx::CursorParams params;
     };
 
     Vector<Cursor> m_cursors;
@@ -110,6 +124,7 @@ public:
         }
         VERIFY_NOT_REACHED();
     }
+
     virtual GUI::Variant data(const GUI::ModelIndex& index, GUI::ModelRole role) const override
     {
         auto& icon_set = m_icon_sets[index.row()];
@@ -131,7 +146,8 @@ public:
         }
         return {};
     }
-    virtual void update() override
+
+    virtual void invalidate() override
     {
         m_icon_sets.clear();
 
@@ -142,9 +158,8 @@ public:
             if (!path.contains("filetype-") && !path.contains("app-"))
                 continue;
             IconSet icon_set;
-            icon_set.big_icon = Gfx::Bitmap::load_from_file(path);
-            auto filename_split = path.split('/');
-            icon_set.name = filename_split[3];
+            icon_set.big_icon = Gfx::Bitmap::try_load_from_file(path).release_value_but_fixme_should_propagate_errors();
+            icon_set.name = LexicalPath::basename(path);
             m_icon_sets.append(move(icon_set));
         }
 
@@ -157,9 +172,8 @@ public:
             if (!path.contains("filetype-") && !path.contains("app-"))
                 continue;
             IconSet icon_set;
-            icon_set.little_icon = Gfx::Bitmap::load_from_file(path);
-            auto filename_split = path.split('/');
-            icon_set.name = filename_split[3];
+            icon_set.little_icon = Gfx::Bitmap::try_load_from_file(path).release_value_but_fixme_should_propagate_errors();
+            icon_set.name = LexicalPath::basename(path);
             for (size_t i = 0; i < big_icons_found; i++) {
                 if (icon_set.name == m_icon_sets[i].name) {
                     m_icon_sets[i].little_icon = icon_set.little_icon;
@@ -171,7 +185,7 @@ public:
             continue;
         }
 
-        did_update();
+        Model::invalidate();
     }
 
 private:

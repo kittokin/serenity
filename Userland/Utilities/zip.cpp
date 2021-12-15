@@ -16,7 +16,7 @@
 int main(int argc, char** argv)
 {
     const char* zip_path;
-    Vector<String> source_paths;
+    Vector<StringView> source_paths;
     bool recurse = false;
     bool force = false;
 
@@ -50,7 +50,7 @@ int main(int argc, char** argv)
 
     auto add_file = [&](String path) {
         auto file = Core::File::construct(path);
-        if (!file->open(Core::IODevice::ReadOnly)) {
+        if (!file->open(Core::OpenMode::ReadOnly)) {
             warnln("Failed to open {}: {}", path, file->error_string());
             return;
         }

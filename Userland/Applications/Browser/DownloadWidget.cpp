@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -7,12 +7,14 @@
 #include "DownloadWidget.h"
 #include <AK/NumberFormat.h>
 #include <AK/StringBuilder.h>
+#include <LibConfig/Client.h>
 #include <LibCore/File.h>
 #include <LibCore/FileStream.h>
 #include <LibCore/StandardPaths.h>
 #include <LibDesktop/Launcher.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/CheckBox.h>
 #include <LibGUI/ImageWidget.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
@@ -20,7 +22,6 @@
 #include <LibGUI/Window.h>
 #include <LibProtocol/RequestClient.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <math.h>
 
 namespace Browser {
 
@@ -35,15 +36,17 @@ DownloadWidget::DownloadWidget(const URL& url)
         m_destination_path = builder.to_string();
     }
 
+    auto close_on_finish = Config::read_bool("Browser", "Preferences", "CloseDownloadWidgetOnFinish", false);
+
     m_elapsed_timer.start();
-    m_download = Web::ResourceLoader::the().protocol_client().start_request("GET", url.to_string());
+    m_download = Web::ResourceLoader::the().protocol_client().start_request("GET", url);
     VERIFY(m_download);
     m_download->on_progress = [this](Optional<u32> total_size, u32 downloaded_size) {
         did_progress(total_size.value(), downloaded_size);
     };
 
     {
-        auto file_or_error = Core::File::open(m_destination_path, Core::IODevice::WriteOnly);
+        auto file_or_error = Core::File::open(m_destination_path, Core::OpenMode::WriteOnly);
         if (file_or_error.is_error()) {
             GUI::MessageBox::show(window(), String::formatted("Cannot open {} for writing", m_destination_path), "Download failed", GUI::MessageBox::Type::Error);
             window()->close();
@@ -57,14 +60,14 @@ DownloadWidget::DownloadWidget(const URL& url)
 
     set_fill_with_background_color(true);
     auto& layout = set_layout<GUI::VerticalBoxLayout>();
-    layout.set_margins({ 4, 4, 4, 4 });
+    layout.set_margins(4);
 
     auto& animation_container = add<GUI::Widget>();
     animation_container.set_fixed_height(32);
     auto& animation_layout = animation_container.set_layout<GUI::HorizontalBoxLayout>();
 
-    auto& browser_image = animation_container.add<GUI::ImageWidget>();
-    browser_image.load_from_file("/res/graphics/download-animation.gif");
+    m_browser_image = animation_container.add<GUI::ImageWidget>();
+    m_browser_image->load_from_file("/res/graphics/download-animation.gif");
     animation_layout.add_spacer();
 
     auto& source_label = add<GUI::Label>(String::formatted("From: {}", url));
@@ -81,6 +84,13 @@ DownloadWidget::DownloadWidget(const URL& url)
     auto& destination_label = add<GUI::Label>(String::formatted("To: {}", m_destination_path));
     destination_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
     destination_label.set_fixed_height(16);
+
+    m_close_on_finish_checkbox = add<GUI::CheckBox>("Close when finished");
+    m_close_on_finish_checkbox->set_checked(close_on_finish);
+
+    m_close_on_finish_checkbox->on_checked = [&](bool checked) {
+        Config::write_bool("Browser", "Preferences", "CloseDownloadWidgetOnFinish", checked);
+    };
 
     auto& button_container = add<GUI::Widget>();
     auto& button_container_layout = button_container.set_layout<GUI::HorizontalBoxLayout>();
@@ -143,6 +153,8 @@ void DownloadWidget::did_finish(bool success)
 {
     dbgln("did_finish, success={}", success);
 
+    m_browser_image->load_from_file("/res/graphics/download-finished.gif");
+    window()->set_title("Download finished!");
     m_close_button->set_enabled(true);
     m_cancel_button->set_text("Open in Folder");
     m_cancel_button->on_click = [this](auto) {
@@ -156,6 +168,9 @@ void DownloadWidget::did_finish(bool success)
         window()->close();
         return;
     }
+
+    if (m_close_on_finish_checkbox->is_checked())
+        window()->close();
 }
 
 }

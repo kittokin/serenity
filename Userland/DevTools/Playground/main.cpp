@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "GMLAutocompleteProvider.h"
 #include <AK/URL.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
+#include <LibCore/System.h>
 #include <LibDesktop/Launcher.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/FilePicker.h>
+#include <LibGUI/GMLAutocompleteProvider.h>
 #include <LibGUI/GMLFormatter.h>
 #include <LibGUI/GMLLexer.h>
 #include <LibGUI/GMLSyntaxHighlighter.h>
@@ -19,9 +20,12 @@
 #include <LibGUI/Menubar.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/Painter.h>
+#include <LibGUI/RegularEditingEngine.h>
 #include <LibGUI/Splitter.h>
 #include <LibGUI/TextEditor.h>
+#include <LibGUI/VimEditingEngine.h>
 #include <LibGUI/Window.h>
+#include <LibMain/Main.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -56,40 +60,23 @@ void UnregisteredWidget::paint_event(GUI::PaintEvent& event)
 
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio thread recvfd sendfd accept cpath rpath wpath unix fattr", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio thread recvfd sendfd cpath rpath wpath unix"));
+    auto app = TRY(GUI::Application::try_create(arguments));
 
-    auto app = GUI::Application::construct(argc, argv);
+    TRY(Desktop::Launcher::add_allowed_handler_with_only_specific_urls("/bin/Help", { URL::create_with_file_protocol("/usr/share/man/man1/Playground.md") }));
+    TRY(Desktop::Launcher::seal_allowlist());
 
-    if (pledge("stdio thread recvfd sendfd accept rpath cpath wpath unix", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
-
-    if (!Desktop::Launcher::add_allowed_handler_with_only_specific_urls(
-            "/bin/Help",
-            { URL::create_with_file_protocol("/usr/share/man/man1/Playground.md") })
-        || !Desktop::Launcher::seal_allowlist()) {
-        warnln("Failed to set up allowed launch URLs");
-        return 1;
-    }
-
-    if (pledge("stdio thread recvfd sendfd accept rpath cpath wpath", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio thread recvfd sendfd rpath cpath wpath"));
 
     const char* path = nullptr;
     Core::ArgsParser args_parser;
     args_parser.add_positional_argument(path, "GML file to edit", "file", Core::ArgsParser::Required::No);
-    args_parser.parse(argc, argv);
+    args_parser.parse(arguments);
 
     auto app_icon = GUI::Icon::default_icon("app-playground");
-    auto window = GUI::Window::construct();
+    auto window = TRY(GUI::Window::try_create());
     window->set_title("GML Playground");
     window->set_icon(app_icon.bitmap_for_size(16));
     window->resize(800, 600);
@@ -97,15 +84,30 @@ int main(int argc, char** argv)
     auto& splitter = window->set_main_widget<GUI::HorizontalSplitter>();
 
     auto& editor = splitter.add<GUI::TextEditor>();
-    auto& preview = splitter.add<GUI::Widget>();
+    auto& preview = splitter.add<GUI::Frame>();
 
     editor.set_syntax_highlighter(make<GUI::GMLSyntaxHighlighter>());
-    editor.set_autocomplete_provider(make<GMLAutocompleteProvider>());
+    editor.set_autocomplete_provider(make<GUI::GMLAutocompleteProvider>());
     editor.set_should_autocomplete_automatically(true);
     editor.set_automatic_indentation_enabled(true);
 
+    String file_path;
+    auto update_title = [&] {
+        StringBuilder builder;
+        if (file_path.is_empty())
+            builder.append("Untitled");
+        else
+            builder.append(file_path);
+
+        if (window->is_modified())
+            builder.append("[*]");
+
+        builder.append(" - GML Playground");
+        window->set_title(builder.to_string());
+    };
+
     if (String(path).is_empty()) {
-        editor.set_text(R"~~~(@GUI::Widget {
+        editor.set_text(R"~~~(@GUI::Frame {
     layout: @GUI::VerticalBoxLayout {
     }
 
@@ -113,9 +115,10 @@ int main(int argc, char** argv)
 }
 )~~~");
         editor.set_cursor(4, 28); // after "...widgets!"
+        update_title();
     } else {
         auto file = Core::File::construct(path);
-        if (!file->open(Core::IODevice::ReadOnly)) {
+        if (!file->open(Core::OpenMode::ReadOnly)) {
             GUI::MessageBox::show(window, String::formatted("Opening \"{}\" failed: {}", path, strerror(errno)), "Error", GUI::MessageBox::Type::Error);
             return 1;
         }
@@ -123,18 +126,50 @@ int main(int argc, char** argv)
             GUI::MessageBox::show(window, String::formatted("Opening \"{}\" failed: Can't open device files", path), "Error", GUI::MessageBox::Type::Error);
             return 1;
         }
+        file_path = path;
         editor.set_text(file->read_all());
+        update_title();
     }
 
     editor.on_change = [&] {
         preview.remove_all_children();
-        preview.load_from_gml(editor.text(), [](const String& class_name) -> RefPtr<GUI::Widget> {
+        preview.load_from_gml(editor.text(), [](const String& class_name) -> RefPtr<Core::Object> {
             return UnregisteredWidget::construct(class_name);
         });
     };
 
-    auto menubar = GUI::Menubar::construct();
-    auto& file_menu = menubar->add_menu("&File");
+    editor.on_modified_change = [&](bool modified) {
+        window->set_modified(modified);
+        update_title();
+    };
+
+    auto& file_menu = window->add_menu("&File");
+
+    auto save_as_action = GUI::CommonActions::make_save_as_action([&](auto&) {
+        Optional<String> new_save_path = GUI::FilePicker::get_save_filepath(window, "Untitled", "gml");
+        if (!new_save_path.has_value())
+            return;
+
+        if (!editor.write_to_file(new_save_path.value())) {
+            GUI::MessageBox::show(window, "Unable to save file.\n", "Error", GUI::MessageBox::Type::Error);
+            return;
+        }
+        file_path = new_save_path.value();
+        update_title();
+    });
+
+    auto save_action = GUI::CommonActions::make_save_action([&](auto&) {
+        if (!file_path.is_empty()) {
+            if (!editor.write_to_file(file_path)) {
+                GUI::MessageBox::show(window, "Unable to save file.\n", "Error", GUI::MessageBox::Type::Error);
+                return;
+            }
+            update_title();
+            return;
+        }
+
+        save_as_action->activate();
+    });
 
     file_menu.add_action(GUI::CommonActions::make_open_action([&](auto&) {
         Optional<String> open_path = GUI::FilePicker::get_open_filepath(window);
@@ -142,8 +177,16 @@ int main(int argc, char** argv)
         if (!open_path.has_value())
             return;
 
+        if (window->is_modified()) {
+            auto save_document_first_result = GUI::MessageBox::show(window, "Save changes to current document first?", "Warning", GUI::MessageBox::Type::Warning, GUI::MessageBox::InputType::YesNoCancel);
+            if (save_document_first_result == GUI::Dialog::ExecResult::ExecYes)
+                save_action->activate();
+            if (save_document_first_result != GUI::Dialog::ExecResult::ExecNo && window->is_modified())
+                return;
+        }
+
         auto file = Core::File::construct(open_path.value());
-        if (!file->open(Core::IODevice::ReadOnly) && file->error() != ENOENT) {
+        if (!file->open(Core::OpenMode::ReadOnly) && file->error() != ENOENT) {
             GUI::MessageBox::show(window, String::formatted("Opening \"{}\" failed: {}", open_path.value(), strerror(errno)), "Error", GUI::MessageBox::Type::Error);
             return;
         }
@@ -152,29 +195,22 @@ int main(int argc, char** argv)
             GUI::MessageBox::show(window, String::formatted("Opening \"{}\" failed: Can't open device files", open_path.value()), "Error", GUI::MessageBox::Type::Error);
             return;
         }
-
+        file_path = open_path.value();
         editor.set_text(file->read_all());
         editor.set_focus(true);
+        update_title();
     }));
 
-    file_menu.add_action(GUI::CommonActions::make_save_as_action([&](auto&) {
-        Optional<String> save_path = GUI::FilePicker::get_save_filepath(window, "Untitled", "gml");
-        if (!save_path.has_value())
-            return;
-
-        if (!editor.write_to_file(save_path.value())) {
-            GUI::MessageBox::show(window, "Unable to save file.\n", "Error", GUI::MessageBox::Type::Error);
-            return;
-        }
-    }));
-
+    file_menu.add_action(save_action);
+    file_menu.add_action(save_as_action);
     file_menu.add_separator();
 
     file_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) {
-        app->quit();
+        if (window->on_close_request() == GUI::Window::CloseRequestDecision::Close)
+            app->quit();
     }));
 
-    auto& edit_menu = menubar->add_menu("&Edit");
+    auto& edit_menu = window->add_menu("&Edit");
     edit_menu.add_action(GUI::Action::create("&Format GML", { Mod_Ctrl | Mod_Shift, Key_I }, [&](auto&) {
         auto source = editor.text();
         GUI::GMLLexer lexer(source);
@@ -203,14 +239,38 @@ int main(int argc, char** argv)
         }
     }));
 
-    auto& help_menu = menubar->add_menu("&Help");
+    auto vim_emulation_setting_action = GUI::Action::create_checkable("&Vim Emulation", { Mod_Ctrl | Mod_Shift | Mod_Alt, Key_V }, [&](auto& action) {
+        if (action.is_checked())
+            editor.set_editing_engine(make<GUI::VimEditingEngine>());
+        else
+            editor.set_editing_engine(make<GUI::RegularEditingEngine>());
+    });
+    vim_emulation_setting_action->set_checked(false);
+    edit_menu.add_action(vim_emulation_setting_action);
+
+    auto& help_menu = window->add_menu("&Help");
     help_menu.add_action(GUI::CommonActions::make_help_action([](auto&) {
         Desktop::Launcher::open(URL::create_with_file_protocol("/usr/share/man/man1/Playground.md"), "/bin/Help");
     }));
     help_menu.add_action(GUI::CommonActions::make_about_action("GML Playground", app_icon, window));
 
-    window->set_menubar(move(menubar));
+    window->on_close_request = [&] {
+        if (!window->is_modified())
+            return GUI::Window::CloseRequestDecision::Close;
 
+        auto result = GUI::MessageBox::show(window, "The document has been modified. Would you like to save?", "Unsaved changes", GUI::MessageBox::Type::Warning, GUI::MessageBox::InputType::YesNoCancel);
+        if (result == GUI::MessageBox::ExecYes) {
+            save_action->activate();
+            if (window->is_modified())
+                return GUI::Window::CloseRequestDecision::StayOpen;
+            return GUI::Window::CloseRequestDecision::Close;
+        }
+
+        if (result == GUI::MessageBox::ExecNo)
+            return GUI::Window::CloseRequestDecision::Close;
+
+        return GUI::Window::CloseRequestDecision::StayOpen;
+    };
     window->show();
     return app->exec();
 }

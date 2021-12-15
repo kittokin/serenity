@@ -10,9 +10,8 @@
 #    include <Kernel/Assertions.h>
 #else
 #    include <assert.h>
-#    ifndef __serenity__
-#        define VERIFY assert
-#        define VERIFY_NOT_REACHED() assert(false)
-#        define TODO VERIFY_NOT_REACHED
-#    endif
+#    define VERIFY assert
+#    define VERIFY_NOT_REACHED() assert(false) /* NOLINT(cert-dcl03-c,misc-static-assert) No, this can't be static_assert, it's a runtime check */
+static constexpr bool TODO = false;
+#    define TODO() VERIFY(TODO)
 #endif

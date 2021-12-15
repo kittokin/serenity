@@ -14,9 +14,6 @@
 #include <LibCore/File.h>
 #include <LibCore/Socket.h>
 #include <fcntl.h>
-#include <grp.h>
-#include <libgen.h>
-#include <pwd.h>
 #include <sched.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
@@ -134,6 +131,11 @@ void Service::activate()
 
 void Service::spawn(int socket_fd)
 {
+    if (!Core::File::exists(m_executable_path)) {
+        dbgln("{}: binary \"{}\" does not exist, skipping service.", name(), m_executable_path);
+        return;
+    }
+
     dbgln_if(SERVICE_DEBUG, "Spawning {}", name());
 
     m_run_timer.start();
@@ -196,7 +198,7 @@ void Service::spawn(int socket_fd)
             VERIFY(m_sockets.size() == 1);
 
             int fd = dup(socket_fd);
-            builder.appendf("%s:%d", m_sockets[0].path.characters(), fd);
+            builder.appendff("{}:{}", m_sockets[0].path, fd);
         } else {
             // We were spawned as a regular process, so dup every socket for this
             // service and let the service know via SOCKET_TAKEOVER.
@@ -205,8 +207,8 @@ void Service::spawn(int socket_fd)
 
                 int new_fd = dup(socket.fd);
                 if (i != 0)
-                    builder.append(" ");
-                builder.appendf("%s:%d", socket.path.characters(), new_fd);
+                    builder.append(' ');
+                builder.appendff("{}:{}", socket.path, new_fd);
             }
         }
 
@@ -234,7 +236,8 @@ void Service::spawn(int socket_fd)
         argv[m_extra_arguments.size() + 1] = nullptr;
 
         rc = execv(argv[0], argv);
-        perror("exec");
+        warnln("Failed to execv({}, ...): {}", argv[0], strerror(errno));
+        dbgln("Failed to execv({}, ...): {}", argv[0], strerror(errno));
         VERIFY_NOT_REACHED();
     } else if (!m_multi_instance) {
         // We are the parent.
@@ -277,7 +280,7 @@ void Service::did_exit(int exit_code)
     activate();
 }
 
-Service::Service(const Core::ConfigFile& config, const StringView& name)
+Service::Service(const Core::ConfigFile& config, StringView name)
     : Core::Object(nullptr)
 {
     VERIFY(config.has_group(name));
@@ -311,7 +314,7 @@ Service::Service(const Core::ConfigFile& config, const StringView& name)
 
     m_working_directory = config.read_entry(name, "WorkingDirectory");
     m_environment = config.read_entry(name, "Environment").split(' ');
-    m_boot_modes = config.read_entry(name, "BootModes", "graphical").split(',');
+    m_system_modes = config.read_entry(name, "SystemModes", "graphical").split(',');
     m_multi_instance = config.read_bool_entry(name, "MultiInstance");
     m_accept_socket_connections = config.read_bool_entry(name, "AcceptSocketConnections");
 
@@ -363,14 +366,14 @@ void Service::save_to(JsonObject& json)
         extra_args.append(arg);
     json.set("extra_arguments", move(extra_args));
 
-    JsonArray boot_modes;
-    for (String& mode : m_boot_modes)
-        boot_modes.append(mode);
-    json.set("boot_modes", boot_modes);
+    JsonArray system_modes;
+    for (String& mode : m_system_modes)
+        system_modes.append(mode);
+    json.set("system_modes", system_modes);
 
     JsonArray environment;
     for (String& env : m_environment)
-        boot_modes.append(env);
+        system_modes.append(env);
     json.set("environment", environment);
 
     JsonArray sockets;
@@ -402,6 +405,6 @@ void Service::save_to(JsonObject& json)
 
 bool Service::is_enabled() const
 {
-    extern String g_boot_mode;
-    return m_boot_modes.contains_slow(g_boot_mode);
+    extern String g_system_mode;
+    return m_system_modes.contains_slow(g_system_mode);
 }

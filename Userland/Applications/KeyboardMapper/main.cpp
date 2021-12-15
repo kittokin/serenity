@@ -21,14 +21,14 @@ int main(int argc, char** argv)
     args_parser.add_positional_argument(path, "Keyboard character mapping file.", "file", Core::ArgsParser::Required::No);
     args_parser.parse(argc, argv);
 
-    if (pledge("stdio getkeymap thread rpath accept cpath wpath recvfd sendfd unix fattr", nullptr) < 0) {
+    if (pledge("stdio getkeymap thread rpath cpath wpath recvfd sendfd unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
     auto app = GUI::Application::construct(argc, argv);
 
-    if (pledge("stdio getkeymap thread rpath accept cpath wpath recvfd sendfd", nullptr) < 0) {
+    if (pledge("stdio getkeymap thread rpath cpath wpath recvfd sendfd", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -41,7 +41,6 @@ int main(int argc, char** argv)
     window->set_main_widget<KeyboardMapperWidget>();
     window->resize(775, 315);
     window->set_resizable(false);
-    window->show();
 
     auto keyboard_mapper_widget = (KeyboardMapperWidget*)window->main_widget();
     if (path != nullptr) {
@@ -50,15 +49,14 @@ int main(int argc, char** argv)
         keyboard_mapper_widget->load_from_system();
     }
 
-    if (pledge("stdio thread rpath accept cpath wpath recvfd sendfd", nullptr) < 0) {
+    if (pledge("stdio thread rpath cpath wpath recvfd sendfd", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
-    // Actions
     auto open_action = GUI::CommonActions::make_open_action(
         [&](auto&) {
-            Optional<String> path = GUI::FilePicker::get_open_filepath(window, "Open");
+            Optional<String> path = GUI::FilePicker::get_open_filepath(window, "Open", "/res/keymaps/");
             if (path.has_value()) {
                 keyboard_mapper_widget->load_from_file(path.value());
             }
@@ -83,20 +81,17 @@ int main(int argc, char** argv)
             app->quit();
         });
 
-    // Menu
-    auto menubar = GUI::Menubar::construct();
-
-    auto& file_menu = menubar->add_menu("&File");
+    auto& file_menu = window->add_menu("&File");
     file_menu.add_action(open_action);
     file_menu.add_action(save_action);
     file_menu.add_action(save_as_action);
     file_menu.add_separator();
     file_menu.add_action(quit_action);
 
-    auto& help_menu = menubar->add_menu("Help");
+    auto& help_menu = window->add_menu("&Help");
     help_menu.add_action(GUI::CommonActions::make_about_action("Keyboard Mapper", app_icon, window));
 
-    window->set_menubar(move(menubar));
+    window->show();
 
     return app->exec();
 }

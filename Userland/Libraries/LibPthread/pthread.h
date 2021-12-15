@@ -66,6 +66,7 @@ int pthread_setschedparam(pthread_t thread, int policy, const struct sched_param
 #define PTHREAD_MUTEX_RECURSIVE __PTHREAD_MUTEX_RECURSIVE
 #define PTHREAD_MUTEX_DEFAULT PTHREAD_MUTEX_NORMAL
 #define PTHREAD_MUTEX_INITIALIZER __PTHREAD_MUTEX_INITIALIZER
+#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP __PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
 
 #define PTHREAD_PROCESS_PRIVATE 1
 #define PTHREAD_PROCESS_SHARED 2
@@ -97,6 +98,9 @@ int pthread_cond_timedwait(pthread_cond_t*, pthread_mutex_t*, const struct times
 #define PTHREAD_CANCEL_ENABLE 1
 #define PTHREAD_CANCEL_DISABLE 2
 
+#define PTHREAD_CANCEL_DEFERRED 1
+#define PTHREAD_CANCEL_ASYNCHRONOUS 2
+
 int pthread_cancel(pthread_t);
 int pthread_setcancelstate(int state, int* oldstate);
 int pthread_setcanceltype(int type, int* oldtype);
@@ -112,6 +116,7 @@ int pthread_detach(pthread_t);
 int pthread_equal(pthread_t, pthread_t);
 int pthread_mutexattr_init(pthread_mutexattr_t*);
 int pthread_mutexattr_settype(pthread_mutexattr_t*, int);
+int pthread_mutexattr_gettype(pthread_mutexattr_t*, int*);
 int pthread_mutexattr_destroy(pthread_mutexattr_t*);
 
 int pthread_setname_np(pthread_t, const char*);

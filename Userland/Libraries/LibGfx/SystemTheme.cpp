@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -14,12 +15,6 @@ static SystemTheme dummy_theme;
 static const SystemTheme* theme_page = &dummy_theme;
 static Core::AnonymousBuffer theme_buffer;
 
-const SystemTheme& current_system_theme()
-{
-    VERIFY(theme_page);
-    return *theme_page;
-}
-
 Core::AnonymousBuffer& current_system_theme_buffer()
 {
     VERIFY(theme_buffer.is_valid());
@@ -32,23 +27,26 @@ void set_system_theme(Core::AnonymousBuffer buffer)
     theme_page = theme_buffer.data<SystemTheme>();
 }
 
-Core::AnonymousBuffer load_system_theme(const String& path)
+Core::AnonymousBuffer load_system_theme(Core::ConfigFile const& file)
 {
-    auto file = Core::ConfigFile::open(path);
-    auto buffer = Core::AnonymousBuffer::create_with_size(sizeof(SystemTheme));
+    auto buffer = Core::AnonymousBuffer::create_with_size(sizeof(SystemTheme)).release_value();
 
     auto* data = buffer.data<SystemTheme>();
 
     auto get_color = [&](auto& name) {
-        auto color_string = file->read_entry("Colors", name);
+        auto color_string = file.read_entry("Colors", name);
         auto color = Color::from_string(color_string);
         if (!color.has_value())
             return Color(Color::Black);
         return color.value();
     };
 
+    auto get_flag = [&](auto& name) {
+        return file.read_bool_entry("Flags", name, false);
+    };
+
     auto get_metric = [&](auto& name, auto role) {
-        int metric = file->read_num_entry("Metrics", name, -1);
+        int metric = file.read_num_entry("Metrics", name, -1);
         if (metric == -1) {
             switch (role) {
             case (int)MetricRole::TitleHeight:
@@ -66,7 +64,7 @@ Core::AnonymousBuffer load_system_theme(const String& path)
     };
 
     auto get_path = [&](auto& name, auto role, bool allow_empty) {
-        auto path = file->read_entry("Paths", name);
+        auto path = file.read_entry("Paths", name);
         if (path.is_empty()) {
             switch (role) {
             case (int)PathRole::TitleButtonIcons:
@@ -84,12 +82,17 @@ Core::AnonymousBuffer load_system_theme(const String& path)
     ENUMERATE_COLOR_ROLES(__ENUMERATE_COLOR_ROLE)
 #undef __ENUMERATE_COLOR_ROLE
 
-#define DO_METRIC(x) \
-    data->metric[(int)MetricRole::x] = get_metric(#x, (int)MetricRole::x)
+#undef __ENUMERATE_FLAG_ROLE
+#define __ENUMERATE_FLAG_ROLE(role) \
+    data->flag[(int)FlagRole::role] = get_flag(#role);
+    ENUMERATE_FLAG_ROLES(__ENUMERATE_FLAG_ROLE)
+#undef __ENUMERATE_FLAG_ROLE
 
-    DO_METRIC(TitleHeight);
-    DO_METRIC(TitleButtonWidth);
-    DO_METRIC(TitleButtonHeight);
+#undef __ENUMERATE_METRIC_ROLE
+#define __ENUMERATE_METRIC_ROLE(role) \
+    data->metric[(int)MetricRole::role] = get_metric(#role, (int)MetricRole::role);
+    ENUMERATE_METRIC_ROLES(__ENUMERATE_METRIC_ROLE)
+#undef __ENUMERATE_METRIC_ROLE
 
 #define DO_PATH(x, allow_empty)                                                                                  \
     do {                                                                                                         \
@@ -106,6 +109,11 @@ Core::AnonymousBuffer load_system_theme(const String& path)
     DO_PATH(TooltipShadow, true);
 
     return buffer;
+}
+
+Core::AnonymousBuffer load_system_theme(String const& path)
+{
+    return load_system_theme(Core::ConfigFile::open(path));
 }
 
 }

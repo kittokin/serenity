@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <LibDebug/DebugInfo.h>
 #include <LibGUI/Model.h>
 #include <LibX86/Instruction.h>
 
@@ -21,6 +22,7 @@ struct InstructionData {
     FlatPtr address { 0 };
     u32 event_count { 0 };
     float percent { 0 };
+    Debug::DebugInfo::SourcePositionWithInlines source_position_with_inlines;
 };
 
 class DisassemblyModel final : public GUI::Model {
@@ -35,6 +37,7 @@ public:
         SampleCount,
         InstructionBytes,
         Disassembly,
+        SourceLocation,
         __Count
     };
 
@@ -44,14 +47,13 @@ public:
     virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return Column::__Count; }
     virtual String column_name(int) const override;
     virtual GUI::Variant data(const GUI::ModelIndex&, GUI::ModelRole) const override;
-    virtual void update() override;
+    virtual bool is_column_sortable(int) const override { return false; }
 
 private:
     DisassemblyModel(Profile&, ProfileNode&);
 
     Profile& m_profile;
     ProfileNode& m_node;
-    RefPtr<MappedFile> m_kernel_file;
 
     Vector<InstructionData> m_instructions;
 };

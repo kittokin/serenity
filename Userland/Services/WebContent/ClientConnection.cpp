@@ -1,25 +1,27 @@
 /*
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Badge.h>
 #include <AK/Debug.h>
+#include <AK/JsonObject.h>
 #include <LibGfx/Bitmap.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/SystemTheme.h>
 #include <LibJS/Console.h>
 #include <LibJS/Heap/Heap.h>
 #include <LibJS/Interpreter.h>
 #include <LibJS/Parser.h>
-#include <LibJS/Runtime/VM.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/Cookie/ParsedCookie.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/Layout/InitialContainingBlockBox.h>
+#include <LibWeb/HTML/BrowsingContext.h>
+#include <LibWeb/Layout/InitialContainingBlock.h>
+#include <LibWeb/Loader/ContentFilter.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <LibWeb/Page/Frame.h>
 #include <WebContent/ClientConnection.h>
 #include <WebContent/PageHost.h>
 #include <WebContent/WebContentClientEndpoint.h>
@@ -27,13 +29,10 @@
 
 namespace WebContent {
 
-static HashMap<int, RefPtr<ClientConnection>> s_connections;
-
-ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket, int client_id)
-    : IPC::ClientConnection<WebContentClientEndpoint, WebContentServerEndpoint>(*this, move(socket), client_id)
+ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket)
+    : IPC::ClientConnection<WebContentClientEndpoint, WebContentServerEndpoint>(*this, move(socket), 1)
     , m_page_host(PageHost::create(*this))
 {
-    s_connections.set(client_id, *this);
     m_paint_flush_timer = Core::Timer::create_single_shot(0, [this] { flush_pending_paint_requests(); });
 }
 
@@ -43,9 +42,7 @@ ClientConnection::~ClientConnection()
 
 void ClientConnection::die()
 {
-    s_connections.remove(client_id());
-    if (s_connections.is_empty())
-        Core::EventLoop::current().quit(0);
+    Core::EventLoop::current().quit(0);
 }
 
 Web::Page& ClientConnection::page()
@@ -58,10 +55,6 @@ const Web::Page& ClientConnection::page() const
     return m_page_host->page();
 }
 
-void ClientConnection::greet()
-{
-}
-
 void ClientConnection::update_system_theme(const Core::AnonymousBuffer& theme_buffer)
 {
     Gfx::set_system_theme(theme_buffer);
@@ -69,9 +62,15 @@ void ClientConnection::update_system_theme(const Core::AnonymousBuffer& theme_bu
     m_page_host->set_palette_impl(*impl);
 }
 
-void ClientConnection::update_screen_rect(const Gfx::IntRect& rect)
+void ClientConnection::update_system_fonts(String const& default_font_query, String const& fixed_width_font_query)
 {
-    m_page_host->set_screen_rect(rect);
+    Gfx::FontDatabase::set_default_font_query(default_font_query);
+    Gfx::FontDatabase::set_fixed_width_font_query(fixed_width_font_query);
+}
+
+void ClientConnection::update_screen_rects(const Vector<Gfx::IntRect>& rects, u32 main_screen)
+{
+    m_page_host->set_screen_rects(rects, main_screen);
 }
 
 void ClientConnection::load_url(const URL& url)
@@ -165,22 +164,27 @@ void ClientConnection::key_down(i32 key, unsigned int modifiers, u32 code_point)
     page().handle_keydown((KeyCode)key, modifiers, code_point);
 }
 
+void ClientConnection::key_up(i32 key, unsigned int modifiers, u32 code_point)
+{
+    page().handle_keyup((KeyCode)key, modifiers, code_point);
+}
+
 void ClientConnection::debug_request(const String& request, const String& argument)
 {
     if (request == "dump-dom-tree") {
-        if (auto* doc = page().main_frame().document())
+        if (auto* doc = page().top_level_browsing_context().active_document())
             Web::dump_tree(*doc);
     }
 
     if (request == "dump-layout-tree") {
-        if (auto* doc = page().main_frame().document()) {
+        if (auto* doc = page().top_level_browsing_context().active_document()) {
             if (auto* icb = doc->layout_node())
                 Web::dump_tree(*icb);
         }
     }
 
     if (request == "dump-style-sheets") {
-        if (auto* doc = page().main_frame().document()) {
+        if (auto* doc = page().top_level_browsing_context().active_document()) {
             for (auto& sheet : doc->style_sheets().sheets()) {
                 Web::dump_sheet(sheet);
             }
@@ -194,7 +198,7 @@ void ClientConnection::debug_request(const String& request, const String& argume
     if (request == "set-line-box-borders") {
         bool state = argument == "on";
         m_page_host->set_should_show_line_box_borders(state);
-        page().main_frame().set_needs_display(page().main_frame().viewport_rect());
+        page().top_level_browsing_context().set_needs_display(page().top_level_browsing_context().viewport_rect());
     }
 
     if (request == "clear-cache") {
@@ -204,32 +208,176 @@ void ClientConnection::debug_request(const String& request, const String& argume
     if (request == "spoof-user-agent") {
         Web::ResourceLoader::the().set_user_agent(argument);
     }
+
+    if (request == "same-origin-policy") {
+        m_page_host->page().set_same_origin_policy_enabled(argument == "on");
+    }
 }
 
 void ClientConnection::get_source()
 {
-    if (auto* doc = page().main_frame().document()) {
+    if (auto* doc = page().top_level_browsing_context().active_document()) {
         async_did_get_source(doc->url(), doc->source());
     }
 }
 
-void ClientConnection::js_console_initialize()
+void ClientConnection::inspect_dom_tree()
 {
-    if (auto* document = page().main_frame().document()) {
-        auto interpreter = document->interpreter().make_weak_ptr();
-        if (m_interpreter.ptr() == interpreter.ptr())
-            return;
-
-        m_interpreter = interpreter;
-        m_console_client = make<WebContentConsoleClient>(interpreter->global_object().console(), interpreter, *this);
-        interpreter->global_object().console().set_client(*m_console_client.ptr());
+    if (auto* doc = page().top_level_browsing_context().active_document()) {
+        async_did_get_dom_tree(doc->dump_dom_tree_as_json());
     }
+}
+
+Messages::WebContentServer::InspectDomNodeResponse ClientConnection::inspect_dom_node(i32 node_id)
+{
+    auto& top_context = page().top_level_browsing_context();
+
+    top_context.for_each_in_inclusive_subtree([&](auto& ctx) {
+        if (ctx.active_document() != nullptr) {
+            ctx.active_document()->set_inspected_node(nullptr);
+        }
+        return IterationDecision::Continue;
+    });
+
+    Web::DOM::Node* node = Web::DOM::Node::from_id(node_id);
+    if (!node) {
+        return { false, "", "", "" };
+    }
+
+    node->document().set_inspected_node(node);
+
+    if (node->is_element()) {
+        auto& element = verify_cast<Web::DOM::Element>(*node);
+        if (!element.specified_css_values())
+            return { false, "", "", "" };
+
+        auto serialize_json = [](Web::CSS::StyleProperties const& properties) -> String {
+            StringBuilder builder;
+
+            JsonObjectSerializer serializer(builder);
+            properties.for_each_property([&](auto property_id, auto& value) {
+                serializer.add(Web::CSS::string_from_property_id(property_id), value.to_string());
+            });
+            serializer.finish();
+
+            return builder.to_string();
+        };
+
+        auto serialize_custom_properties_json = [](Web::DOM::Element const& element) -> String {
+            StringBuilder builder;
+            JsonObjectSerializer serializer(builder);
+            HashTable<String> seen_properties;
+
+            auto const* element_to_check = &element;
+            while (element_to_check) {
+                for (auto const& property : element_to_check->custom_properties()) {
+                    if (!seen_properties.contains(property.key) && property.value.style.has_value()) {
+                        seen_properties.set(property.key);
+                        serializer.add(property.key, property.value.style.value().value->to_string());
+                    }
+                }
+
+                element_to_check = element_to_check->parent_element();
+            }
+
+            serializer.finish();
+
+            return builder.to_string();
+        };
+
+        String specified_values_json = serialize_json(*element.specified_css_values());
+        String computed_values_json = serialize_json(element.computed_style());
+        String custom_properties_json = serialize_custom_properties_json(element);
+        return { true, specified_values_json, computed_values_json, custom_properties_json };
+    }
+
+    return { false, "", "", "" };
+}
+
+Messages::WebContentServer::GetHoveredNodeIdResponse ClientConnection::get_hovered_node_id()
+{
+    if (auto* document = page().top_level_browsing_context().active_document()) {
+        auto hovered_node = document->hovered_node();
+        if (hovered_node)
+            return hovered_node->id();
+    }
+    return (i32)0;
+}
+
+void ClientConnection::initialize_js_console(Badge<PageHost>)
+{
+    auto* document = page().top_level_browsing_context().active_document();
+    auto interpreter = document->interpreter().make_weak_ptr();
+    if (m_interpreter.ptr() == interpreter.ptr())
+        return;
+
+    m_interpreter = interpreter;
+    m_console_client = make<WebContentConsoleClient>(interpreter->global_object().console(), interpreter, *this);
+    interpreter->global_object().console().set_client(*m_console_client.ptr());
 }
 
 void ClientConnection::js_console_input(const String& js_source)
 {
     if (m_console_client)
         m_console_client->handle_input(js_source);
+}
+
+void ClientConnection::run_javascript(String const& js_source)
+{
+    if (!page().top_level_browsing_context().active_document())
+        return;
+
+    auto& interpreter = page().top_level_browsing_context().active_document()->interpreter();
+
+    auto parser = JS::Parser(JS::Lexer(js_source));
+    auto program = parser.parse_program();
+    interpreter.run(interpreter.global_object(), *program);
+
+    if (interpreter.vm().exception()) {
+        dbgln("Exception :(");
+        interpreter.vm().clear_exception();
+    }
+}
+
+void ClientConnection::js_console_request_messages(i32 start_index)
+{
+    if (m_console_client)
+        m_console_client->send_messages(start_index);
+}
+
+Messages::WebContentServer::GetSelectedTextResponse ClientConnection::get_selected_text()
+{
+    return page().focused_context().selected_text();
+}
+
+void ClientConnection::select_all()
+{
+    page().focused_context().select_all();
+    page().client().page_did_change_selection();
+}
+
+Messages::WebContentServer::DumpLayoutTreeResponse ClientConnection::dump_layout_tree()
+{
+    auto* document = page().top_level_browsing_context().active_document();
+    if (!document)
+        return String { "(no DOM tree)" };
+    auto* layout_root = document->layout_node();
+    if (!layout_root)
+        return String { "(no layout tree)" };
+    StringBuilder builder;
+    Web::dump_tree(builder, *layout_root);
+    return builder.to_string();
+}
+
+void ClientConnection::set_content_filters(Vector<String> const& filters)
+{
+    for (auto& filter : filters)
+        Web::ContentFilter::the().add_pattern(filter);
+}
+
+void ClientConnection::set_preferred_color_scheme(Web::CSS::PreferredColorScheme const& color_scheme)
+{
+    m_page_host->set_preferred_color_scheme(color_scheme);
 }
 
 }

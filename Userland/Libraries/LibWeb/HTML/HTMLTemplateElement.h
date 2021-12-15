@@ -21,10 +21,20 @@ public:
     NonnullRefPtr<DOM::DocumentFragment> content() { return *m_content; }
     const NonnullRefPtr<DOM::DocumentFragment> content() const { return *m_content; }
 
+    virtual void adopted_from(DOM::Document&) override;
+    virtual void cloned(Node& copy, bool clone_children) override;
+
 private:
+    virtual bool is_html_template_element() const final { return true; }
+
     DOM::Document& appropriate_template_contents_owner_document(DOM::Document&);
 
     RefPtr<DOM::DocumentFragment> m_content;
 };
 
+}
+
+namespace Web::DOM {
+template<>
+inline bool Node::fast_is<HTML::HTMLTemplateElement>() const { return is_html_template_element(); }
 }

@@ -1,12 +1,11 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/HashMap.h>
 #include <AK/String.h>
 #include <LibCore/File.h>
 #include <unistd.h>
@@ -16,8 +15,8 @@ namespace Core {
 struct ThreadStatistics {
     pid_t tid;
     unsigned times_scheduled;
-    unsigned ticks_user;
-    unsigned ticks_kernel;
+    u64 time_user;
+    u64 time_kernel;
     unsigned syscall_count;
     unsigned inode_faults;
     unsigned zero_faults;
@@ -65,10 +64,16 @@ struct ProcessStatistics {
     String username;
 };
 
+struct AllProcessesStatistics {
+    Vector<ProcessStatistics> processes;
+    u64 total_time_scheduled;
+    u64 total_time_scheduled_kernel;
+};
+
 class ProcessStatisticsReader {
 public:
-    static Optional<HashMap<pid_t, Core::ProcessStatistics>> get_all(RefPtr<Core::File>&);
-    static Optional<HashMap<pid_t, Core::ProcessStatistics>> get_all();
+    static Optional<AllProcessesStatistics> get_all(RefPtr<Core::File>&);
+    static Optional<AllProcessesStatistics> get_all();
 
 private:
     static String username_from_uid(uid_t);

@@ -4,18 +4,20 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/ACPI/MultiProcessorParser.h>
+#include <AK/ByteReader.h>
 #include <Kernel/API/Syscall.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/InterruptDisabler.h>
+#include <Kernel/Arch/x86/Interrupts.h>
 #include <Kernel/CommandLine.h>
-#include <Kernel/IO.h>
+#include <Kernel/Firmware/ACPI/MultiProcessorParser.h>
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/Interrupts/IOAPIC.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
 #include <Kernel/Interrupts/PIC.h>
+#include <Kernel/Interrupts/SharedIRQHandler.h>
 #include <Kernel/Interrupts/SpuriousInterruptHandler.h>
-#include <Kernel/Interrupts/UnhandledInterruptHandler.h>
-#include <Kernel/VM/TypedMapping.h>
+#include <Kernel/Memory/TypedMapping.h>
+#include <Kernel/Sections.h>
 
 #define PCAT_COMPAT_FLAG 0x1
 
@@ -39,16 +41,20 @@ UNMAP_AFTER_INIT void InterruptManagement::initialize()
     VERIFY(!InterruptManagement::initialized());
     s_interrupt_management = new InterruptManagement();
 
-    if (kernel_command_line().is_smp_enabled())
-        InterruptManagement::the().switch_to_ioapic_mode();
-    else
+    if (!kernel_command_line().is_ioapic_enabled() && !kernel_command_line().is_smp_enabled())
         InterruptManagement::the().switch_to_pic_mode();
+    else
+        InterruptManagement::the().switch_to_ioapic_mode();
 }
 
 void InterruptManagement::enumerate_interrupt_handlers(Function<void(GenericInterruptHandler&)> callback)
 {
     for (int i = 0; i < GENERIC_INTERRUPT_HANDLERS_COUNT; i++) {
         auto& handler = get_interrupt_handler(i);
+        if (handler.type() == HandlerType::SharedIRQHandler) {
+            static_cast<SharedIRQHandler&>(handler).enumerate_handlers(callback);
+            continue;
+        }
         if (handler.type() != HandlerType::UnhandledInterruptHandler)
             callback(handler);
     }
@@ -109,7 +115,10 @@ UNMAP_AFTER_INIT PhysicalAddress InterruptManagement::search_for_madt()
     auto rsdp = ACPI::StaticParsing::find_rsdp();
     if (!rsdp.has_value())
         return {};
-    return ACPI::StaticParsing::find_table(rsdp.value(), "APIC");
+    auto apic = ACPI::StaticParsing::find_table(rsdp.value(), "APIC");
+    if (!apic.has_value())
+        return {};
+    return apic.value();
 }
 
 UNMAP_AFTER_INIT InterruptManagement::InterruptManagement()
@@ -177,7 +186,7 @@ UNMAP_AFTER_INIT void InterruptManagement::switch_to_ioapic_mode()
 UNMAP_AFTER_INIT void InterruptManagement::locate_apic_data()
 {
     VERIFY(!m_madt.is_null());
-    auto madt = map_typed<ACPI::Structures::MADT>(m_madt);
+    auto madt = Memory::map_typed<ACPI::Structures::MADT>(m_madt);
 
     int irq_controller_count = 0;
     if (madt->flags & PCAT_COMPAT_FLAG) {
@@ -198,15 +207,19 @@ UNMAP_AFTER_INIT void InterruptManagement::locate_apic_data()
         }
         if (madt_entry->type == (u8)ACPI::Structures::MADTEntryType::InterruptSourceOverride) {
             auto* interrupt_override_entry = (const ACPI::Structures::MADTEntries::InterruptSourceOverride*)madt_entry;
+            u32 global_system_interrupt = 0;
+            ByteReader::load<u32>(reinterpret_cast<u8 const*>(&interrupt_override_entry->global_system_interrupt), global_system_interrupt);
+            u16 flags = 0;
+            ByteReader::load<u16>(reinterpret_cast<u8 const*>(&interrupt_override_entry->flags), flags);
             m_isa_interrupt_overrides.empend(
                 interrupt_override_entry->bus,
                 interrupt_override_entry->source,
-                interrupt_override_entry->global_system_interrupt,
-                interrupt_override_entry->flags);
+                global_system_interrupt,
+                flags);
 
             dbgln("Interrupts: Overriding INT {:#x} with GSI {}, for bus {:#x}",
                 interrupt_override_entry->source,
-                interrupt_override_entry->global_system_interrupt,
+                global_system_interrupt,
                 interrupt_override_entry->bus);
         }
         madt_entry = (ACPI::Structures::MADTEntryHeader*)(VirtualAddress(madt_entry).offset(entry_length).get());

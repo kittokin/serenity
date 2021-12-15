@@ -5,14 +5,12 @@
  */
 
 #include "Client.h"
-#include <AK/ByteBuffer.h>
 #include <AK/HashMap.h>
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/TCPServer.h>
-#include <LibCore/TCPSocket.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,7 +70,7 @@ static void run_command(int ptm_fd, String command)
             args[1] = "-c";
             args[2] = command.characters();
         }
-        const char* envs[] = { "TERM=xterm", "PATH=/bin:/usr/bin:/usr/local/bin", nullptr };
+        const char* envs[] = { "TERM=xterm", "PATH=/usr/local/bin:/usr/bin:/bin", nullptr };
         rc = execve("/bin/Shell", const_cast<char**>(args), const_cast<char**>(envs));
         if (rc < 0) {
             perror("execve");
@@ -137,7 +135,9 @@ int main(int argc, char** argv)
         run_command(ptm_fd, command);
 
         auto client = Client::create(id, move(client_socket), ptm_fd);
-        client->on_exit = [&clients, id] { clients.remove(id); };
+        client->on_exit = [&clients, id] {
+            Core::deferred_invoke([&clients, id] { clients.remove(id); });
+        };
         clients.set(id, client);
     };
 

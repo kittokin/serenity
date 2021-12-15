@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2020, Andrew Kaster <andrewdkaster@gmail.com>
+ * Copyright (c) 2019-2020, Andrew Kaster <akaster@serenityos.org>
  * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -85,7 +85,7 @@ private:
 
     class ProgramHeaderRegion {
     public:
-        void set_program_header(const Elf32_Phdr& header) { m_program_header = header; }
+        void set_program_header(const ElfW(Phdr) & header) { m_program_header = header; }
 
         // Information from ELF Program header
         u32 type() const { return m_program_header.p_type; }
@@ -104,7 +104,7 @@ private:
         bool is_relro() const { return type() == PT_GNU_RELRO; }
 
     private:
-        Elf32_Phdr m_program_header; // Explicitly a copy of the PHDR in the image
+        ElfW(Phdr) m_program_header; // Explicitly a copy of the PHDR in the image
     };
 
     const DynamicObject& dynamic_object() const;
@@ -131,7 +131,7 @@ private:
     };
     RelocationResult do_relocation(const DynamicObject::Relocation&, ShouldInitializeWeak should_initialize_weak);
     size_t calculate_tls_size() const;
-    ssize_t negative_offset_from_tls_block_end(size_t value_of_symbol, size_t tls_offset, size_t symbol_size) const;
+    ssize_t negative_offset_from_tls_block_end(ssize_t tls_offset, size_t value_of_symbol) const;
 
     String m_filename;
     String m_program_interpreter;
@@ -151,7 +151,7 @@ private:
 
     VirtualAddress m_dynamic_section_address;
 
-    size_t m_tls_offset { 0 };
+    ssize_t m_tls_offset { 0 };
     size_t m_tls_size_of_current_object { 0 };
 
     Vector<DynamicObject::Relocation> m_unresolved_relocations;

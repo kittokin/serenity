@@ -27,9 +27,9 @@ bool read_items(FILE* fp, char entry_separator, Function<Decision(StringView)>);
 
 class ParsedInitialArguments {
 public:
-    ParsedInitialArguments(Vector<const char*>&, const StringView& placeholder);
+    ParsedInitialArguments(Vector<const char*>&, StringView placeholder);
 
-    void for_each_joined_argument(const StringView&, Function<void(const String&)>) const;
+    void for_each_joined_argument(StringView, Function<void(const String&)>) const;
 
     size_t size() const { return m_all_parts.size(); }
 
@@ -54,6 +54,7 @@ int main(int argc, char** argv)
     int max_bytes_for_one_command = ARG_MAX;
 
     Core::ArgsParser args_parser;
+    args_parser.set_stop_on_first_non_option(true);
     args_parser.set_general_help("Read arguments from stdin and interpret them as command-line arguments for another program. See also: 'man xargs'.");
     args_parser.add_option(placeholder, "Placeholder string to be replaced in arguments", "replace", 'I', "placeholder");
     args_parser.add_option(split_with_nulls, "Split input items with the null character instead of newline", "null", '0');
@@ -69,7 +70,7 @@ int main(int argc, char** argv)
     size_t max_lines = max(max_lines_for_one_command, 0);
 
     if (!split_with_nulls && strlen(specified_delimiter) > 1) {
-        fprintf(stderr, "xargs: the delimiter must be a single byte\n");
+        warnln("xargs: the delimiter must be a single byte");
         return 1;
     }
 
@@ -88,7 +89,7 @@ int main(int argc, char** argv)
     FILE* fp = stdin;
     bool is_stdin = true;
 
-    if (StringView { "-" } != file_to_read) {
+    if ("-"sv != file_to_read) {
         // A file was specified, try to open it.
         fp = fopen(file_to_read, "re");
         if (!fp) {
@@ -205,8 +206,7 @@ bool run_command(Vector<char*>&& child_argv, bool verbose, bool is_stdin, int de
     if (verbose) {
         StringBuilder builder;
         builder.join(" ", child_argv);
-        fprintf(stderr, "xargs: %s\n", builder.to_string().characters());
-        fflush(stderr);
+        warnln("xargs: {}", builder.to_string());
     }
 
     auto pid = fork();
@@ -244,7 +244,7 @@ bool run_command(Vector<char*>&& child_argv, bool verbose, bool is_stdin, int de
     return true;
 }
 
-ParsedInitialArguments::ParsedInitialArguments(Vector<const char*>& arguments, const StringView& placeholder)
+ParsedInitialArguments::ParsedInitialArguments(Vector<const char*>& arguments, StringView placeholder)
 {
     m_all_parts.ensure_capacity(arguments.size());
     bool some_argument_has_placeholder = false;
@@ -270,7 +270,7 @@ ParsedInitialArguments::ParsedInitialArguments(Vector<const char*>& arguments, c
     }
 }
 
-void ParsedInitialArguments::for_each_joined_argument(const StringView& separator, Function<void(const String&)> callback) const
+void ParsedInitialArguments::for_each_joined_argument(StringView separator, Function<void(const String&)> callback) const
 {
     StringBuilder builder;
     for (auto& parts : m_all_parts) {

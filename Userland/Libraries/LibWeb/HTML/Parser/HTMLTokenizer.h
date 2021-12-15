@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/Queue.h>
+#include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <AK/Types.h>
 #include <AK/Utf8View.h>
@@ -99,7 +100,7 @@ namespace Web::HTML {
 
 class HTMLTokenizer {
 public:
-    explicit HTMLTokenizer(const StringView& input, const String& encoding);
+    explicit HTMLTokenizer(StringView input, String const& encoding);
 
     enum class State {
 #define __ENUMERATE_TOKENIZER_STATE(state) state,
@@ -109,7 +110,11 @@ public:
 
     Optional<HTMLToken> next_token();
 
-    void switch_to(Badge<HTMLDocumentParser>, State new_state);
+    void switch_to(Badge<HTMLParser>, State new_state);
+    void switch_to(State new_state)
+    {
+        m_state = new_state;
+    }
 
     void set_blocked(bool b) { m_blocked = b; }
     bool is_blocked() const { return m_blocked; }
@@ -117,13 +122,15 @@ public:
     String source() const { return m_decoded_input; }
 
 private:
+    void skip(size_t count);
     Optional<u32> next_code_point();
     Optional<u32> peek_code_point(size_t offset) const;
-    bool consume_next_if_match(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive);
+    bool consume_next_if_match(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive);
     void create_new_token(HTMLToken::Type);
     bool current_end_tag_token_is_appropriate() const;
+    String consume_current_builder();
 
-    static const char* state_name(State state)
+    static char const* state_name(State state)
     {
         switch (state) {
 #define __ENUMERATE_TOKENIZER_STATE(state) \
@@ -141,6 +148,9 @@ private:
 
     bool consumed_as_part_of_an_attribute() const;
 
+    void restore_to(Utf8CodePointIterator const& new_iterator);
+    HTMLToken::Position nth_last_position(size_t n = 0);
+
     State m_state { State::Data };
     State m_return_state { State::Data };
 
@@ -148,15 +158,14 @@ private:
 
     String m_decoded_input;
 
-    StringView m_input;
-
     Utf8View m_utf8_view;
-    Utf8CodepointIterator m_utf8_iterator;
-    Utf8CodepointIterator m_prev_utf8_iterator;
+    Utf8CodePointIterator m_utf8_iterator;
+    Utf8CodePointIterator m_prev_utf8_iterator;
 
     HTMLToken m_current_token;
+    StringBuilder m_current_builder;
 
-    HTMLToken m_last_emitted_start_tag;
+    Optional<String> m_last_emitted_start_tag_name;
 
     bool m_has_emitted_eof { false };
 
@@ -165,6 +174,8 @@ private:
     u32 m_character_reference_code { 0 };
 
     bool m_blocked { false };
+
+    Vector<HTMLToken::Position> m_source_positions;
 };
 
 }

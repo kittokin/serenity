@@ -10,14 +10,12 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/ComboBox.h>
 #include <LibGUI/Label.h>
-#include <LibGUI/Layout.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/SpinBox.h>
 #include <LibGUI/TextBox.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Color.h>
-#include <LibGfx/Font.h>
 #include <LibGfx/FontDatabase.h>
 
 static const char* short_month_names[] = {
@@ -41,12 +39,12 @@ AddEventDialog::AddEventDialog(Core::DateTime date_time, Window* parent_window)
     auto& top_container = widget.add<GUI::Widget>();
     top_container.set_layout<GUI::VerticalBoxLayout>();
     top_container.set_fixed_height(45);
-    top_container.layout()->set_margins({ 4, 4, 4, 4 });
+    top_container.layout()->set_margins(4);
 
     auto& add_label = top_container.add<GUI::Label>("Add title & date:");
     add_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
     add_label.set_fixed_height(14);
-    add_label.set_font(Gfx::FontDatabase::default_bold_font());
+    add_label.set_font(Gfx::FontDatabase::default_font().bold_variant());
 
     auto& event_title_textbox = top_container.add<GUI::TextBox>();
     event_title_textbox.set_fixed_height(20);
@@ -54,7 +52,7 @@ AddEventDialog::AddEventDialog(Core::DateTime date_time, Window* parent_window)
     auto& middle_container = widget.add<GUI::Widget>();
     middle_container.set_layout<GUI::HorizontalBoxLayout>();
     middle_container.set_fixed_height(25);
-    middle_container.layout()->set_margins({ 4, 4, 4, 4 });
+    middle_container.layout()->set_margins(4);
 
     auto& starting_month_combo = middle_container.add<GUI::ComboBox>();
     starting_month_combo.set_only_allow_values_from_model(true);
@@ -97,10 +95,6 @@ AddEventDialog::MonthListModel::MonthListModel()
 }
 
 AddEventDialog::MonthListModel::~MonthListModel()
-{
-}
-
-void AddEventDialog::MonthListModel::update()
 {
 }
 

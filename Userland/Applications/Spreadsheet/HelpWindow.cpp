@@ -27,7 +27,6 @@ public:
 
     virtual int row_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return m_keys.size(); }
     virtual int column_count(const GUI::ModelIndex& = GUI::ModelIndex()) const override { return 1; }
-    virtual void update() override { }
 
     virtual GUI::Variant data(const GUI::ModelIndex& index, GUI::ModelRole role = GUI::ModelRole::Display) const override
     {
@@ -46,7 +45,7 @@ public:
         object.for_each_member([this](auto& name, auto&) {
             m_keys.append(name);
         });
-        did_update();
+        invalidate();
     }
 
 private:
@@ -64,7 +63,8 @@ HelpWindow::HelpWindow(GUI::Window* parent)
 {
     resize(530, 365);
     set_title("Spreadsheet Functions Help");
-    set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-help.png"));
+    set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-help.png").release_value_but_fixme_should_propagate_errors());
+    set_accessory(true);
 
     auto& widget = set_main_widget<GUI::Widget>();
     widget.set_layout<GUI::VerticalBoxLayout>();
@@ -82,7 +82,7 @@ HelpWindow::HelpWindow(GUI::Window* parent)
     m_webview->on_link_click = [this](auto& url, auto&, auto&&) {
         VERIFY(url.protocol() == "spreadsheet");
         if (url.host() == "example") {
-            auto entry = LexicalPath(url.path()).basename();
+            auto entry = LexicalPath::basename(url.path());
             auto doc_option = m_docs.get(entry);
             if (!doc_option.is_object()) {
                 GUI::MessageBox::show_error(this, String::formatted("No documentation entry found for '{}'", url.path()));
@@ -91,18 +91,18 @@ HelpWindow::HelpWindow(GUI::Window* parent)
             auto& doc = doc_option.as_object();
             const auto& name = url.fragment();
 
-            auto example_data_value = doc.get_or("example_data", JsonObject {});
-            if (!example_data_value.is_object()) {
+            auto* example_data_ptr = doc.get_ptr("example_data");
+            if (!example_data_ptr || !example_data_ptr->is_object()) {
                 GUI::MessageBox::show_error(this, String::formatted("No example data found for '{}'", url.path()));
                 return;
             }
+            auto& example_data = example_data_ptr->as_object();
 
-            auto& example_data = example_data_value.as_object();
-            auto value = example_data.get(name);
-            if (!value.is_object()) {
+            if (!example_data.has_object(name)) {
                 GUI::MessageBox::show_error(this, String::formatted("Example '{}' not found for '{}'", name, url.path()));
                 return;
             }
+            auto& value = example_data.get(name);
 
             auto window = GUI::Window::construct(this);
             window->resize(size());
@@ -120,7 +120,7 @@ HelpWindow::HelpWindow(GUI::Window* parent)
             widget.add_sheet(sheet.release_nonnull());
             window->show();
         } else if (url.host() == "doc") {
-            auto entry = LexicalPath(url.path()).basename();
+            auto entry = LexicalPath::basename(url.path());
             m_webview->load(URL::create_with_data("text/html", render(entry)));
         } else {
             dbgln("Invalid spreadsheet action domain '{}'", url.host());
@@ -136,23 +136,17 @@ HelpWindow::HelpWindow(GUI::Window* parent)
     };
 }
 
-String HelpWindow::render(const StringView& key)
+String HelpWindow::render(StringView key)
 {
-    auto doc_option = m_docs.get(key);
-    VERIFY(doc_option.is_object());
-
-    auto& doc = doc_option.as_object();
+    VERIFY(m_docs.has_object(key));
+    auto& doc = m_docs.get(key).as_object();
 
     auto name = doc.get("name").to_string();
     auto argc = doc.get("argc").to_u32(0);
-    auto argnames_value = doc.get("argnames");
-    VERIFY(argnames_value.is_array());
-    auto& argnames = argnames_value.as_array();
+    VERIFY(doc.has_array("argnames"));
+    auto& argnames = doc.get("argnames").as_array();
 
     auto docstring = doc.get("doc").to_string();
-    auto examples_value = doc.get_or("examples", JsonObject {});
-    VERIFY(examples_value.is_object());
-    auto& examples = examples_value.as_object();
 
     StringBuilder markdown_builder;
 
@@ -164,7 +158,7 @@ String HelpWindow::render(const StringView& key)
     if (argc > 0)
         markdown_builder.appendff("{} required argument(s):\n", argc);
     else
-        markdown_builder.appendf("No required arguments.\n");
+        markdown_builder.append("No required arguments.\n");
 
     for (size_t i = 0; i < argc; ++i)
         markdown_builder.appendff("- `{}`\n", argnames.at(i).to_string());
@@ -184,9 +178,11 @@ String HelpWindow::render(const StringView& key)
     markdown_builder.append(docstring);
     markdown_builder.append("\n\n");
 
-    if (!examples.is_empty()) {
+    if (doc.has("examples")) {
+        auto& examples = doc.get("examples");
+        VERIFY(examples.is_object());
         markdown_builder.append("# EXAMPLES\n");
-        examples.for_each_member([&](auto& text, auto& description_value) {
+        examples.as_object().for_each_member([&](auto& text, auto& description_value) {
             dbgln("- {}\n\n```js\n{}\n```\n", description_value.to_string(), text);
             markdown_builder.appendff("- {}\n\n```js\n{}\n```\n", description_value.to_string(), text);
         });

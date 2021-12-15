@@ -1,13 +1,18 @@
+#include <LibCore/AnonymousBuffer.h>
+
 endpoint AudioServer
 {
-    // Basic protocol
-    greet() => ()
-
     // Mixer functions
     set_muted(bool muted) => ()
     get_muted() => (bool muted)
-    get_main_mix_volume() => (i32 volume)
-    set_main_mix_volume(i32 volume) => ()
+    get_main_mix_volume() => (double volume)
+    set_main_mix_volume(double volume) => ()
+    get_self_volume() => (double volume)
+    set_self_volume(double volume) => ()
+
+    // Audio device
+    set_sample_rate(u32 sample_rate) => ()
+    get_sample_rate() => (u32 sample_rate)
 
     // Buffer playback
     enqueue_buffer(Core::AnonymousBuffer buffer, i32 buffer_id, int sample_count) => (bool success)

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibGfx/AntiAliasingPainter.h>
 #include <LibGfx/Painter.h>
 #include <LibWeb/Layout/SVGPathBox.h>
 #include <LibWeb/SVG/SVGPathElement.h>
@@ -13,18 +14,6 @@ namespace Web::Layout {
 SVGPathBox::SVGPathBox(DOM::Document& document, SVG::SVGPathElement& element, NonnullRefPtr<CSS::StyleProperties> properties)
     : SVGGraphicsBox(document, element, properties)
 {
-}
-
-void SVGPathBox::prepare_for_replaced_layout()
-{
-    auto& bounding_box = dom_node().get_path().bounding_box();
-    set_has_intrinsic_width(true);
-    set_has_intrinsic_height(true);
-    set_intrinsic_width(bounding_box.width());
-    set_intrinsic_height(bounding_box.height());
-
-    // FIXME: This does not belong here! Someone at a higher level should place this box.
-    set_offset(bounding_box.top_left());
 }
 
 void SVGPathBox::paint(PaintContext& context, PaintPhase phase)
@@ -47,11 +36,10 @@ void SVGPathBox::paint(PaintContext& context, PaintPhase phase)
     closed_path.close();
 
     // Fills are computed as though all paths are closed (https://svgwg.org/svg2-draft/painting.html#FillProperties)
-    auto& painter = context.painter();
+    Gfx::AntiAliasingPainter painter { context.painter() };
     auto& svg_context = context.svg_context();
 
-    auto offset = (absolute_position() - effective_offset()).to_type<int>();
-
+    auto offset = absolute_position();
     painter.translate(offset);
 
     painter.fill_path(

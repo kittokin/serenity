@@ -7,6 +7,7 @@
 #pragma once
 
 #include <LibWeb/DOM/Element.h>
+#include <LibWeb/HTML/DOMStringMap.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/GlobalEventHandlers.h>
 
@@ -30,10 +31,14 @@ public:
     String inner_text();
     void set_inner_text(StringView);
 
-    unsigned offset_top() const;
-    unsigned offset_left() const;
+    int offset_top() const;
+    int offset_left() const;
+    int offset_width() const;
+    int offset_height() const;
 
     bool cannot_navigate() const;
+
+    NonnullRefPtr<DOMStringMap> dataset() const { return m_dataset; }
 
 protected:
     virtual void parse_attribute(const FlyString& name, const String& value) override;
@@ -48,6 +53,8 @@ private:
         Inherit,
     };
     ContentEditableState content_editable_state() const;
+
+    NonnullRefPtr<DOMStringMap> m_dataset;
 };
 
 }

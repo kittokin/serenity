@@ -123,7 +123,7 @@ def check_package_files(ports):
             all_good = False
 
         for prop in PORT_PROPERTIES:
-            if prop == 'auth_type' and re.match('^https://github.com/SerenityOS/', props["files"]):
+            if prop == 'auth_type' and re.match('^https://github.com/SerenityPorts/', props["files"]):
                 continue
             if props[prop] == '':
                 print(f"Ports/{port} is missing required property '{prop}'")
@@ -193,7 +193,7 @@ def run():
     if from_table_set - ports_set:
         all_good = False
         print('AvailablePorts.md lists ports that do not appear in the file system:')
-        for port in sorted(from_table - ports):
+        for port in sorted(from_table_set - ports_set):
             print(f"    {port}")
 
     if ports_set - from_table_set:

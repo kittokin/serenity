@@ -4,20 +4,18 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibGfx/FontDatabase.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/DOM/Text.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/HTMLFormElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
-#include <LibWeb/InProcessWebView.h>
-#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/ButtonBox.h>
 #include <LibWeb/Layout/CheckBox.h>
 #include <LibWeb/Layout/RadioButton.h>
-#include <LibWeb/Page/Frame.h>
 
 namespace Web::HTML {
 
@@ -48,8 +46,8 @@ RefPtr<Layout::Node> HTMLInputElement::create_layout_node()
     if (type() == "hidden")
         return nullptr;
 
-    auto style = document().style_resolver().resolve_style(*this);
-    if (style->display() == CSS::Display::None)
+    auto style = document().style_computer().compute_style(*this);
+    if (style->display().is_none())
         return nullptr;
 
     if (type().equals_ignoring_case("submit") || type().equals_ignoring_case("button"))
@@ -62,7 +60,7 @@ RefPtr<Layout::Node> HTMLInputElement::create_layout_node()
         return adopt_ref(*new Layout::RadioButton(document(), *this, move(style)));
 
     create_shadow_tree_if_needed();
-    auto layout_node = adopt_ref(*new Layout::BlockBox(document(), this, move(style)));
+    auto layout_node = adopt_ref(*new Layout::BlockContainer(document(), this, move(style)));
     layout_node->set_inline(true);
     return layout_node;
 }
@@ -120,11 +118,13 @@ void HTMLInputElement::create_shadow_tree_if_needed()
 
 void HTMLInputElement::inserted()
 {
+    HTMLElement::inserted();
     set_form(first_ancestor_of_type<HTMLFormElement>());
 }
 
-void HTMLInputElement::removed_from(DOM::Node*)
+void HTMLInputElement::removed_from(DOM::Node* old_parent)
 {
+    HTMLElement::removed_from(old_parent);
     set_form(nullptr);
 }
 

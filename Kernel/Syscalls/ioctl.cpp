@@ -4,22 +4,25 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/FileSystem/FileDescription.h>
+#include <AK/Userspace.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Process.h>
 #include <LibC/sys/ioctl_numbers.h>
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$ioctl(int fd, unsigned request, FlatPtr arg)
+ErrorOr<FlatPtr> Process::sys$ioctl(int fd, unsigned request, FlatPtr arg)
 {
-    auto description = file_description(fd);
-    if (!description)
-        return EBADF;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto description = TRY(fds().open_file_description(fd));
     if (request == FIONBIO) {
-        description->set_blocking(arg == 0);
-        return KSuccess;
+        int non_blocking;
+        TRY(copy_from_user(&non_blocking, Userspace<const int*>(arg)));
+        description->set_blocking(non_blocking == 0);
+        return 0;
     }
-    return description->file().ioctl(*description, request, arg);
+    TRY(description->file().ioctl(*description, request, arg));
+    return 0;
 }
 
 }

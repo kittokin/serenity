@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/NonnullOwnPtrVector.h>
+#include <LibGUI/Button.h>
 #include <LibGUI/Widget.h>
 
 namespace GUI {
@@ -16,7 +17,10 @@ class Toolbar : public Widget {
 public:
     virtual ~Toolbar() override;
 
-    void add_action(Action&);
+    ErrorOr<NonnullRefPtr<GUI::Button>> try_add_action(GUI::Action&);
+    ErrorOr<void> try_add_separator();
+
+    GUI::Button& add_action(GUI::Action&);
     void add_separator();
 
     bool has_frame() const { return m_has_frame; }

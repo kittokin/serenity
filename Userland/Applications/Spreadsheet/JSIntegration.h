@@ -8,6 +8,7 @@
 
 #include "Forward.h"
 #include <LibJS/Forward.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/GlobalObject.h>
 
 namespace Spreadsheet {
@@ -26,8 +27,9 @@ public:
 
     virtual ~SheetGlobalObject() override;
 
-    virtual JS::Value get(const JS::PropertyName&, JS::Value receiver = {}, bool without_side_effects = false) const override;
-    virtual bool put(const JS::PropertyName&, JS::Value value, JS::Value receiver = {}) override;
+    virtual JS::ThrowCompletionOr<bool> internal_has_property(JS::PropertyKey const& name) const override;
+    virtual JS::ThrowCompletionOr<JS::Value> internal_get(JS::PropertyKey const&, JS::Value receiver) const override;
+    virtual JS::ThrowCompletionOr<bool> internal_set(JS::PropertyKey const&, JS::Value value, JS::Value receiver) override;
     virtual void initialize_global_object() override;
 
     JS_DECLARE_NATIVE_FUNCTION(get_real_cell_contents);
@@ -36,6 +38,7 @@ public:
     JS_DECLARE_NATIVE_FUNCTION(current_cell_position);
     JS_DECLARE_NATIVE_FUNCTION(column_index);
     JS_DECLARE_NATIVE_FUNCTION(column_arithmetic);
+    JS_DECLARE_NATIVE_FUNCTION(get_column_bound);
 
 private:
     virtual void visit_edges(Visitor&) override;

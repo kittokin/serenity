@@ -6,6 +6,7 @@
 
 #include <AK/Format.h>
 #include <AK/MemMem.h>
+#include <AK/Memory.h>
 #include <AK/Platform.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Types.h>
@@ -111,7 +112,6 @@ int memcmp(const void* v1, const void* v2, size_t n)
     return 0;
 }
 
-#if ARCH(I386)
 void* memcpy(void* dest_ptr, const void* src_ptr, size_t n)
 {
     void* original_dest = dest_ptr;
@@ -128,11 +128,19 @@ void* memset(void* dest_ptr, int c, size_t n)
     if (!(dest & 0x3) && n >= 12) {
         size_t size_ts = n / sizeof(size_t);
         size_t expanded_c = explode_byte((u8)c);
+#if ARCH(I386)
         asm volatile(
             "rep stosl\n"
             : "=D"(dest)
             : "D"(dest), "c"(size_ts), "a"(expanded_c)
             : "memory");
+#else
+        asm volatile(
+            "rep stosq\n"
+            : "=D"(dest)
+            : "D"(dest), "c"(size_ts), "a"(expanded_c)
+            : "memory");
+#endif
         n -= size_ts * sizeof(size_t);
         if (n == 0)
             return dest_ptr;
@@ -144,28 +152,10 @@ void* memset(void* dest_ptr, int c, size_t n)
         : "memory");
     return dest_ptr;
 }
-#else
-void* memcpy(void* dest_ptr, const void* src_ptr, size_t n)
-{
-    auto* dest = (u8*)dest_ptr;
-    auto* src = (const u8*)src_ptr;
-    for (size_t i = 0; i < n; ++i)
-        dest[i] = src[i];
-    return dest_ptr;
-}
-
-void* memset(void* dest_ptr, int c, size_t n)
-{
-    auto* dest = (u8*)dest_ptr;
-    for (size_t i = 0; i < n; ++i)
-        dest[i] = (u8)c;
-    return dest_ptr;
-}
-#endif
 
 void* memmove(void* dest, const void* src, size_t n)
 {
-    if (dest < src)
+    if (((FlatPtr)dest - (FlatPtr)src) >= n)
         return memcpy(dest, src, n);
 
     u8* pd = (u8*)dest;
@@ -321,6 +311,7 @@ const char* const sys_errlist[] = {
     "Directory not empty",
     "Math argument out of domain",
     "Connection refused",
+    "Host is down",
     "Address not available",
     "Already connected",
     "Connection aborted",
@@ -338,7 +329,10 @@ const char* const sys_errlist[] = {
     "No message",
     "No protocol option",
     "Not connected",
+    "Transport endpoint has shutdown",
+    "Too many references",
     "Protocol not supported",
+    "Socket type not supported",
     "Resource deadlock would occur",
     "Timed out",
     "Wrong protocol type",
@@ -348,15 +342,37 @@ const char* const sys_errlist[] = {
     "Not supported",
     "Protocol family not supported",
     "Cannot make directory a subdirectory of itself",
+    "Quota exceeded",
+    "State not recoverable",
     "The highest errno +1 :^)",
 };
+static_assert(array_size(sys_errlist) == (EMAXERRNO + 1));
 
 int sys_nerr = EMAXERRNO;
+
+int strerror_r(int errnum, char* buf, size_t buflen)
+{
+    auto saved_errno = errno;
+    if (errnum < 0 || errnum >= EMAXERRNO) {
+        auto rc = strlcpy(buf, "unknown error", buflen);
+        if (rc >= buflen)
+            dbgln("strerror_r(): Invalid error number '{}' specified and the output buffer is too small.", errnum);
+        errno = saved_errno;
+        return EINVAL;
+    }
+    auto text = strerror(errnum);
+    auto rc = strlcpy(buf, text, buflen);
+    if (rc >= buflen) {
+        errno = saved_errno;
+        return ERANGE;
+    }
+    errno = saved_errno;
+    return 0;
+}
 
 char* strerror(int errnum)
 {
     if (errnum < 0 || errnum >= EMAXERRNO) {
-        dbgln("strerror() missing string for errnum={}", errnum);
         return const_cast<char*>("Unknown error");
     }
     return const_cast<char*>(sys_errlist[errnum]);
@@ -472,8 +488,6 @@ size_t strxfrm(char* dest, const char* src, size_t n)
 
 void explicit_bzero(void* ptr, size_t size)
 {
-    memset(ptr, 0, size);
-    asm volatile("" ::
-                     : "memory");
+    secure_zero(ptr, size);
 }
 }

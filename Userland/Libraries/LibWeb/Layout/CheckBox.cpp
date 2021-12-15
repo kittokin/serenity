@@ -8,17 +8,15 @@
 #include <LibGfx/Font.h>
 #include <LibGfx/Painter.h>
 #include <LibGfx/StylePainter.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/Layout/CheckBox.h>
 #include <LibWeb/Layout/Label.h>
-#include <LibWeb/Page/Frame.h>
 
 namespace Web::Layout {
 
 CheckBox::CheckBox(DOM::Document& document, HTML::HTMLInputElement& element, NonnullRefPtr<CSS::StyleProperties> style)
     : LabelableNode(document, element, move(style))
 {
-    set_has_intrinsic_width(true);
-    set_has_intrinsic_height(true);
     set_intrinsic_width(13);
     set_intrinsic_height(13);
 }
@@ -41,19 +39,19 @@ void CheckBox::paint(PaintContext& context, PaintPhase phase)
 
 void CheckBox::handle_mousedown(Badge<EventHandler>, const Gfx::IntPoint&, unsigned button, unsigned)
 {
-    if (button != GUI::MouseButton::Left || !dom_node().enabled())
+    if (button != GUI::MouseButton::Primary || !dom_node().enabled())
         return;
 
     m_being_pressed = true;
     set_needs_display();
 
     m_tracking_mouse = true;
-    frame().event_handler().set_mouse_event_tracking_layout_node(this);
+    browsing_context().event_handler().set_mouse_event_tracking_layout_node(this);
 }
 
 void CheckBox::handle_mouseup(Badge<EventHandler>, const Gfx::IntPoint& position, unsigned button, unsigned)
 {
-    if (!m_tracking_mouse || button != GUI::MouseButton::Left || !dom_node().enabled())
+    if (!m_tracking_mouse || button != GUI::MouseButton::Primary || !dom_node().enabled())
         return;
 
     // NOTE: Changing the checked state of the DOM node may run arbitrary JS, which could disappear this node.
@@ -68,7 +66,7 @@ void CheckBox::handle_mouseup(Badge<EventHandler>, const Gfx::IntPoint& position
 
     m_being_pressed = false;
     m_tracking_mouse = false;
-    frame().event_handler().set_mouse_event_tracking_layout_node(nullptr);
+    browsing_context().event_handler().set_mouse_event_tracking_layout_node(nullptr);
 }
 
 void CheckBox::handle_mousemove(Badge<EventHandler>, const Gfx::IntPoint& position, unsigned, unsigned)

@@ -19,16 +19,19 @@ NetworkJob::~NetworkJob()
 {
 }
 
-void NetworkJob::start()
+void NetworkJob::start(NonnullRefPtr<Core::Socket>)
 {
 }
 
-void NetworkJob::shutdown()
+void NetworkJob::shutdown(ShutdownMode)
 {
 }
 
 void NetworkJob::did_finish(NonnullRefPtr<NetworkResponse>&& response)
 {
+    if (is_cancelled())
+        return;
+
     // NOTE: We protect ourselves here, since the on_finish callback may otherwise
     //       trigger destruction of this job somehow.
     NonnullRefPtr<NetworkJob> protector(*this);
@@ -37,11 +40,14 @@ void NetworkJob::did_finish(NonnullRefPtr<NetworkResponse>&& response)
     dbgln_if(CNETWORKJOB_DEBUG, "{} job did_finish", *this);
     VERIFY(on_finish);
     on_finish(true);
-    shutdown();
+    shutdown(ShutdownMode::DetachFromSocket);
 }
 
 void NetworkJob::did_fail(Error error)
 {
+    if (is_cancelled())
+        return;
+
     // NOTE: We protect ourselves here, since the on_finish callback may otherwise
     //       trigger destruction of this job somehow.
     NonnullRefPtr<NetworkJob> protector(*this);
@@ -50,11 +56,14 @@ void NetworkJob::did_fail(Error error)
     dbgln_if(CNETWORKJOB_DEBUG, "{}{{{:p}}} job did_fail! error: {} ({})", class_name(), this, (unsigned)error, to_string(error));
     VERIFY(on_finish);
     on_finish(false);
-    shutdown();
+    shutdown(ShutdownMode::DetachFromSocket);
 }
 
 void NetworkJob::did_progress(Optional<u32> total_size, u32 downloaded)
 {
+    if (is_cancelled())
+        return;
+
     // NOTE: We protect ourselves here, since the callback may otherwise
     //       trigger destruction of this job somehow.
     NonnullRefPtr<NetworkJob> protector(*this);

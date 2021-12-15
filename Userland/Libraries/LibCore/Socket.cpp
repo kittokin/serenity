@@ -5,6 +5,7 @@
  */
 
 #include <AK/ByteBuffer.h>
+#include <AK/ByteReader.h>
 #include <AK/Debug.h>
 #include <LibCore/Notifier.h>
 #include <LibCore/Socket.h>
@@ -13,10 +14,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <sys/socket.h>
-#include <unistd.h>
 
 namespace Core {
 
@@ -58,7 +56,9 @@ bool Socket::connect(const String& hostname, int port)
         return false;
     }
 
-    IPv4Address host_address((const u8*)hostent->h_addr_list[0]);
+    // On macOS, the pointer in the hostent structure is misaligned. Load it using ByteReader to avoid UB
+    auto* host_addr = AK::ByteReader::load_pointer<u8 const>(reinterpret_cast<u8 const*>(&hostent->h_addr_list[0]));
+    IPv4Address host_address(host_addr);
     dbgln_if(CSOCKET_DEBUG, "Socket::connect: Resolved '{}' to {}", hostname, host_address);
     return connect(host_address, port);
 }
@@ -106,7 +106,7 @@ bool Socket::connect(const SocketAddress& address)
     auto dest_address = address.to_string();
     bool fits = dest_address.copy_characters_to_buffer(saddr.sun_path, sizeof(saddr.sun_path));
     if (!fits) {
-        fprintf(stderr, "Core::Socket: Failed to connect() to %s: Path is too long!\n", dest_address.characters());
+        warnln("Core::Socket: Failed to connect() to {}: Path is too long!", dest_address);
         errno = EINVAL;
         return false;
     }
@@ -118,16 +118,33 @@ bool Socket::connect(const SocketAddress& address)
 bool Socket::common_connect(const struct sockaddr* addr, socklen_t addrlen)
 {
     auto connected = [this] {
-        dbgln_if(CSOCKET_DEBUG, "{} connected!", *this);
-        if (!m_connected) {
+        int so_error;
+        socklen_t so_error_len = sizeof(so_error);
+
+        int rc = getsockopt(fd(), SOL_SOCKET, SO_ERROR, &so_error, &so_error_len);
+        if (rc < 0) {
+            dbgln_if(CSOCKET_DEBUG, "Failed to check the status of SO_ERROR");
+            m_connected = false;
+            if (on_error)
+                on_error();
+        }
+
+        if (so_error == 0) {
+            dbgln_if(CSOCKET_DEBUG, "{} connected!", *this);
             m_connected = true;
             ensure_read_notifier();
-            if (m_notifier) {
-                m_notifier->remove_from_parent();
-                m_notifier = nullptr;
-            }
             if (on_connected)
                 on_connected();
+        } else {
+            dbgln_if(CSOCKET_DEBUG, "Failed to connect to {}", *this);
+            m_connected = false;
+            if (on_error)
+                on_error();
+        }
+
+        if (m_notifier) {
+            m_notifier->remove_from_parent();
+            m_notifier = nullptr;
         }
     };
     int rc = ::connect(fd(), addr, addrlen);
@@ -139,7 +156,7 @@ bool Socket::common_connect(const struct sockaddr* addr, socklen_t addrlen)
             return true;
         }
         int saved_errno = errno;
-        fprintf(stderr, "Core::Socket: Failed to connect() to %s: %s\n", destination_address().to_string().characters(), strerror(saved_errno));
+        warnln("Core::Socket: Failed to connect() to {}: {}", destination_address().to_string(), strerror(saved_errno));
         errno = saved_errno;
         return false;
     }
@@ -158,12 +175,15 @@ ByteBuffer Socket::receive(int max_size)
 
 bool Socket::send(ReadonlyBytes data)
 {
-    ssize_t nsent = ::send(fd(), data.data(), data.size(), 0);
-    if (nsent < 0) {
-        set_error(errno);
-        return false;
+    auto remaining_bytes = data.size();
+    while (remaining_bytes > 0) {
+        ssize_t nsent = ::send(fd(), data.data() + (data.size() - remaining_bytes), remaining_bytes, 0);
+        if (nsent < 0) {
+            set_error(errno);
+            return false;
+        }
+        remaining_bytes -= nsent;
     }
-    VERIFY(static_cast<size_t>(nsent) == data.size());
     return true;
 }
 
@@ -188,13 +208,29 @@ void Socket::did_update_fd(int fd)
     }
 }
 
+bool Socket::close()
+{
+    m_connected = false;
+    if (m_notifier)
+        m_notifier->close();
+    if (m_read_notifier)
+        m_read_notifier->close();
+    return IODevice::close();
+}
+
+void Socket::set_idle(bool idle)
+{
+    if (m_read_notifier)
+        m_read_notifier->set_enabled(!idle);
+    if (m_notifier)
+        m_notifier->set_enabled(!idle);
+}
+
 void Socket::ensure_read_notifier()
 {
     VERIFY(m_connected);
     m_read_notifier = Notifier::construct(fd(), Notifier::Event::Read, this);
     m_read_notifier->on_ready_to_read = [this] {
-        if (!can_read())
-            return;
         if (on_ready_to_read)
             on_ready_to_read();
     };

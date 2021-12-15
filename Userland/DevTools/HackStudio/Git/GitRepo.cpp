@@ -6,8 +6,6 @@
 
 #include "GitRepo.h"
 #include <LibCore/Command.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 namespace HackStudio {
 
@@ -37,7 +35,7 @@ Vector<LexicalPath> GitRepo::unstaged_files() const
 {
     auto modified = modified_files();
     auto untracked = untracked_files();
-    modified.append(move(untracked));
+    modified.extend(move(untracked));
     return modified;
 }
 //

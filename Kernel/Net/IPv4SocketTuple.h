@@ -9,7 +9,7 @@
 #include <AK/HashMap.h>
 #include <Kernel/DoubleBuffer.h>
 #include <Kernel/KBuffer.h>
-#include <Kernel/Lock.h>
+#include <Kernel/Locking/Mutex.h>
 #include <Kernel/Net/IPv4.h>
 #include <Kernel/Net/Socket.h>
 
@@ -26,7 +26,7 @@ public:
     IPv4Address peer_address() const { return m_peer_address; };
     u16 peer_port() const { return m_peer_port; };
 
-    bool operator==(const IPv4SocketTuple other) const
+    bool operator==(const IPv4SocketTuple& other) const
     {
         return other.local_address() == m_local_address && other.local_port() == m_local_port && other.peer_address() == m_peer_address && other.peer_port() == m_peer_port;
     };

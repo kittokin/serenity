@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Badge.h>
 #include <LibWebSocket/ConnectionInfo.h>
 #include <LibWebSocket/Message.h>
 #include <WebSocket/ClientConnection.h>
@@ -14,10 +13,10 @@ namespace WebSocket {
 
 static HashMap<int, RefPtr<ClientConnection>> s_connections;
 
-ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket, int client_id)
-    : IPC::ClientConnection<WebSocketClientEndpoint, WebSocketServerEndpoint>(*this, move(socket), client_id)
+ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> socket)
+    : IPC::ClientConnection<WebSocketClientEndpoint, WebSocketServerEndpoint>(*this, move(socket), 1)
 {
-    s_connections.set(client_id, *this);
+    s_connections.set(1, *this);
 }
 
 ClientConnection::~ClientConnection()
@@ -29,10 +28,6 @@ void ClientConnection::die()
     s_connections.remove(client_id());
     if (s_connections.is_empty())
         Core::EventLoop::current().quit(0);
-}
-
-void ClientConnection::greet()
-{
 }
 
 Messages::WebSocketServer::ConnectResponse ClientConnection::connect(URL const& url, String const& origin,

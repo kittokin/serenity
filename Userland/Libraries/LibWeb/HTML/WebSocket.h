@@ -35,7 +35,7 @@ class WebSocketClientManager : public Core::Object {
 public:
     static WebSocketClientManager& the();
 
-    RefPtr<Protocol::WebSocket> connect(const URL&);
+    RefPtr<Protocol::WebSocket> connect(const AK::URL&);
 
 private:
     WebSocketClientManager();
@@ -57,7 +57,7 @@ public:
 
     using WrapperType = Bindings::WebSocketWrapper;
 
-    static NonnullRefPtr<WebSocket> create(DOM::Window& window, URL& url)
+    static NonnullRefPtr<WebSocket> create(DOM::Window& window, AK::URL& url)
     {
         return adopt_ref(*new WebSocket(window, url));
     }
@@ -78,9 +78,6 @@ public:
     ENUMERATE_WEBSOCKET_EVENT_HANDLERS(__ENUMERATE)
 #undef __ENUMERATE
 
-    void set_event_handler_attribute(const FlyString& name, HTML::EventHandler);
-    HTML::EventHandler get_event_handler_attribute(const FlyString& name);
-
     ReadyState ready_state() const;
     String extensions() const;
     String protocol() const;
@@ -94,7 +91,6 @@ public:
 private:
     virtual void ref_event_target() override { ref(); }
     virtual void unref_event_target() override { unref(); }
-    virtual bool dispatch_event(NonnullRefPtr<DOM::Event>) override;
     virtual JS::Object* create_wrapper(JS::GlobalObject&) override;
 
     void on_open();
@@ -102,11 +98,11 @@ private:
     void on_error();
     void on_close(u16 code, String reason, bool was_clean);
 
-    explicit WebSocket(DOM::Window&, URL&);
+    explicit WebSocket(DOM::Window&, AK::URL&);
 
     NonnullRefPtr<DOM::Window> m_window;
 
-    URL m_url;
+    AK::URL m_url;
     String m_binary_type { "blob" };
     RefPtr<Protocol::WebSocket> m_websocket;
 };

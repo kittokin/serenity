@@ -16,6 +16,8 @@
 #include <LibGUI/TextBox.h>
 #include <LibGfx/Filters/BoxBlurFilter.h>
 #include <LibGfx/Filters/GenericConvolutionFilter.h>
+#include <LibGfx/Filters/GrayscaleFilter.h>
+#include <LibGfx/Filters/InvertFilter.h>
 #include <LibGfx/Filters/LaplacianFilter.h>
 #include <LibGfx/Filters/SharpenFilter.h>
 #include <LibGfx/Filters/SpatialGaussianBlurFilter.h>
@@ -31,7 +33,7 @@ class GenericConvolutionFilterInputDialog : public GUI::Dialog {
     C_OBJECT(GenericConvolutionFilterInputDialog);
 
 public:
-    const Matrix<N, float>& matrix() const { return m_matrix; }
+    Matrix<N, float> const& matrix() const { return m_matrix; }
     bool should_wrap() const { return m_should_wrap; }
 
 private:
@@ -40,7 +42,7 @@ private:
     {
         // FIXME: Help! Make this GUI less ugly.
         StringBuilder builder;
-        builder.appendf("%zux%zu", N, N);
+        builder.appendff("{}x{}", N, N);
         builder.append(" Convolution");
         set_title(builder.string_view());
 
@@ -50,7 +52,7 @@ private:
         main_widget.set_frame_shadow(Gfx::FrameShadow::Raised);
         main_widget.set_fill_with_background_color(true);
         auto& layout = main_widget.template set_layout<GUI::VerticalBoxLayout>();
-        layout.set_margins({ 4, 4, 4, 4 });
+        layout.set_margins(4);
 
         size_t index = 0;
         size_t columns = N;

@@ -28,7 +28,7 @@ WMClientConnection::~WMClientConnection()
 
 void WMClientConnection::die()
 {
-    deferred_invoke([this](auto&) {
+    deferred_invoke([this] {
         s_connections.remove(client_id());
     });
 }
@@ -42,6 +42,12 @@ void WMClientConnection::set_applet_area_position(Gfx::IntPoint const& position)
     }
 
     AppletManager::the().set_position(position);
+
+    WindowServer::ClientConnection::for_each_client([](auto& connection) {
+        if (auto result = connection.post_message(Messages::WindowClient::AppletAreaRectChanged(AppletManager::the().window()->rect())); result.is_error()) {
+            dbgln("WMClientConnection::set_applet_area_position: {}", result.error());
+        }
+    });
 }
 
 void WMClientConnection::set_active_window(i32 client_id, i32 window_id)
@@ -96,7 +102,7 @@ void WMClientConnection::start_window_resize(i32 client_id, i32 window_id)
     auto& window = *(*it).value;
     // FIXME: We are cheating a bit here by using the current cursor location and hard-coding the left button.
     //        Maybe the client should be allowed to specify what initiated this request?
-    WindowManager::the().start_window_resize(window, Screen::the().cursor_location(), MouseButton::Left);
+    WindowManager::the().start_window_resize(window, ScreenInput::the().cursor_location(), MouseButton::Primary);
 }
 
 void WMClientConnection::set_window_minimized(i32 client_id, i32 window_id, bool minimized)
@@ -115,6 +121,31 @@ void WMClientConnection::set_window_minimized(i32 client_id, i32 window_id, bool
     WindowManager::the().minimize_windows(window, minimized);
 }
 
+void WMClientConnection::toggle_show_desktop()
+{
+    bool should_hide = false;
+    auto& current_window_stack = WindowManager::the().current_window_stack();
+    current_window_stack.for_each_window([&](auto& window) {
+        if (window.type() == WindowType::Normal && window.is_minimizable()) {
+            if (!window.is_hidden() && !window.is_minimized()) {
+                should_hide = true;
+                return IterationDecision::Break;
+            }
+        }
+        return IterationDecision::Continue;
+    });
+
+    current_window_stack.for_each_window([&](auto& window) {
+        if (window.type() == WindowType::Normal && window.is_minimizable()) {
+            auto state = window.minimized_state();
+            if (state == WindowMinimizedState::None || state == WindowMinimizedState::Hidden) {
+                WindowManager::the().hide_windows(window, should_hide);
+            }
+        }
+        return IterationDecision::Continue;
+    });
+}
+
 void WMClientConnection::set_event_mask(u32 event_mask)
 {
     m_event_mask = event_mask;
@@ -127,6 +158,11 @@ void WMClientConnection::set_manager_window(i32 window_id)
     // Let the window manager know that we obtained a manager window, and should
     // receive information about other windows.
     WindowManager::the().greet_window_manager(*this);
+}
+
+void WMClientConnection::set_workspace(u32 row, u32 col)
+{
+    WindowManager::the().switch_to_window_stack(row, col);
 }
 
 void WMClientConnection::set_window_taskbar_rect(i32 client_id, i32 window_id, Gfx::IntRect const& rect)

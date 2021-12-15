@@ -10,6 +10,7 @@
 #include <AK/NonnullRefPtr.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/Forward.h>
+#include <LibWeb/CSS/ComputedValues.h>
 #include <LibWeb/CSS/LengthBox.h>
 #include <LibWeb/CSS/StyleValue.h>
 
@@ -32,14 +33,15 @@ public:
             callback((CSS::PropertyID)it.key, *it.value);
     }
 
+    HashMap<CSS::PropertyID, NonnullRefPtr<StyleValue>>& properties() { return m_property_values; }
+    HashMap<CSS::PropertyID, NonnullRefPtr<StyleValue>> const& properties() const { return m_property_values; }
+
     void set_property(CSS::PropertyID, NonnullRefPtr<StyleValue> value);
-    void set_property(CSS::PropertyID, const StringView&);
     Optional<NonnullRefPtr<StyleValue>> property(CSS::PropertyID) const;
 
     Length length_or_fallback(CSS::PropertyID, const Length& fallback) const;
     LengthBox length_box(CSS::PropertyID left_id, CSS::PropertyID top_id, CSS::PropertyID right_id, CSS::PropertyID bottom_id, const CSS::Length& default_value) const;
-    String string_or_fallback(CSS::PropertyID, const StringView& fallback) const;
-    Color color_or_fallback(CSS::PropertyID, const DOM::Document&, Color fallback) const;
+    Color color_or_fallback(CSS::PropertyID, Layout::NodeWithStyle const&, Color fallback) const;
     Optional<CSS::TextAlign> text_align() const;
     CSS::Display display() const;
     Optional<CSS::Float> float_() const;
@@ -51,16 +53,31 @@ public:
     Optional<CSS::TextTransform> text_transform() const;
     Optional<CSS::ListStyleType> list_style_type() const;
     Optional<CSS::FlexDirection> flex_direction() const;
+    Optional<CSS::FlexWrap> flex_wrap() const;
+    Optional<CSS::FlexBasisData> flex_basis() const;
+    float flex_grow() const;
+    float flex_shrink() const;
+    Optional<CSS::AlignItems> align_items() const;
+    float opacity() const;
+    Optional<CSS::JustifyContent> justify_content() const;
     Optional<CSS::Overflow> overflow_x() const;
     Optional<CSS::Overflow> overflow_y() const;
-    Optional<CSS::Repeat> background_repeat_x() const;
-    Optional<CSS::Repeat> background_repeat_y() const;
+    Optional<BackgroundRepeatData> background_repeat() const;
+    Optional<CSS::BoxShadowData> box_shadow() const;
+    CSS::BoxSizing box_sizing() const;
+    Optional<CSS::PointerEvents> pointer_events() const;
 
-    const Gfx::Font& font() const
+    Vector<CSS::Transformation> transformations() const;
+
+    Gfx::Font const& computed_font() const
     {
-        if (!m_font)
-            load_font();
+        VERIFY(m_font);
         return *m_font;
+    }
+
+    void set_computed_font(NonnullRefPtr<Gfx::Font> font)
+    {
+        m_font = move(font);
     }
 
     float line_height(const Layout::Node&) const;
@@ -71,12 +88,13 @@ public:
     Optional<CSS::Position> position() const;
     Optional<int> z_index() const;
 
-private:
-    HashMap<unsigned, NonnullRefPtr<StyleValue>> m_property_values;
-    Optional<CSS::Overflow> overflow(CSS::PropertyID) const;
+    static NonnullRefPtr<Gfx::Font> font_fallback(bool monospace, bool bold);
 
-    void load_font() const;
-    RefPtr<Gfx::Font> font_fallback(bool monospace, bool bold) const;
+private:
+    friend class StyleComputer;
+
+    HashMap<CSS::PropertyID, NonnullRefPtr<StyleValue>> m_property_values;
+    Optional<CSS::Overflow> overflow(CSS::PropertyID) const;
 
     mutable RefPtr<Gfx::Font> m_font;
 };

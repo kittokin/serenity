@@ -7,7 +7,6 @@
 #include "RunWindow.h"
 #include <AK/LexicalPath.h>
 #include <AK/URL.h>
-#include <AK/URLParser.h>
 #include <Applications/Run/RunGML.h>
 #include <LibCore/File.h>
 #include <LibCore/StandardPaths.h>
@@ -21,6 +20,7 @@
 #include <LibGUI/Widget.h>
 #include <spawn.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -34,7 +34,7 @@ RunWindow::RunWindow()
 
     set_title("Run");
     set_icon(app_icon.bitmap_for_size(16));
-    resize(345, 140);
+    resize(345, 100);
     set_resizable(false);
     set_minimizable(false);
 
@@ -63,7 +63,7 @@ RunWindow::RunWindow()
 
     m_browse_button = *find_descendant_of_type_named<GUI::Button>("browse_button");
     m_browse_button->on_click = [this](auto) {
-        Optional<String> path = GUI::FilePicker::get_open_filepath(this);
+        Optional<String> path = GUI::FilePicker::get_open_filepath(this, {}, Core::StandardPaths::home_directory(), false, GUI::Dialog::ScreenPosition::Center);
         if (path.has_value())
             m_path_combo_box->set_text(path.value().view());
     };
@@ -171,7 +171,7 @@ String RunWindow::history_file_path()
 void RunWindow::load_history()
 {
     m_path_history.clear();
-    auto file_or_error = Core::File::open(history_file_path(), Core::IODevice::ReadOnly);
+    auto file_or_error = Core::File::open(history_file_path(), Core::OpenMode::ReadOnly);
     if (file_or_error.is_error())
         return;
 
@@ -185,7 +185,7 @@ void RunWindow::load_history()
 
 void RunWindow::save_history()
 {
-    auto file_or_error = Core::File::open(history_file_path(), Core::IODevice::WriteOnly);
+    auto file_or_error = Core::File::open(history_file_path(), Core::OpenMode::WriteOnly);
     if (file_or_error.is_error())
         return;
 

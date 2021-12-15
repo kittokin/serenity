@@ -74,9 +74,11 @@ public:
         return m_bytes[m_offset];
     }
 
-    bool read_LEB128_unsigned(size_t& result) { return LEB128::read_unsigned(*this, result); }
+    template<typename ValueType>
+    bool read_LEB128_unsigned(ValueType& result) { return LEB128::read_unsigned(*this, result); }
 
-    bool read_LEB128_signed(ssize_t& result) { return LEB128::read_signed(*this, result); }
+    template<typename ValueType>
+    bool read_LEB128_signed(ValueType& result) { return LEB128::read_signed(*this, result); }
 
     ReadonlyBytes bytes() const { return m_bytes; }
     size_t offset() const { return m_offset; }
@@ -129,6 +131,7 @@ public:
 
     size_t size() const { return m_offset; }
     size_t remaining() const { return m_bytes.size() - m_offset; }
+    void reset() { m_offset = 0; }
 
 private:
     size_t m_offset { 0 };
@@ -221,7 +224,7 @@ public:
         size_t nwritten = 0;
         while (bytes.size() - nwritten > 0) {
             if ((m_write_offset + nwritten) % chunk_size == 0)
-                m_chunks.append(ByteBuffer::create_uninitialized(chunk_size));
+                m_chunks.append(ByteBuffer::create_uninitialized(chunk_size).release_value()); // FIXME: Handle possible OOM situation.
 
             nwritten += bytes.slice(nwritten).copy_trimmed_to(m_chunks.last().bytes().slice((m_write_offset + nwritten) % chunk_size));
         }
@@ -238,7 +241,8 @@ public:
 
     ByteBuffer copy_into_contiguous_buffer() const
     {
-        auto buffer = ByteBuffer::create_uninitialized(size());
+        // FIXME: Handle possible OOM situation.
+        auto buffer = ByteBuffer::create_uninitialized(size()).release_value();
 
         const auto nread = read_without_consuming(buffer);
         VERIFY(nread == buffer.size());

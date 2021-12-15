@@ -7,6 +7,8 @@
 
 #include "KeysWidget.h"
 #include "TrackManager.h"
+#include <AK/Array.h>
+#include <AK/StringView.h>
 #include <LibGUI/Painter.h>
 
 KeysWidget::KeysWidget(TrackManager& track_manager)
@@ -40,7 +42,7 @@ void KeysWidget::set_key(int key, Switch switch_key)
     }
     VERIFY(m_key_on[key] <= 2);
 
-    m_track_manager.set_note_current_octave(key, switch_key);
+    m_track_manager.set_keyboard_note(key + m_track_manager.octave_base(), switch_key);
 }
 
 bool KeysWidget::note_is_set(int note) const
@@ -107,33 +109,33 @@ constexpr int black_key_width = 16;
 constexpr int black_key_x_offset = black_key_width / 2;
 constexpr int black_key_height = 60;
 
-constexpr char white_key_labels[] = {
-    'A',
-    'S',
-    'D',
-    'F',
-    'G',
-    'H',
-    'J',
-    'K',
-    'L',
-    ';',
-    '\'',
-    'r',
+constexpr int white_key_labels_count = 12;
+constexpr Array<StringView, white_key_labels_count> white_key_labels = {
+    "A",
+    "S",
+    "D",
+    "F",
+    "G",
+    "H",
+    "J",
+    "K",
+    "L",
+    ";",
+    "\'",
+    "\u23CE", // Return key symbol
 };
-constexpr int white_key_labels_count = sizeof(white_key_labels) / sizeof(char);
 
-constexpr char black_key_labels[] = {
-    'W',
-    'E',
-    'T',
-    'Y',
-    'U',
-    'O',
-    'P',
-    ']',
+constexpr int black_key_labels_count = 8;
+constexpr Array<StringView, black_key_labels_count> black_key_labels = {
+    "W",
+    "E",
+    "T",
+    "Y",
+    "U",
+    "O",
+    "P",
+    "]",
 };
-constexpr int black_key_labels_count = sizeof(black_key_labels) / sizeof(char);
 
 constexpr int black_key_offsets[] = {
     white_key_width,
@@ -175,7 +177,7 @@ void KeysWidget::paint_event(GUI::PaintEvent& event)
         painter.draw_rect(rect, Color::Black);
         if (i < white_key_labels_count) {
             rect.set_height(rect.height() * 1.5);
-            painter.draw_text(rect, StringView(&white_key_labels[i], 1), Gfx::TextAlignment::Center, Color::Black);
+            painter.draw_text(rect, white_key_labels[i], Gfx::TextAlignment::Center, Color::Black);
         }
 
         note += white_key_note_accumulator[i % white_keys_per_octave];
@@ -197,7 +199,7 @@ void KeysWidget::paint_event(GUI::PaintEvent& event)
         painter.draw_rect(rect, Color::Black);
         if (i < black_key_labels_count) {
             rect.set_height(rect.height() * 1.5);
-            painter.draw_text(rect, StringView(&black_key_labels[i], 1), Gfx::TextAlignment::Center, Color::White);
+            painter.draw_text(rect, black_key_labels[i], Gfx::TextAlignment::Center, Color::White);
         }
 
         note += black_key_note_accumulator[i % black_keys_per_octave];
@@ -268,7 +270,7 @@ int KeysWidget::note_for_event_position(const Gfx::IntPoint& a_point) const
 
 void KeysWidget::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
 
     m_mouse_down = true;
@@ -281,7 +283,7 @@ void KeysWidget::mousedown_event(GUI::MouseEvent& event)
 
 void KeysWidget::mouseup_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
 
     m_mouse_down = false;

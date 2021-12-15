@@ -11,9 +11,7 @@
 #include <LibGUI/Model.h>
 #include <LibGUI/ModelEditingDelegate.h>
 #include <LibGUI/Painter.h>
-#include <LibGUI/Scrollbar.h>
 #include <LibGUI/TableView.h>
-#include <LibGUI/TextBox.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Palette.h>
 
@@ -121,7 +119,8 @@ void TableView::paint_event(PaintEvent& event)
                         } else if (m_hovered_index.is_valid() && cell_index.row() == m_hovered_index.row()) {
                             painter.blit_brightened(cell_rect.location(), *bitmap, bitmap->rect());
                         } else {
-                            painter.blit(cell_rect.location(), *bitmap, bitmap->rect());
+                            auto opacity = cell_index.data(ModelRole::IconOpacity).as_float_or(1.0f);
+                            painter.blit(cell_rect.location(), *bitmap, bitmap->rect(), opacity);
                         }
                     }
                 } else {
@@ -173,14 +172,18 @@ void TableView::keydown_event(KeyEvent& event)
     if (event.is_accepted())
         return;
 
-    auto is_delete = event.key() == Key_Delete || event.key() == Key_Backspace;
-    if (is_editable() && edit_triggers() & EditTrigger::AnyKeyPressed && (event.code_point() != 0 || is_delete)) {
+    auto is_delete = event.key() == Key_Delete;
+    auto is_backspace = event.key() == Key_Backspace;
+    auto is_clear = is_delete || is_backspace;
+    if (is_editable() && edit_triggers() & EditTrigger::AnyKeyPressed && (event.code_point() != 0 || is_clear)) {
         begin_editing(cursor_index());
         if (m_editing_delegate) {
             if (is_delete)
-                m_editing_delegate->set_value(event.key() == Key_Delete ? String {} : String::empty());
+                m_editing_delegate->set_value(String {});
+            else if (is_backspace)
+                m_editing_delegate->set_value(String::empty());
             else
-                m_editing_delegate->set_value(event.text());
+                m_editing_delegate->set_value(event.text(), ModelEditingDelegate::SelectionBehavior::DoNotSelect);
         }
     }
 }
@@ -217,7 +220,7 @@ void TableView::move_cursor(CursorMovement movement, SelectionUpdate selection_u
         int items_per_page = visible_content_rect().height() / row_height();
         auto old_index = selection().first();
         auto new_index = model.index(max(0, old_index.row() - items_per_page), old_index.column());
-        if (model.is_valid(new_index))
+        if (model.is_within_range(new_index))
             set_cursor(new_index, selection_update);
         break;
     }
@@ -225,7 +228,7 @@ void TableView::move_cursor(CursorMovement movement, SelectionUpdate selection_u
         int items_per_page = visible_content_rect().height() / row_height();
         auto old_index = selection().first();
         auto new_index = model.index(min(model.row_count() - 1, old_index.row() + items_per_page), old_index.column());
-        if (model.is_valid(new_index))
+        if (model.is_within_range(new_index))
             set_cursor(new_index, selection_update);
         break;
     }

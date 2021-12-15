@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Assertions.h>
 #include <AK/StdLibExtras.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Slider.h>
@@ -81,16 +80,32 @@ Gfx::IntRect Slider::knob_rect() const
 
 void Slider::mousedown_event(MouseEvent& event)
 {
-    if (event.button() == MouseButton::Left) {
+    if (event.button() == MouseButton::Primary) {
         if (knob_rect().contains(event.position())) {
             m_dragging = true;
             m_drag_origin = event.position();
             m_drag_origin_value = value();
             return;
+        }
+
+        const auto mouse_offset = event.position().primary_offset_for_orientation(orientation());
+
+        if (jump_to_cursor()) {
+            float normalized_mouse_offset = 0.0f;
+            if (orientation() == Orientation::Vertical) {
+                normalized_mouse_offset = static_cast<float>(mouse_offset - track_margin()) / static_cast<float>(inner_rect().height());
+            } else {
+                normalized_mouse_offset = static_cast<float>(mouse_offset - track_margin()) / static_cast<float>(inner_rect().width());
+            }
+
+            int new_value = static_cast<int>(min() + ((max() - min()) * normalized_mouse_offset));
+            set_value(new_value);
         } else {
-            if (event.position().primary_offset_for_orientation(orientation()) > knob_rect().last_edge_for_orientation(orientation()))
+            auto knob_first_edge = knob_rect().first_edge_for_orientation(orientation());
+            auto knob_last_edge = knob_rect().last_edge_for_orientation(orientation());
+            if (mouse_offset > knob_last_edge)
                 set_value(value() + page_step());
-            else if (event.position().primary_offset_for_orientation(orientation()) < knob_rect().first_edge_for_orientation(orientation()))
+            else if (mouse_offset < knob_first_edge)
                 set_value(value() - page_step());
         }
     }
@@ -113,7 +128,7 @@ void Slider::mousemove_event(MouseEvent& event)
 
 void Slider::mouseup_event(MouseEvent& event)
 {
-    if (event.button() == MouseButton::Left) {
+    if (event.button() == MouseButton::Primary) {
         m_dragging = false;
         return;
     }

@@ -5,7 +5,6 @@
  */
 
 #include "KeyButton.h"
-#include <LibGUI/Button.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Font.h>
@@ -41,7 +40,7 @@ void KeyButton::paint_event(GUI::PaintEvent& event)
         Gfx::IntRect text_rect { 0, 0, font.width(text()), font.glyph_height() };
         text_rect.align_within({ cont_rect.x() + 7, cont_rect.y() + 4, cont_rect.width() - 14, cont_rect.height() - 14 }, Gfx::TextAlignment::Center);
 
-        painter.draw_text(text_rect, text(), font, Gfx::TextAlignment::Center, palette().button_text(), Gfx::TextElision::Right);
+        painter.draw_text(text_rect, text(), font, Gfx::TextAlignment::Center, Color::Black, Gfx::TextElision::Right);
         if (is_focused())
             painter.draw_rect(text_rect.inflated(6, 4), palette().focus_outline());
     }

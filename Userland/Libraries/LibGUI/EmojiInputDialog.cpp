@@ -29,7 +29,7 @@ static Vector<u32> supported_emoji_code_points()
         auto basename = lexical_path.basename();
         if (!basename.starts_with("U+"))
             continue;
-        u32 code_point = strtoul(basename.characters() + 2, nullptr, 16);
+        u32 code_point = strtoul(basename.to_string().characters() + 2, nullptr, 16);
         code_points.append(code_point);
     }
     return code_points;
@@ -45,7 +45,7 @@ EmojiInputDialog::EmojiInputDialog(Window* parent_window)
     main_widget.set_frame_shadow(Gfx::FrameShadow::Raised);
     main_widget.set_fill_with_background_color(true);
     auto& main_layout = main_widget.set_layout<VerticalBoxLayout>();
-    main_layout.set_margins({ 1, 1, 1, 1 });
+    main_layout.set_margins(1);
     main_layout.set_spacing(0);
 
     auto code_points = supported_emoji_code_points();

@@ -2,7 +2,7 @@
     fill_with_background_color: true
 
     layout: @GUI::VerticalBoxLayout {
-        margins: [5, 5, 5, 5]
+        margins: [5]
     }
 
     @GUI::Widget {
@@ -82,6 +82,12 @@
 
         layout: @GUI::HorizontalBoxLayout
 
+        @GUI::Button {
+            name: "debug_button"
+            text: "Debug in Hack Studio"
+            fixed_width: 150
+        }
+
         // HACK: We need something like Layout::add_spacer() in GML! :^)
         @GUI::Widget
 
@@ -89,7 +95,6 @@
             name: "close_button"
             text: "Close"
             fixed_width: 70
-            fixed_height: 22
         }
     }
 }

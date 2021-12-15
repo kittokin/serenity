@@ -9,8 +9,8 @@
 #include <LibCore/DirIterator.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/FontDatabase.h>
+#include <LibGfx/TrueTypeFont/Font.h>
 #include <LibGfx/Typeface.h>
-#include <LibTTF/Font.h>
 #include <stdlib.h>
 
 namespace Gfx {
@@ -24,48 +24,59 @@ FontDatabase& FontDatabase::the()
     return *s_the;
 }
 
+static RefPtr<Font> s_default_font;
+static String s_default_font_query;
+static RefPtr<Font> s_fixed_width_font;
+static String s_fixed_width_font_query;
+
+void FontDatabase::set_default_font_query(String query)
+{
+    if (s_default_font_query == query)
+        return;
+    s_default_font_query = move(query);
+    s_default_font = nullptr;
+}
+
+String FontDatabase::default_font_query()
+{
+    return s_default_font_query;
+}
+
 Font& FontDatabase::default_font()
 {
-    static Font* font;
-    if (!font) {
-        font = FontDatabase::the().get_by_name("Katica 10 400");
-        VERIFY(font);
+    if (!s_default_font) {
+        VERIFY(!s_default_font_query.is_empty());
+        s_default_font = FontDatabase::the().get_by_name(s_default_font_query);
+        VERIFY(s_default_font);
     }
-    return *font;
+    return *s_default_font;
+}
+
+void FontDatabase::set_fixed_width_font_query(String query)
+{
+    if (s_fixed_width_font_query == query)
+        return;
+    s_fixed_width_font_query = move(query);
+    s_fixed_width_font = nullptr;
+}
+
+String FontDatabase::fixed_width_font_query()
+{
+    return s_fixed_width_font_query;
 }
 
 Font& FontDatabase::default_fixed_width_font()
 {
-    static Font* font;
-    if (!font) {
-        font = FontDatabase::the().get_by_name("Csilla 10 400");
-        VERIFY(font);
+    if (!s_fixed_width_font) {
+        VERIFY(!s_fixed_width_font_query.is_empty());
+        s_fixed_width_font = FontDatabase::the().get_by_name(s_fixed_width_font_query);
+        VERIFY(s_fixed_width_font);
     }
-    return *font;
-}
-
-Font& FontDatabase::default_bold_fixed_width_font()
-{
-    static Font* font;
-    if (!font) {
-        font = FontDatabase::the().get_by_name("Csilla 10 700");
-        VERIFY(font);
-    }
-    return *font;
-}
-
-Font& FontDatabase::default_bold_font()
-{
-    static Font* font;
-    if (!font) {
-        font = FontDatabase::the().get_by_name("Katica 10 700");
-        VERIFY(font);
-    }
-    return *font;
+    return *s_fixed_width_font;
 }
 
 struct FontDatabase::Private {
-    HashMap<String, RefPtr<Gfx::Font>> full_name_to_font_map;
+    HashMap<String, NonnullRefPtr<Gfx::Font>> full_name_to_font_map;
     Vector<RefPtr<Typeface>> typefaces;
 };
 
@@ -82,15 +93,16 @@ FontDatabase::FontDatabase()
 
         if (path.ends_with(".font"sv)) {
             if (auto font = Gfx::BitmapFont::load_from_file(path)) {
-                m_private->full_name_to_font_map.set(font->qualified_name(), font);
+                m_private->full_name_to_font_map.set(font->qualified_name(), *font);
                 auto typeface = get_or_create_typeface(font->family(), font->variant());
                 typeface->add_bitmap_font(font);
             }
         } else if (path.ends_with(".ttf"sv)) {
             // FIXME: What about .otf and .woff
-            if (auto font = TTF::Font::load_from_file(path)) {
+            if (auto font_or_error = TTF::Font::try_load_from_file(path); !font_or_error.is_error()) {
+                auto font = font_or_error.release_value();
                 auto typeface = get_or_create_typeface(font->family(), font->variant());
-                typeface->set_ttf_font(font);
+                typeface->set_ttf_font(move(font));
             }
         }
     }
@@ -124,10 +136,17 @@ void FontDatabase::for_each_fixed_width_font(Function<void(const Gfx::Font&)> ca
         callback(*font);
 }
 
-RefPtr<Gfx::Font> FontDatabase::get_by_name(const StringView& name)
+RefPtr<Gfx::Font> FontDatabase::get_by_name(StringView name)
 {
     auto it = m_private->full_name_to_font_map.find(name);
     if (it == m_private->full_name_to_font_map.end()) {
+        auto parts = name.split_view(" "sv);
+        if (parts.size() >= 3) {
+            auto weight = parts.take_last().to_int().value_or(0);
+            auto size = parts.take_last().to_int().value_or(0);
+            auto family = String::join(' ', parts);
+            return get(family, size, weight);
+        }
         dbgln("Font lookup failed: '{}'", name);
         return nullptr;
     }

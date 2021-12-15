@@ -10,8 +10,8 @@
 #include <AK/OwnPtr.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
+#include <Kernel/Memory/Region.h>
 #include <Kernel/PhysicalAddress.h>
-#include <Kernel/VM/Region.h>
 
 namespace Kernel {
 
@@ -56,6 +56,7 @@ private:
     void global_enable();
 
     bool is_periodic_capable(u8 comparator_number) const;
+    bool is_64bit_capable(u8 comparator_number) const;
     void set_comparators_to_optimal_interrupt_state(size_t timers_count);
 
     u64 nanoseconds_to_raw_ticks() const;
@@ -64,16 +65,17 @@ private:
     explicit HPET(PhysicalAddress acpi_hpet);
     PhysicalAddress m_physical_acpi_hpet_table;
     PhysicalAddress m_physical_acpi_hpet_registers;
-    OwnPtr<Region> m_hpet_mmio_region;
+    OwnPtr<Memory::Region> m_hpet_mmio_region;
 
     u64 m_main_counter_last_read { 0 };
     u64 m_main_counter_drift { 0 };
+    u32 m_32bit_main_counter_wraps { 0 };
 
     u16 m_vendor_id;
     u16 m_minimum_tick;
     u64 m_frequency;
     u8 m_revision_id;
-    bool counter_is_64_bit_capable : 1;
+    bool m_main_counter_64bits : 1;
     bool legacy_replacement_route_capable : 1;
 
     NonnullRefPtrVector<HPETComparator> m_comparators;

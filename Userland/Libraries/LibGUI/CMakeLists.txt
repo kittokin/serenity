@@ -1,5 +1,6 @@
 compile_gml(FontPickerDialog.gml FontPickerDialogGML.h font_picker_dialog_gml)
 compile_gml(FilePickerDialog.gml FilePickerDialogGML.h file_picker_dialog_gml)
+compile_gml(PasswordInputDialog.gml PasswordInputDialogGML.h password_input_dialog_gml)
 
 set(SOURCES
     AboutDialog.cpp
@@ -21,6 +22,7 @@ set(SOURCES
     ColorInput.cpp
     ColorPicker.cpp
     ColumnsView.cpp
+    CommonActions.cpp
     CommonLocationsProvider.cpp
     ComboBox.cpp
     Command.cpp
@@ -39,6 +41,7 @@ set(SOURCES
     FontPicker.cpp
     FontPickerDialogGML.h
     Frame.cpp
+    GMLAutocompleteProvider.cpp
     GMLFormatter.cpp
     GMLLexer.cpp
     GMLParser.cpp
@@ -58,25 +61,31 @@ set(SOURCES
     LinkLabel.cpp
     ListView.cpp
     Menu.cpp
-    Menubar.cpp
     MenuItem.cpp
+    Menubar.cpp
     MessageBox.cpp
     Model.cpp
     ModelIndex.cpp
     ModelSelection.cpp
+    MouseTracker.cpp
     MultiView.cpp
     Notification.cpp
     OpacitySlider.cpp
     Painter.cpp
+    PasswordInputDialog.cpp
+    PasswordInputDialogGML.h
+    PersistentModelIndex.cpp
     ProcessChooser.cpp
     Progressbar.cpp
     RadioButton.cpp
     RegularEditingEngine.cpp
     ResizeCorner.cpp
     RunningProcessesModel.cpp
+    ScreenLayout.cpp
     ScrollableContainerWidget.cpp
     Scrollbar.cpp
     SeparatorWidget.cpp
+    SettingsWindow.cpp
     Shortcut.cpp
     Slider.cpp
     SortingProxyModel.cpp
@@ -91,8 +100,10 @@ set(SOURCES
     TextEditor.cpp
     Toolbar.cpp
     ToolbarContainer.cpp
+    Tray.cpp
     TreeView.cpp
     UndoStack.cpp
+    ValueSlider.cpp
     Variant.cpp
     VimEditingEngine.cpp
     Widget.cpp
@@ -117,4 +128,4 @@ set(GENERATED_SOURCES
 )
 
 serenity_lib(LibGUI gui)
-target_link_libraries(LibGUI LibCore LibGfx LibIPC LibThread LibRegex LibSyntax)
+target_link_libraries(LibGUI LibCore LibGfx LibIPC LibThreading LibRegex LibSyntax LibConfig)

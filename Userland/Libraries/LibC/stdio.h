@@ -8,6 +8,7 @@
 
 #define _STDIO_H // Make GMP believe we exist.
 
+#include <Kernel/API/POSIX/stdio.h>
 #include <bits/FILE.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -15,21 +16,19 @@
 #include <sys/types.h>
 
 #define FILENAME_MAX 1024
+#define FOPEN_MAX 1024
 
 __BEGIN_DECLS
 #ifndef EOF
 #    define EOF (-1)
 #endif
 
-#define SEEK_SET 0
-#define SEEK_CUR 1
-#define SEEK_END 2
-
 #define _IOFBF 0
 #define _IOLBF 1
 #define _IONBF 2
 
 #define L_tmpnam 256
+#define P_tmpdir "/tmp"
 
 extern FILE* stdin;
 extern FILE* stdout;
@@ -76,7 +75,6 @@ int vsprintf(char* buffer, const char* fmt, va_list) __attribute__((format(print
 int vsnprintf(char* buffer, size_t, const char* fmt, va_list) __attribute__((format(printf, 3, 0)));
 int fprintf(FILE*, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 int printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-void dbgputch(char);
 void dbgputstr(const char*, size_t);
 int sprintf(char* buffer, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 int asprintf(char** strp, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -89,6 +87,7 @@ void perror(const char*);
 int scanf(const char* fmt, ...) __attribute__((format(scanf, 1, 2)));
 int sscanf(const char* str, const char* fmt, ...) __attribute__((format(scanf, 2, 3)));
 int fscanf(FILE*, const char* fmt, ...) __attribute__((format(scanf, 2, 3)));
+int vscanf(const char*, va_list) __attribute__((format(scanf, 1, 0)));
 int vfscanf(FILE*, const char*, va_list) __attribute__((format(scanf, 2, 0)));
 int vsscanf(const char*, const char*, va_list) __attribute__((format(scanf, 2, 0)));
 int setvbuf(FILE*, char* buf, int mode, size_t);

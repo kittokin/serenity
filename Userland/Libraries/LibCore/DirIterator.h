@@ -23,12 +23,16 @@ public:
     explicit DirIterator(String path, Flags = Flags::NoFlags);
     ~DirIterator();
 
+    DirIterator(DirIterator&&);
+    DirIterator(DirIterator const&) = delete;
+
     bool has_error() const { return m_error != 0; }
     int error() const { return m_error; }
     const char* error_string() const { return strerror(m_error); }
     bool has_next();
     String next_path();
     String next_full_path();
+    int fd() const;
 
 private:
     DIR* m_dir = nullptr;
