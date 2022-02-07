@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BuiltinWrappers.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/RefPtr.h>
 #include <Kernel/Assertions.h>
@@ -47,7 +48,7 @@ void PhysicalRegion::initialize_zones()
         size_t zone_count = 0;
         auto first_address = base_address;
         while (remaining_pages >= pages_per_zone) {
-            m_zones.append(make<PhysicalZone>(base_address, pages_per_zone));
+            m_zones.append(adopt_nonnull_own_or_enomem(new (nothrow) PhysicalZone(base_address, pages_per_zone)).release_value_but_fixme_should_propagate_errors());
             base_address = base_address.offset(pages_per_zone * PAGE_SIZE);
             m_usable_zones.append(m_zones.last());
             remaining_pages -= pages_per_zone;
@@ -62,7 +63,7 @@ void PhysicalRegion::initialize_zones()
     m_large_zones = make_zones(large_zone_size);
 
     // Then divide any remaining space into 1 MiB zones (with 256 pages each)
-    m_small_zones = make_zones(small_zone_size);
+    make_zones(small_zone_size);
 }
 
 OwnPtr<PhysicalRegion> PhysicalRegion::try_take_pages_from_beginning(unsigned page_count)
@@ -80,7 +81,7 @@ OwnPtr<PhysicalRegion> PhysicalRegion::try_take_pages_from_beginning(unsigned pa
 NonnullRefPtrVector<PhysicalPage> PhysicalRegion::take_contiguous_free_pages(size_t count)
 {
     auto rounded_page_count = next_power_of_two(count);
-    auto order = __builtin_ctz(rounded_page_count);
+    auto order = count_trailing_zeroes(rounded_page_count);
 
     Optional<PhysicalAddress> page_base;
     for (auto& zone : m_usable_zones) {

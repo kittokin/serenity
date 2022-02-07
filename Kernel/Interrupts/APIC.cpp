@@ -20,6 +20,7 @@
 #include <Kernel/Memory/PageDirectory.h>
 #include <Kernel/Memory/TypedMapping.h>
 #include <Kernel/Panic.h>
+#include <Kernel/Scheduler.h>
 #include <Kernel/Sections.h>
 #include <Kernel/Thread.h>
 #include <Kernel/Time/APICTimer.h>
@@ -271,7 +272,12 @@ UNMAP_AFTER_INIT bool APIC::init_bsp()
     }
 
     if (kernel_command_line().is_smp_enabled()) {
-        auto madt = Memory::map_typed<ACPI::Structures::MADT>(madt_address.value());
+        auto madt_or_error = Memory::map_typed<ACPI::Structures::MADT>(madt_address.value());
+        if (madt_or_error.is_error()) {
+            dbgln("APIC: Failed to map MADT table");
+            return false;
+        }
+        auto madt = madt_or_error.release_value();
         size_t entry_index = 0;
         size_t entries_length = madt->h.length - sizeof(ACPI::Structures::MADT);
         auto* madt_entry = madt->entries;
@@ -322,8 +328,9 @@ UNMAP_AFTER_INIT static NonnullOwnPtr<Memory::Region> create_identity_mapped_reg
     return region_or_error.release_value();
 }
 
-UNMAP_AFTER_INIT void APIC::do_boot_aps()
+UNMAP_AFTER_INIT void APIC::setup_ap_boot_environment()
 {
+    VERIFY(!m_ap_boot_environment);
     VERIFY(m_processor_enabled_cnt > 1);
     u32 aps_to_enable = m_processor_enabled_cnt - 1;
 
@@ -331,11 +338,13 @@ UNMAP_AFTER_INIT void APIC::do_boot_aps()
     // Also account for the data appended to:
     // * aps_to_enable u32 values for ap_cpu_init_stacks
     // * aps_to_enable u32 values for ap_cpu_init_processor_info_array
-    auto apic_startup_region = create_identity_mapped_region(PhysicalAddress(0x8000), Memory::page_round_up(apic_ap_start_size + (2 * aps_to_enable * sizeof(u32))));
+    constexpr u64 apic_startup_region_base = 0x8000;
+    VERIFY(apic_startup_region_base + apic_ap_start_size < USER_RANGE_BASE);
+    auto apic_startup_region = create_identity_mapped_region(PhysicalAddress(apic_startup_region_base), Memory::page_round_up(apic_ap_start_size + (2 * aps_to_enable * sizeof(u32))).release_value_but_fixme_should_propagate_errors());
     memcpy(apic_startup_region->vaddr().as_ptr(), reinterpret_cast<const void*>(apic_ap_start), apic_ap_start_size);
 
     // Allocate enough stacks for all APs
-    Vector<OwnPtr<Memory::Region>> apic_ap_stacks;
+    m_ap_temporary_boot_stacks.ensure_capacity(aps_to_enable);
     for (u32 i = 0; i < aps_to_enable; i++) {
         auto stack_region_or_error = MM.allocate_kernel_region(Thread::default_kernel_stack_size, {}, Memory::Region::Access::ReadWrite, AllocationStrategy::AllocateNow);
         if (stack_region_or_error.is_error()) {
@@ -344,22 +353,22 @@ UNMAP_AFTER_INIT void APIC::do_boot_aps()
         }
         auto stack_region = stack_region_or_error.release_value();
         stack_region->set_stack(true);
-        apic_ap_stacks.append(move(stack_region));
+        m_ap_temporary_boot_stacks.unchecked_append(move(stack_region));
     }
 
     // Store pointers to all stacks for the APs to use
-    auto ap_stack_array = APIC_INIT_VAR_PTR(u32, apic_startup_region->vaddr().as_ptr(), ap_cpu_init_stacks);
-    VERIFY(aps_to_enable == apic_ap_stacks.size());
+    auto* ap_stack_array = APIC_INIT_VAR_PTR(u32, apic_startup_region->vaddr().as_ptr(), ap_cpu_init_stacks);
+    VERIFY(aps_to_enable == m_ap_temporary_boot_stacks.size());
     for (size_t i = 0; i < aps_to_enable; i++) {
-        ap_stack_array[i] = apic_ap_stacks[i]->vaddr().get() + Thread::default_kernel_stack_size;
+        ap_stack_array[i] = m_ap_temporary_boot_stacks[i]->vaddr().get() + Thread::default_kernel_stack_size;
         dbgln_if(APIC_DEBUG, "APIC: CPU[{}] stack at {}", i + 1, VirtualAddress { ap_stack_array[i] });
     }
 
     // Allocate Processor structures for all APs and store the pointer to the data
     m_ap_processor_info.resize(aps_to_enable);
     for (size_t i = 0; i < aps_to_enable; i++)
-        m_ap_processor_info[i] = make<Processor>();
-    auto ap_processor_info_array = &ap_stack_array[aps_to_enable];
+        m_ap_processor_info[i] = adopt_nonnull_own_or_enomem(new (nothrow) Processor()).release_value_but_fixme_should_propagate_errors();
+    auto* ap_processor_info_array = &ap_stack_array[aps_to_enable];
     for (size_t i = 0; i < aps_to_enable; i++) {
         ap_processor_info_array[i] = FlatPtr(m_ap_processor_info[i].ptr());
         dbgln_if(APIC_DEBUG, "APIC: CPU[{}] processor at {}", i + 1, VirtualAddress { ap_processor_info_array[i] });
@@ -378,6 +387,15 @@ UNMAP_AFTER_INIT void APIC::do_boot_aps()
     // Store the BSP's CR0 and CR4 values for the APs to use
     *APIC_INIT_VAR_PTR(u32, apic_startup_region->vaddr().as_ptr(), ap_cpu_init_cr0) = read_cr0();
     *APIC_INIT_VAR_PTR(u32, apic_startup_region->vaddr().as_ptr(), ap_cpu_init_cr4) = read_cr4();
+
+    m_ap_boot_environment = move(apic_startup_region);
+}
+
+UNMAP_AFTER_INIT void APIC::do_boot_aps()
+{
+    VERIFY(m_ap_boot_environment);
+    VERIFY(m_processor_enabled_cnt > 1);
+    u32 aps_to_enable = m_processor_enabled_cnt - 1;
 
     // Create an idle thread for each processor. We have to do this here
     // because we won't be able to send FlushTLB messages, so we have to
@@ -414,7 +432,11 @@ UNMAP_AFTER_INIT void APIC::do_boot_aps()
 
     // NOTE: Since this region is identity-mapped, we have to unmap it manually to prevent the virtual
     //       address range from leaking into the general virtual range allocator.
-    apic_startup_region->unmap(Memory::Region::ShouldDeallocateVirtualRange::No);
+    m_ap_boot_environment->unmap(Memory::Region::ShouldDeallocateVirtualRange::No);
+    m_ap_boot_environment = nullptr;
+    // When the APs signal that they finished their initialization they have already switched over to their
+    // idle thread's stack, so the temporary boot stack can be deallocated
+    m_ap_temporary_boot_stacks.clear();
 }
 
 UNMAP_AFTER_INIT void APIC::boot_aps()

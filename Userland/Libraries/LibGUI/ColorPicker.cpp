@@ -137,7 +137,6 @@ public:
         auto window = Window::construct();
         window->set_main_widget(this);
         window->set_has_alpha_channel(true);
-        window->set_background_color(Color::Transparent);
         window->set_fullscreen(true);
         window->set_frameless(true);
         window->show();
@@ -160,9 +159,11 @@ private:
     virtual void mousemove_event(GUI::MouseEvent&) override
     {
         auto new_col = WindowServerConnection::the().get_color_under_cursor();
+        if (!new_col.has_value())
+            return;
         if (new_col == m_col)
             return;
-        m_col = new_col;
+        m_col = new_col.value();
         if (on_color_changed)
             on_color_changed(m_col);
     }

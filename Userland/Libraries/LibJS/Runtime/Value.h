@@ -9,6 +9,7 @@
 
 #include <AK/Assertions.h>
 #include <AK/BitCast.h>
+#include <AK/Concepts.h>
 #include <AK/Format.h>
 #include <AK/Forward.h>
 #include <AK/Function.h>
@@ -131,7 +132,8 @@ public:
     {
     }
 
-    explicit Value(bool value)
+    template<typename T>
+    requires(SameAs<RemoveCVReference<T>, bool>) explicit Value(T value)
         : m_type(Type::Boolean)
     {
         m_value.as_bool = value;
@@ -331,6 +333,7 @@ public:
     ThrowCompletionOr<FunctionObject*> get_method(GlobalObject&, PropertyKey const&) const;
 
     String to_string_without_side_effects() const;
+    Optional<BigInt*> string_to_bigint(GlobalObject& global_object) const;
 
     Value value_or(Value fallback) const
     {
@@ -344,7 +347,7 @@ public:
     bool operator==(Value const&) const;
 
     template<typename... Args>
-    [[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> invoke(GlobalObject& global_object, PropertyKey const& property_name, Args... args);
+    [[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> invoke(GlobalObject& global_object, PropertyKey const& property_key, Args... args);
 
 private:
     Type m_type { Type::Empty };

@@ -14,6 +14,7 @@
 #include <AK/Format.h>
 #include <AK/LexicalPath.h>
 #include <AK/StringUtils.h>
+#include <Kernel/API/MemoryLayout.h>
 #include <LibCore/File.h>
 #include <LibCore/MappedFile.h>
 #include <LibELF/AuxiliaryVector.h>
@@ -33,6 +34,8 @@ namespace UserspaceEmulator {
 static constexpr u32 stack_location = 0x10000000;
 static constexpr size_t stack_size = 1 * MiB;
 
+static constexpr u32 signal_trampoline_location = 0xb0000000;
+
 static Emulator* s_the;
 
 Emulator& Emulator::the()
@@ -51,7 +54,6 @@ Emulator::Emulator(String const& executable_path, Vector<StringView> const& argu
 {
     m_malloc_tracer = make<MallocTracer>(*this);
 
-    static constexpr FlatPtr userspace_range_base = 0x00800000;
     static constexpr FlatPtr userspace_range_ceiling = 0xbe000000;
 #ifdef UE_ASLR
     static constexpr FlatPtr page_mask = 0xfffff000u;
@@ -70,7 +72,7 @@ Emulator::Emulator(String const& executable_path, Vector<StringView> const& argu
     setup_signal_trampoline();
 }
 
-Vector<ELF::AuxiliaryValue> Emulator::generate_auxiliary_vector(FlatPtr load_base, FlatPtr entry_eip, String executable_path, int executable_fd) const
+Vector<ELF::AuxiliaryValue> Emulator::generate_auxiliary_vector(FlatPtr load_base, FlatPtr entry_eip, String const& executable_path, int executable_fd) const
 {
     // FIXME: This is not fully compatible with the auxiliary vector the kernel generates, this is just the bare
     //        minimum to get the loader going.
@@ -95,6 +97,7 @@ Vector<ELF::AuxiliaryValue> Emulator::generate_auxiliary_vector(FlatPtr load_bas
 
 void Emulator::setup_stack(Vector<ELF::AuxiliaryValue> aux_vector)
 {
+    m_range_allocator.reserve_user_range(VirtualAddress(stack_location), stack_size);
     auto stack_region = make<SimpleRegion>(stack_location, stack_size);
     stack_region->set_stack(true);
     m_mmu.add_region(move(stack_region));
@@ -102,14 +105,14 @@ void Emulator::setup_stack(Vector<ELF::AuxiliaryValue> aux_vector)
 
     Vector<u32> argv_entries;
 
-    for (auto& argument : m_arguments) {
+    for (auto const& argument : m_arguments) {
         m_cpu.push_string(argument);
         argv_entries.append(m_cpu.esp().value());
     }
 
     Vector<u32> env_entries;
 
-    for (auto& variable : m_environment) {
+    for (auto const& variable : m_environment) {
         m_cpu.push_string(variable.characters());
         env_entries.append(m_cpu.esp().value());
     }
@@ -163,11 +166,13 @@ bool Emulator::load_elf()
         VERIFY_NOT_REACHED();
     }
 
-    String interpreter_path;
-    if (!ELF::validate_program_headers(*(Elf32_Ehdr const*)elf_image_data.data(), elf_image_data.size(), (u8 const*)elf_image_data.data(), elf_image_data.size(), &interpreter_path)) {
+    StringBuilder interpreter_path_builder;
+    auto result_or_error = ELF::validate_program_headers(*(Elf32_Ehdr const*)elf_image_data.data(), elf_image_data.size(), elf_image_data, &interpreter_path_builder);
+    if (result_or_error.is_error() || !result_or_error.value()) {
         reportln("failed to validate ELF file");
         return false;
     }
+    auto interpreter_path = interpreter_path_builder.string_view();
 
     VERIFY(!interpreter_path.is_null());
     dbgln("interpreter: {}", interpreter_path);
@@ -183,7 +188,9 @@ bool Emulator::load_elf()
         VERIFY(program_header.type() != PT_TLS);
 
         if (program_header.type() == PT_LOAD) {
-            auto region = make<SimpleRegion>(program_header.vaddr().offset(interpreter_load_offset).get(), program_header.size_in_memory());
+            auto start_address = program_header.vaddr().offset(interpreter_load_offset);
+            m_range_allocator.reserve_user_range(start_address, program_header.size_in_memory());
+            auto region = make<SimpleRegion>(start_address.get(), program_header.size_in_memory());
             if (program_header.is_executable() && !program_header.is_writable())
                 region->set_text(true);
             memcpy(region->data(), program_header.raw_data(), program_header.size_in_image());
@@ -341,7 +348,8 @@ void Emulator::handle_repl()
         if (parts.size() == 1) {
             did_receive_signal(SIGINT);
             return;
-        } else if (parts.size() == 2) {
+        }
+        if (parts.size() == 2) {
             auto number = AK::StringUtils::convert_to_int<i32>(parts[1]);
             if (number.has_value()) {
                 did_receive_signal(number.value());
@@ -451,17 +459,18 @@ String Emulator::create_backtrace_line(FlatPtr address)
     auto maybe_symbol = symbol_at(address);
     if (!maybe_symbol.has_value()) {
         return String::formatted("=={}==    {:p}", getpid(), address);
-    } else if (!maybe_symbol->source_position.has_value()) {
-        return String::formatted("=={}==    {:p}  [{}]: {}", getpid(), address, maybe_symbol->lib_name, maybe_symbol->symbol);
-    } else {
-        auto const& source_position = maybe_symbol->source_position.value();
-        return String::formatted("=={}==    {:p}  [{}]: {} (\e[34;1m{}\e[0m:{})", getpid(), address, maybe_symbol->lib_name, maybe_symbol->symbol, LexicalPath::basename(source_position.file_path), source_position.line_number);
     }
+    if (!maybe_symbol->source_position.has_value()) {
+        return String::formatted("=={}==    {:p}  [{}]: {}", getpid(), address, maybe_symbol->lib_name, maybe_symbol->symbol);
+    }
+
+    auto const& source_position = maybe_symbol->source_position.value();
+    return String::formatted("=={}==    {:p}  [{}]: {} (\e[34;1m{}\e[0m:{})", getpid(), address, maybe_symbol->lib_name, maybe_symbol->symbol, LexicalPath::basename(source_position.file_path), source_position.line_number);
 }
 
 void Emulator::dump_backtrace(Vector<FlatPtr> const& backtrace)
 {
-    for (auto& address : backtrace) {
+    for (auto const& address : backtrace) {
         reportln("{}", create_backtrace_line(address));
     }
 }
@@ -484,7 +493,7 @@ void Emulator::emit_profile_sample(AK::OutputStream& output)
     output.write_or_error(builder.string_view().bytes());
 }
 
-void Emulator::emit_profile_event(AK::OutputStream& output, StringView event_name, String contents)
+void Emulator::emit_profile_event(AK::OutputStream& output, StringView event_name, String const& contents)
 {
     StringBuilder builder;
     timeval tv {};
@@ -494,13 +503,13 @@ void Emulator::emit_profile_event(AK::OutputStream& output, StringView event_nam
     output.write_or_error(builder.string_view().bytes());
 }
 
-String Emulator::create_instruction_line(FlatPtr address, X86::Instruction insn)
+String Emulator::create_instruction_line(FlatPtr address, X86::Instruction const& insn)
 {
     auto symbol = symbol_at(address);
     if (!symbol.has_value() || !symbol->source_position.has_value())
         return String::formatted("{:p}: {}", address, insn.to_string(address));
-    else
-        return String::formatted("{:p}: {} \e[34;1m{}\e[0m:{}", address, insn.to_string(address), LexicalPath::basename(symbol->source_position->file_path), symbol->source_position.value().line_number);
+
+    return String::formatted("{:p}: {} \e[34;1m{}\e[0m:{}", address, insn.to_string(address), LexicalPath::basename(symbol->source_position->file_path), symbol->source_position.value().line_number);
 }
 
 static void emulator_signal_handler(int signum)
@@ -584,6 +593,9 @@ void Emulator::dispatch_one_pending_signal()
     VERIFY(signum != -1);
     m_pending_signals &= ~(1 << signum);
 
+    if (((1 << (signum - 1)) & m_signal_mask) != 0)
+        return;
+
     auto& handler = m_signal_handler[signum];
 
     if (handler.handler == 0) {
@@ -664,7 +676,8 @@ extern "C" void asm_signal_trampoline_end(void);
 
 void Emulator::setup_signal_trampoline()
 {
-    auto trampoline_region = make<SimpleRegion>(0xb0000000, 4096);
+    m_range_allocator.reserve_user_range(VirtualAddress(signal_trampoline_location), 4096);
+    auto trampoline_region = make<SimpleRegion>(signal_trampoline_location, 4096);
 
     u8* trampoline = (u8*)asm_signal_trampoline;
     u8* trampoline_end = (u8*)asm_signal_trampoline_end;

@@ -22,7 +22,7 @@ void ClientConnection::for_each(Function<void(ClientConnection&)> callback)
         callback(connection);
 }
 
-ClientConnection::ClientConnection(NonnullRefPtr<Core::LocalSocket> client_socket, int client_id, Mixer& mixer)
+ClientConnection::ClientConnection(NonnullOwnPtr<Core::Stream::LocalSocket> client_socket, int client_id, Mixer& mixer)
     : IPC::ClientConnection<AudioClientEndpoint, AudioServerEndpoint>(*this, move(client_socket), client_id)
     , m_mixer(mixer)
 {
@@ -43,9 +43,9 @@ void ClientConnection::did_finish_playing_buffer(Badge<ClientAudioStream>, int b
     async_finished_playing_buffer(buffer_id);
 }
 
-void ClientConnection::did_change_muted_state(Badge<Mixer>, bool muted)
+void ClientConnection::did_change_main_mix_muted_state(Badge<Mixer>, bool muted)
 {
-    async_muted_state_changed(muted);
+    async_main_mix_muted_state_changed(muted);
 }
 
 void ClientConnection::did_change_main_mix_volume(Badge<Mixer>, double volume)
@@ -140,13 +140,27 @@ Messages::AudioServer::GetPlayingBufferResponse ClientConnection::get_playing_bu
     return id;
 }
 
-Messages::AudioServer::GetMutedResponse ClientConnection::get_muted()
+Messages::AudioServer::IsMainMixMutedResponse ClientConnection::is_main_mix_muted()
 {
     return m_mixer.is_muted();
 }
 
-void ClientConnection::set_muted(bool muted)
+void ClientConnection::set_main_mix_muted(bool muted)
 {
     m_mixer.set_muted(muted);
+}
+
+Messages::AudioServer::IsSelfMutedResponse ClientConnection::is_self_muted()
+{
+    if (m_queue)
+        return m_queue->is_muted();
+
+    return false;
+}
+
+void ClientConnection::set_self_muted(bool muted)
+{
+    if (m_queue)
+        m_queue->set_muted(muted);
 }
 }

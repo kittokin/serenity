@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
- * Copyright (c) 2021, David Tuin <davidot@serenityos.org>
+ * Copyright (c) 2020-2022, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021-2022, David Tuin <davidot@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -21,6 +21,7 @@
 #include <LibJS/Runtime/ErrorTypes.h>
 #include <LibJS/Runtime/Exception.h>
 #include <LibJS/Runtime/ExecutionContext.h>
+#include <LibJS/Runtime/Iterator.h>
 #include <LibJS/Runtime/MarkedValueList.h>
 #include <LibJS/Runtime/Promise.h>
 #include <LibJS/Runtime/Value.h>
@@ -29,15 +30,6 @@ namespace JS {
 
 class Identifier;
 struct BindingPattern;
-
-enum class ScopeType {
-    None,
-    Function,
-    Block,
-    Try,
-    Breakable,
-    Continuable,
-};
 
 class VM : public RefCounted<VM> {
 public:
@@ -91,11 +83,9 @@ public:
 
     bool did_reach_stack_space_limit() const
     {
-#ifdef HAS_ADDRESS_SANITIZER
+        // Address sanitizer (ASAN) used to check for more space but
+        // currently we can't detect the stack size with it enabled.
         return m_stack_info.size_free() < 32 * KiB;
-#else
-        return m_stack_info.size_free() < 16 * KiB;
-#endif
     }
 
     ThrowCompletionOr<void> push_execution_context(ExecutionContext& context, GlobalObject& global_object)
@@ -131,6 +121,11 @@ public:
     Realm const* current_realm() const { return running_execution_context().realm; }
     Realm* current_realm() { return running_execution_context().realm; }
 
+    // https://tc39.es/ecma262/#active-function-object
+    // The value of the Function component of the running execution context is also called the active function object.
+    FunctionObject const* active_function_object() const { return running_execution_context().function; }
+    FunctionObject* active_function_object() { return running_execution_context().function; }
+
     bool in_strict_mode() const;
 
     size_t argument_count() const
@@ -155,45 +150,15 @@ public:
         return running_execution_context().this_value;
     }
 
-    Value resolve_this_binding(GlobalObject&);
-
-    Value last_value() const { return m_last_value; }
-    void set_last_value(Badge<Bytecode::Interpreter>, Value value) { m_last_value = value; }
-    void set_last_value(Badge<Interpreter>, Value value) { m_last_value = value; }
+    ThrowCompletionOr<Value> resolve_this_binding(GlobalObject&);
 
     const StackInfo& stack_info() const { return m_stack_info; };
-
-    bool underscore_is_last_value() const { return m_underscore_is_last_value; }
-    void set_underscore_is_last_value(bool b) { m_underscore_is_last_value = b; }
 
     u32 execution_generation() const { return m_execution_generation; }
     void finish_execution_generation() { ++m_execution_generation; }
 
-    void unwind(ScopeType type, FlyString label = {})
-    {
-        m_unwind_until = type;
-        m_unwind_until_label = move(label);
-    }
-    void stop_unwind()
-    {
-        m_unwind_until = ScopeType::None;
-        m_unwind_until_label = {};
-    }
-    bool should_unwind_until(ScopeType type, Vector<FlyString> const& labels) const
-    {
-        if (m_unwind_until_label.is_null())
-            return m_unwind_until == type;
-        return m_unwind_until == type && any_of(labels.begin(), labels.end(), [&](FlyString const& label) {
-            return m_unwind_until_label == label;
-        });
-    }
-    bool should_unwind() const { return m_unwind_until != ScopeType::None; }
-
-    ScopeType unwind_until() const { return m_unwind_until; }
-    FlyString unwind_until_label() const { return m_unwind_until_label; }
-
-    Reference resolve_binding(FlyString const&, Environment* = nullptr);
-    Reference get_identifier_reference(Environment*, FlyString, bool strict, size_t hops = 0);
+    ThrowCompletionOr<Reference> resolve_binding(FlyString const&, Environment* = nullptr);
+    ThrowCompletionOr<Reference> get_identifier_reference(Environment*, FlyString, bool strict, size_t hops = 0);
 
     template<typename T, typename... Args>
     void throw_exception(GlobalObject& global_object, Args&&... args)
@@ -235,18 +200,6 @@ public:
 
     Value get_new_target();
 
-    template<typename... Args>
-    [[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> call(FunctionObject& function, Value this_value, Args... args)
-    {
-        if constexpr (sizeof...(Args) > 0) {
-            MarkedValueList arguments_list { heap() };
-            (..., arguments_list.append(move(args)));
-            return call(function, this_value, move(arguments_list));
-        }
-
-        return call(function, this_value);
-    }
-
     CommonPropertyNames names;
 
     void run_queued_promise_jobs();
@@ -274,15 +227,33 @@ public:
     void save_execution_context_stack();
     void restore_execution_context_stack();
 
+    // Do not call this method unless you are sure this is the only and first module to be loaded in this vm.
+    ThrowCompletionOr<void> link_and_eval_module(Badge<Interpreter>, SourceTextModule& module);
+
+    ScriptOrModule get_active_script_or_module() const;
+
+    Function<ThrowCompletionOr<NonnullRefPtr<Module>>(ScriptOrModule, ModuleRequest const&)> host_resolve_imported_module;
+    Function<void(ScriptOrModule, ModuleRequest, PromiseCapability)> host_import_module_dynamically;
+    Function<void(ScriptOrModule, ModuleRequest const&, PromiseCapability, Promise*)> host_finish_dynamic_import;
+
+    Function<HashMap<PropertyKey, Value>(SourceTextModule const&)> host_get_import_meta_properties;
+    Function<void(Object*, SourceTextModule const&)> host_finalize_import_meta;
+
+    Function<Vector<String>()> host_get_supported_import_assertions;
+
+    void enable_default_host_import_module_dynamically_hook();
+
 private:
     explicit VM(OwnPtr<CustomData>);
 
-    [[nodiscard]] ThrowCompletionOr<Value> call_internal(FunctionObject&, Value this_value, Optional<MarkedValueList> arguments);
-
-    ThrowCompletionOr<Object*> copy_data_properties(Object& rest_object, Object const& source, HashTable<PropertyKey> const& seen_names, GlobalObject& global_object);
-
     ThrowCompletionOr<void> property_binding_initialization(BindingPattern const& binding, Value value, Environment* environment, GlobalObject& global_object);
-    ThrowCompletionOr<void> iterator_binding_initialization(BindingPattern const& binding, Object* iterator, bool& iterator_done, Environment* environment, GlobalObject& global_object);
+    ThrowCompletionOr<void> iterator_binding_initialization(BindingPattern const& binding, Iterator& iterator_record, Environment* environment, GlobalObject& global_object);
+
+    ThrowCompletionOr<NonnullRefPtr<Module>> resolve_imported_module(ScriptOrModule referencing_script_or_module, ModuleRequest const& module_request);
+    ThrowCompletionOr<void> link_and_eval_module(Module& module);
+
+    void import_module_dynamically(ScriptOrModule referencing_script_or_module, ModuleRequest module_request, PromiseCapability promise_capability);
+    void finish_dynamic_import(ScriptOrModule referencing_script_or_module, ModuleRequest module_request, PromiseCapability promise_capability, Promise* inner_promise);
 
     Exception* m_exception { nullptr };
 
@@ -295,10 +266,6 @@ private:
 
     Vector<Vector<ExecutionContext*>> m_saved_execution_context_stacks;
 
-    Value m_last_value;
-    ScopeType m_unwind_until { ScopeType::None };
-    FlyString m_unwind_until_label;
-
     StackInfo m_stack_info;
 
     HashMap<String, Symbol*> m_global_symbol_map;
@@ -310,26 +277,27 @@ private:
     PrimitiveString* m_empty_string { nullptr };
     PrimitiveString* m_single_ascii_character_strings[128] {};
 
+    struct StoredModule {
+        ScriptOrModule referencing_script_or_module;
+        String filepath;
+        String type;
+        NonnullRefPtr<Module> module;
+        bool has_once_started_linking { false };
+    };
+
+    StoredModule* get_stored_module(ScriptOrModule const& script_or_module, String const& filepath, String const& type);
+
+    Vector<StoredModule> m_loaded_modules;
+
 #define __JS_ENUMERATE(SymbolName, snake_name) \
     Symbol* m_well_known_symbol_##snake_name { nullptr };
     JS_ENUMERATE_WELL_KNOWN_SYMBOLS
 #undef __JS_ENUMERATE
 
-    bool m_underscore_is_last_value { false };
-
     u32 m_execution_generation { 0 };
 
     OwnPtr<CustomData> m_custom_data;
 };
-
-template<>
-[[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> VM::call(FunctionObject& function, Value this_value, MarkedValueList arguments) { return call_internal(function, this_value, move(arguments)); }
-
-template<>
-[[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> VM::call(FunctionObject& function, Value this_value, Optional<MarkedValueList> arguments) { return call_internal(function, this_value, move(arguments)); }
-
-template<>
-[[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> VM::call(FunctionObject& function, Value this_value) { return call(function, this_value, Optional<MarkedValueList> {}); }
 
 ALWAYS_INLINE Heap& Cell::heap() const
 {

@@ -9,6 +9,7 @@
 #include <AK/ScopeGuard.h>
 #include <Kernel/Arch/RegisterState.h>
 #include <Kernel/Arch/SmapDisabler.h>
+#include <Kernel/Arch/x86/SafeMem.h>
 #include <Kernel/FileSystem/Custody.h>
 #include <Kernel/KBufferBuilder.h>
 #include <Kernel/PerformanceEventBuffer.h>
@@ -23,31 +24,47 @@ PerformanceEventBuffer::PerformanceEventBuffer(NonnullOwnPtr<KBuffer> buffer)
 
 NEVER_INLINE ErrorOr<void> PerformanceEventBuffer::append(int type, FlatPtr arg1, FlatPtr arg2, StringView arg3, Thread* current_thread)
 {
-    FlatPtr ebp;
+    FlatPtr base_pointer;
+#if ARCH(I386)
     asm volatile("movl %%ebp, %%eax"
-                 : "=a"(ebp));
-    return append_with_ip_and_bp(current_thread->pid(), current_thread->tid(), 0, ebp, type, 0, arg1, arg2, arg3);
+                 : "=a"(base_pointer));
+#else
+    asm volatile("movq %%rbp, %%rax"
+                 : "=a"(base_pointer));
+#endif
+    return append_with_ip_and_bp(current_thread->pid(), current_thread->tid(), 0, base_pointer, type, 0, arg1, arg2, arg3);
 }
 
 static Vector<FlatPtr, PerformanceEvent::max_stack_frame_count> raw_backtrace(FlatPtr bp, FlatPtr ip)
 {
     Vector<FlatPtr, PerformanceEvent::max_stack_frame_count> backtrace;
     if (ip != 0)
-        backtrace.append(ip);
+        backtrace.unchecked_append(ip);
     FlatPtr stack_ptr_copy;
     FlatPtr stack_ptr = bp;
     // FIXME: Figure out how to remove this SmapDisabler without breaking profile stacks.
     SmapDisabler disabler;
+    // NOTE: The stack should always have kernel frames first, followed by userspace frames.
+    //       If a userspace frame points back into kernel memory, something is afoot.
+    bool is_walking_userspace_stack = false;
     while (stack_ptr) {
         void* fault_at;
         if (!safe_memcpy(&stack_ptr_copy, (void*)stack_ptr, sizeof(FlatPtr), fault_at))
             break;
+        if (!Memory::is_user_address(VirtualAddress { stack_ptr })) {
+            if (is_walking_userspace_stack) {
+                dbgln("SHENANIGANS! Userspace stack points back into kernel memory");
+                break;
+            }
+        } else {
+            is_walking_userspace_stack = true;
+        }
         FlatPtr retaddr;
         if (!safe_memcpy(&retaddr, (void*)(stack_ptr + sizeof(FlatPtr)), sizeof(FlatPtr), fault_at))
             break;
         if (retaddr == 0)
             break;
-        backtrace.append(retaddr);
+        backtrace.unchecked_append(retaddr);
         if (backtrace.size() == PerformanceEvent::max_stack_frame_count)
             break;
         stack_ptr = stack_ptr_copy;
@@ -70,7 +87,7 @@ ErrorOr<void> PerformanceEventBuffer::append_with_ip_and_bp(ProcessID pid, Threa
     if ((g_profiling_event_mask & type) == 0)
         return EINVAL;
 
-    auto current_thread = Thread::current();
+    auto* current_thread = Thread::current();
     u32 enter_count = 0;
     if (current_thread)
         enter_count = current_thread->enter_profiler();
@@ -175,15 +192,22 @@ ErrorOr<void> PerformanceEventBuffer::to_json_impl(Serializer& object) const
 {
     {
         auto strings = object.add_array("strings");
-        for (auto& it : m_strings) {
+        for (auto const& it : m_strings) {
             strings.add(it->view());
         }
     }
 
+    bool show_kernel_addresses = Process::current().is_superuser();
     auto array = object.add_array("events");
     bool seen_first_sample = false;
     for (size_t i = 0; i < m_count; ++i) {
-        auto& event = at(i);
+        auto const& event = at(i);
+
+        if (!show_kernel_addresses) {
+            if (event.type == PERF_EVENT_KMALLOC || event.type == PERF_EVENT_KFREE)
+                continue;
+        }
+
         auto event_object = array.add_object();
         switch (event.type) {
         case PERF_EVENT_SAMPLE:
@@ -263,7 +287,10 @@ ErrorOr<void> PerformanceEventBuffer::to_json_impl(Serializer& object) const
             seen_first_sample = true;
         auto stack_array = event_object.add_array("stack");
         for (size_t j = 0; j < event.stack_size; ++j) {
-            stack_array.add(event.stack[j]);
+            auto address = event.stack[j];
+            if (!show_kernel_addresses && !Memory::is_user_address(VirtualAddress { address }))
+                address = 0xdeadc0de;
+            stack_array.add(address);
         }
         stack_array.finish();
         event_object.finish();
@@ -287,29 +314,34 @@ OwnPtr<PerformanceEventBuffer> PerformanceEventBuffer::try_create_with_size(size
     return adopt_own_if_nonnull(new (nothrow) PerformanceEventBuffer(buffer_or_error.release_value()));
 }
 
-void PerformanceEventBuffer::add_process(const Process& process, ProcessEventType event_type)
+ErrorOr<void> PerformanceEventBuffer::add_process(const Process& process, ProcessEventType event_type)
 {
     SpinlockLocker locker(process.address_space().get_lock());
 
-    String executable;
+    OwnPtr<KString> executable;
     if (process.executable())
-        executable = process.executable()->absolute_path();
+        executable = TRY(process.executable()->try_serialize_absolute_path());
     else
-        executable = String::formatted("<{}>", process.name());
+        executable = TRY(KString::formatted("<{}>", process.name()));
 
-    [[maybe_unused]] auto rc = append_with_ip_and_bp(process.pid(), 0, 0, 0,
+    TRY(append_with_ip_and_bp(process.pid(), 0, 0, 0,
         event_type == ProcessEventType::Create ? PERF_EVENT_PROCESS_CREATE : PERF_EVENT_PROCESS_EXEC,
-        0, process.pid().value(), 0, executable);
+        0, process.pid().value(), 0, executable->view()));
 
+    ErrorOr<void> result;
     process.for_each_thread([&](auto& thread) {
-        [[maybe_unused]] auto rc = append_with_ip_and_bp(process.pid(), thread.tid().value(),
+        result = append_with_ip_and_bp(process.pid(), thread.tid().value(),
             0, 0, PERF_EVENT_THREAD_CREATE, 0, 0, 0, nullptr);
+        return result.is_error() ? IterationDecision::Break : IterationDecision::Continue;
     });
+    TRY(result);
 
-    for (auto& region : process.address_space().regions()) {
-        [[maybe_unused]] auto rc = append_with_ip_and_bp(process.pid(), 0,
-            0, 0, PERF_EVENT_MMAP, 0, region->range().base().get(), region->range().size(), region->name());
+    for (auto const& region : process.address_space().regions()) {
+        TRY(append_with_ip_and_bp(process.pid(), 0,
+            0, 0, PERF_EVENT_MMAP, 0, region->range().base().get(), region->range().size(), region->name()));
     }
+
+    return {};
 }
 
 ErrorOr<FlatPtr> PerformanceEventBuffer::register_string(NonnullOwnPtr<KString> string)

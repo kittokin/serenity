@@ -5,6 +5,7 @@
  */
 
 #include <AK/StringView.h>
+#include <Kernel/API/POSIX/errno.h>
 #include <Kernel/Debug.h>
 #include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Net/IPv4Socket.h>
@@ -13,7 +14,6 @@
 #include <Kernel/Net/Socket.h>
 #include <Kernel/Process.h>
 #include <Kernel/UnixTypes.h>
-#include <LibC/errno_numbers.h>
 
 namespace Kernel {
 
@@ -78,6 +78,8 @@ ErrorOr<void> Socket::queue_connection_from(NonnullRefPtr<Socket> peer)
 
 ErrorOr<void> Socket::setsockopt(int level, int option, Userspace<const void*> user_value, socklen_t user_value_size)
 {
+    MutexLocker locker(mutex());
+
     if (level != SOL_SOCKET)
         return ENOPROTOOPT;
     VERIFY(level == SOL_SOCKET);
@@ -112,23 +114,17 @@ ErrorOr<void> Socket::setsockopt(int level, int option, Userspace<const void*> u
     case SO_TIMESTAMP:
         if (user_value_size != sizeof(int))
             return EINVAL;
-        {
-            int timestamp;
-            TRY(copy_from_user(&timestamp, static_ptr_cast<const int*>(user_value)));
-            m_timestamp = timestamp;
-        }
-        if (m_timestamp && (domain() != AF_INET || type() == SOCK_STREAM)) {
+        m_timestamp = TRY(copy_typed_from_user(static_ptr_cast<int const*>(user_value)));
+        if (m_timestamp != 0 && (domain() != AF_INET || type() == SOCK_STREAM)) {
             // FIXME: Support SO_TIMESTAMP for more protocols?
             m_timestamp = 0;
             return ENOTSUP;
         }
         return {};
     case SO_DONTROUTE: {
-        int routing_disabled;
-        if (user_value_size != sizeof(routing_disabled))
+        if (user_value_size != sizeof(int))
             return EINVAL;
-        TRY(copy_from_user(&routing_disabled, static_ptr_cast<const int*>(user_value)));
-        m_routing_disabled = routing_disabled != 0;
+        m_routing_disabled = TRY(copy_typed_from_user(static_ptr_cast<int const*>(user_value))) != 0;
         return {};
     }
     default:
@@ -139,6 +135,8 @@ ErrorOr<void> Socket::setsockopt(int level, int option, Userspace<const void*> u
 
 ErrorOr<void> Socket::getsockopt(OpenFileDescription&, int level, int option, Userspace<void*> value, Userspace<socklen_t*> value_size)
 {
+    MutexLocker locker(mutex());
+
     socklen_t size;
     TRY(copy_from_user(&size, value_size.unsafe_userspace_ptr()));
 
@@ -162,7 +160,7 @@ ErrorOr<void> Socket::getsockopt(OpenFileDescription&, int level, int option, Us
         if (size < sizeof(timeval))
             return EINVAL;
         {
-            timeval tv = m_send_timeout.to_timeval();
+            timeval tv = m_receive_timeout.to_timeval();
             TRY(copy_to_user(static_ptr_cast<timeval*>(value), &tv));
         }
         size = sizeof(timeval);
@@ -233,7 +231,7 @@ ErrorOr<void> Socket::getsockopt(OpenFileDescription&, int level, int option, Us
         return copy_to_user(value_size, &size);
     }
     default:
-        dbgln("setsockopt({}) at SOL_SOCKET not implemented.", option);
+        dbgln("getsockopt({}) at SOL_SOCKET not implemented.", option);
         return ENOPROTOOPT;
     }
 }
@@ -269,11 +267,11 @@ ErrorOr<void> Socket::shutdown(int how)
     return {};
 }
 
-ErrorOr<void> Socket::stat(::stat& st) const
+ErrorOr<struct stat> Socket::stat() const
 {
-    memset(&st, 0, sizeof(st));
+    struct stat st = {};
     st.st_mode = S_IFSOCK;
-    return {};
+    return st;
 }
 
 void Socket::set_connected(bool connected)

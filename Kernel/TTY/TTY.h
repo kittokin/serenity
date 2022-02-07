@@ -23,8 +23,8 @@ public:
 
     virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
     virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
-    virtual bool can_read(const OpenFileDescription&, size_t) const override;
-    virtual bool can_write(const OpenFileDescription&, size_t) const override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override;
     virtual ErrorOr<void> ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg) override final;
     virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override;
 
@@ -53,7 +53,7 @@ protected:
     virtual ErrorOr<size_t> on_tty_write(const UserOrKernelBuffer&, size_t) = 0;
     void set_size(unsigned short columns, unsigned short rows);
 
-    TTY(unsigned major, unsigned minor);
+    TTY(MajorNumber major, MinorNumber minor);
     void emit(u8, bool do_evaluate_block_conditions = false);
     void echo_with_processing(u8);
 

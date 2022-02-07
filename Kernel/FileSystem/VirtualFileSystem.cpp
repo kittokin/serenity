@@ -7,6 +7,7 @@
 #include <AK/GenericLexer.h>
 #include <AK/Singleton.h>
 #include <AK/StringBuilder.h>
+#include <Kernel/API/POSIX/errno.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Devices/BlockDevice.h>
 #include <Kernel/Devices/DeviceManagement.h>
@@ -19,12 +20,10 @@
 #include <Kernel/KSyms.h>
 #include <Kernel/Process.h>
 #include <Kernel/Sections.h>
-#include <LibC/errno_numbers.h>
 
 namespace Kernel {
 
 static Singleton<VirtualFileSystem> s_the;
-static constexpr int symlink_recursion_limit { 5 }; // FIXME: increase?
 static constexpr int root_mount_flags = MS_NODEV | MS_NOSUID | MS_RDONLY;
 
 UNMAP_AFTER_INIT void VirtualFileSystem::initialize()
@@ -53,7 +52,7 @@ InodeIdentifier VirtualFileSystem::root_inode_id() const
 
 ErrorOr<void> VirtualFileSystem::mount(FileSystem& fs, Custody& mount_point, int flags)
 {
-    return m_mounts.with_exclusive([&](auto& mounts) -> ErrorOr<void> {
+    return m_mounts.with([&](auto& mounts) -> ErrorOr<void> {
         auto& inode = mount_point.inode();
         dbgln("VirtualFileSystem: Mounting {} at inode {} with flags {}",
             fs.class_name(),
@@ -68,7 +67,7 @@ ErrorOr<void> VirtualFileSystem::mount(FileSystem& fs, Custody& mount_point, int
 
 ErrorOr<void> VirtualFileSystem::bind_mount(Custody& source, Custody& mount_point, int flags)
 {
-    return m_mounts.with_exclusive([&](auto& mounts) -> ErrorOr<void> {
+    return m_mounts.with([&](auto& mounts) -> ErrorOr<void> {
         dbgln("VirtualFileSystem: Bind-mounting inode {} at inode {}", source.inode().identifier(), mount_point.inode().identifier());
         // FIXME: check that this is not already a mount point
         Mount mount { source.inode(), mount_point, flags };
@@ -93,7 +92,7 @@ ErrorOr<void> VirtualFileSystem::unmount(Inode& guest_inode)
 {
     dbgln("VirtualFileSystem: unmount called with inode {}", guest_inode.identifier());
 
-    return m_mounts.with_exclusive([&](auto& mounts) -> ErrorOr<void> {
+    return m_mounts.with([&](auto& mounts) -> ErrorOr<void> {
         for (size_t i = 0; i < mounts.size(); ++i) {
             auto& mount = mounts[i];
             if (&mount.guest() != &guest_inode)
@@ -127,7 +126,7 @@ ErrorOr<void> VirtualFileSystem::mount_root(FileSystem& fs)
     auto pseudo_path = TRY(static_cast<FileBackedFileSystem&>(fs).file_description().pseudo_path());
     dmesgln("VirtualFileSystem: mounted root from {} ({})", fs.class_name(), pseudo_path);
 
-    m_mounts.with_exclusive([&](auto& mounts) {
+    m_mounts.with([&](auto& mounts) {
         mounts.append(move(mount));
     });
 
@@ -137,7 +136,7 @@ ErrorOr<void> VirtualFileSystem::mount_root(FileSystem& fs)
 
 auto VirtualFileSystem::find_mount_for_host(InodeIdentifier id) -> Mount*
 {
-    return m_mounts.with_exclusive([&](auto& mounts) -> Mount* {
+    return m_mounts.with([&](auto& mounts) -> Mount* {
         for (auto& mount : mounts) {
             if (mount.host() && mount.host()->identifier() == id)
                 return &mount;
@@ -148,7 +147,7 @@ auto VirtualFileSystem::find_mount_for_host(InodeIdentifier id) -> Mount*
 
 auto VirtualFileSystem::find_mount_for_guest(InodeIdentifier id) -> Mount*
 {
-    return m_mounts.with_exclusive([&](auto& mounts) -> Mount* {
+    return m_mounts.with([&](auto& mounts) -> Mount* {
         for (auto& mount : mounts) {
             if (mount.guest().identifier() == id)
                 return &mount;
@@ -435,9 +434,9 @@ ErrorOr<void> VirtualFileSystem::chmod(Custody& custody, mode_t mode)
     return inode.chmod(mode);
 }
 
-ErrorOr<void> VirtualFileSystem::chmod(StringView path, mode_t mode, Custody& base)
+ErrorOr<void> VirtualFileSystem::chmod(StringView path, mode_t mode, Custody& base, int options)
 {
-    auto custody = TRY(resolve_path(path, base));
+    auto custody = TRY(resolve_path(path, base, nullptr, options));
     return chmod(custody, mode);
 }
 
@@ -565,9 +564,9 @@ ErrorOr<void> VirtualFileSystem::chown(Custody& custody, UserID a_uid, GroupID a
     return inode.chown(new_uid, new_gid);
 }
 
-ErrorOr<void> VirtualFileSystem::chown(StringView path, UserID a_uid, GroupID a_gid, Custody& base)
+ErrorOr<void> VirtualFileSystem::chown(StringView path, UserID a_uid, GroupID a_gid, Custody& base, int options)
 {
-    auto custody = TRY(resolve_path(path, base));
+    auto custody = TRY(resolve_path(path, base, nullptr, options));
     return chown(custody, a_uid, a_gid);
 }
 
@@ -725,7 +724,7 @@ ErrorOr<void> VirtualFileSystem::rmdir(StringView path, Custody& base)
 
 void VirtualFileSystem::for_each_mount(Function<IterationDecision(Mount const&)> callback) const
 {
-    m_mounts.with_shared([&](auto& mounts) {
+    m_mounts.with([&](auto& mounts) {
         for (auto& mount : mounts) {
             if (callback(mount) == IterationDecision::Break)
                 break;
@@ -866,7 +865,7 @@ ErrorOr<NonnullRefPtr<Custody>> VirtualFileSystem::resolve_path_without_veil(Str
         if (path_lexer.is_eof())
             extra_iteration = false;
         auto part = path_lexer.consume_until('/');
-        path_lexer.consume_specific('/');
+        path_lexer.ignore();
 
         Custody& parent = custody;
         auto parent_metadata = parent.inode().metadata();
@@ -932,10 +931,10 @@ ErrorOr<NonnullRefPtr<Custody>> VirtualFileSystem::resolve_path_without_veil(Str
             // We prepend a "." to it to ensure that it's not empty and that
             // any initial slashes it might have get interpreted properly.
             StringBuilder remaining_path;
-            remaining_path.append('.');
-            remaining_path.append(path.substring_view_starting_after_substring(part));
+            TRY(remaining_path.try_append('.'));
+            TRY(remaining_path.try_append(path.substring_view_starting_after_substring(part)));
 
-            return resolve_path_without_veil(remaining_path.to_string(), symlink_target, out_parent, options, symlink_recursion_level + 1);
+            return resolve_path_without_veil(remaining_path.string_view(), symlink_target, out_parent, options, symlink_recursion_level + 1);
         }
     }
 

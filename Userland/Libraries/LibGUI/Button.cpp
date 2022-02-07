@@ -10,6 +10,7 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Painter.h>
+#include <LibGUI/Window.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/StylePainter.h>
@@ -25,10 +26,22 @@ Button::Button(String text)
     set_fixed_height(22);
     set_focus_policy(GUI::FocusPolicy::StrongFocus);
 
+    on_focus_change = [this](bool has_focus, auto) {
+        if (!is_default())
+            return;
+        if (!has_focus && is<Button>(window()->focused_widget()))
+            m_another_button_has_focus = true;
+        else
+            m_another_button_has_focus = false;
+        update();
+    };
+
     REGISTER_ENUM_PROPERTY(
         "button_style", button_style, set_button_style, Gfx::ButtonStyle,
         { Gfx::ButtonStyle::Normal, "Normal" },
         { Gfx::ButtonStyle::Coolbar, "Coolbar" });
+
+    REGISTER_STRING_PROPERTY("icon", icon, set_icon_from_path);
 }
 
 Button::~Button()
@@ -44,7 +57,7 @@ void Button::paint_event(PaintEvent& event)
 
     bool paint_pressed = is_being_pressed() || (m_menu && m_menu->is_visible());
 
-    Gfx::StylePainter::paint_button(painter, rect(), palette(), m_button_style, paint_pressed, is_hovered(), is_checked(), is_enabled(), is_focused());
+    Gfx::StylePainter::paint_button(painter, rect(), palette(), m_button_style, paint_pressed, is_hovered(), is_checked(), is_enabled(), is_focused(), is_default() & !another_button_has_focus());
 
     if (text().is_empty() && !m_icon)
         return;
@@ -89,7 +102,7 @@ void Button::paint_event(PaintEvent& event)
     if (is_focused()) {
         Gfx::IntRect focus_rect;
         if (m_icon && !text().is_empty())
-            focus_rect = text_rect.inflated(6, 6);
+            focus_rect = text_rect.inflated(4, 4);
         else
             focus_rect = rect().shrunken(8, 8);
         painter.draw_focus_rect(focus_rect, palette().focus_outline());
@@ -132,12 +145,22 @@ void Button::set_action(Action& action)
         set_checked(action.is_checked());
 }
 
-void Button::set_icon(RefPtr<Gfx::Bitmap>&& icon)
+void Button::set_icon(RefPtr<Gfx::Bitmap> icon)
 {
     if (m_icon == icon)
         return;
     m_icon = move(icon);
     update();
+}
+
+void Button::set_icon_from_path(String const& path)
+{
+    auto maybe_bitmap = Gfx::Bitmap::try_load_from_file(path);
+    if (maybe_bitmap.is_error()) {
+        dbgln("Unable to load bitmap `{}` for button icon", path);
+        return;
+    }
+    set_icon(maybe_bitmap.release_value());
 }
 
 bool Button::is_uncheckable() const
@@ -179,6 +202,21 @@ void Button::mousemove_event(MouseEvent& event)
         return;
     }
     AbstractButton::mousemove_event(event);
+}
+
+bool Button::is_default() const
+{
+    if (!window())
+        return false;
+    return this == window()->default_return_key_widget();
+}
+
+void Button::set_default(bool default_button)
+{
+    deferred_invoke([this, default_button] {
+        VERIFY(window());
+        window()->set_default_return_key_widget(default_button ? this : nullptr);
+    });
 }
 
 }

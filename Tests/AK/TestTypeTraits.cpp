@@ -39,11 +39,8 @@
 #define EXPECT_VARIADIC_TRAIT_FALSE(trait, ...) \
     static_assert(!trait<__VA_ARGS__>)
 
-struct Empty {
-};
-
 enum class Enummer : u8 {
-    Dummmy,
+    Dummy
 };
 
 TEST_CASE(FundamentalTypeClassification)

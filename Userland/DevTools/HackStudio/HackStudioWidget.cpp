@@ -162,6 +162,8 @@ HackStudioWidget::HackStudioWidget(String path_to_project)
             }
         };
     }
+
+    m_project_builder = make<ProjectBuilder>(*m_terminal_wrapper, *m_project);
 }
 
 void HackStudioWidget::update_actions()
@@ -208,7 +210,7 @@ void HackStudioWidget::open_project(const String& root_path)
         m_project_tree_view->update();
     }
     if (m_git_widget && m_git_widget->initialized()) {
-        m_git_widget->change_repo(LexicalPath(root_path));
+        m_git_widget->change_repo(root_path);
         m_git_widget->refresh();
     }
     if (Debugger::is_initialized()) {
@@ -217,7 +219,7 @@ void HackStudioWidget::open_project(const String& root_path)
         debugger.set_source_root(m_project->root_path());
     }
     for (auto& editor_wrapper : m_all_editor_wrappers)
-        editor_wrapper.set_project_root(LexicalPath(m_project->root_path()));
+        editor_wrapper.set_project_root(m_project->root_path());
 
     m_locations_history.clear();
     m_locations_history_end_index = 0;
@@ -597,7 +599,7 @@ void HackStudioWidget::add_new_editor(GUI::Widget& parent)
     m_all_editor_wrappers.append(wrapper);
     wrapper->editor().set_focus(true);
     wrapper->editor().set_font(*m_editor_font);
-    wrapper->set_project_root(LexicalPath(m_project->root_path()));
+    wrapper->set_project_root(m_project->root_path());
     wrapper->editor().on_cursor_change = [this] { on_cursor_change(); };
     wrapper->on_change = [this] { update_gml_preview(); };
     set_edit_mode(EditMode::Text);
@@ -797,6 +799,20 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_debug_action()
         }
 
         Debugger::the().set_executable_path(get_project_executable_path());
+
+        m_terminal_wrapper->clear_including_history();
+
+        // The debugger calls wait() on the debugee, so the TerminalWrapper can't do that.
+        auto ptm_res = m_terminal_wrapper->setup_master_pseudoterminal(TerminalWrapper::WaitForChildOnExit::No);
+        if (ptm_res.is_error()) {
+            perror("setup_master_pseudoterminal");
+            return;
+        }
+
+        Debugger::the().set_child_setup_callback([this, ptm_res]() {
+            return m_terminal_wrapper->setup_slave_pseudoterminal(ptm_res.value());
+        });
+
         m_debugger_thread = Threading::Thread::construct(Debugger::start_static);
         m_debugger_thread->start();
         m_stop_action->set_enabled(true);
@@ -909,20 +925,20 @@ String HackStudioWidget::get_project_executable_path() const
     return String::formatted("{}/{}", m_project->root_path(), LexicalPath::basename(m_project->root_path()));
 }
 
-void HackStudioWidget::build(TerminalWrapper& wrapper)
+void HackStudioWidget::build()
 {
-    if (active_file().ends_with(".js"))
-        wrapper.run_command(String::formatted("js -A {}", active_file()));
-    else
-        wrapper.run_command("make");
+    auto result = m_project_builder->build(active_file());
+    if (result.is_error()) {
+        GUI::MessageBox::show(window(), String::formatted("{}", result.error()), "Build failed", GUI::MessageBox::Type::Error);
+    }
 }
 
-void HackStudioWidget::run(TerminalWrapper& wrapper)
+void HackStudioWidget::run()
 {
-    if (active_file().ends_with(".js"))
-        wrapper.run_command(String::formatted("js {}", active_file()));
-    else
-        wrapper.run_command("make run");
+    auto result = m_project_builder->run(active_file());
+    if (result.is_error()) {
+        GUI::MessageBox::show(window(), String::formatted("{}", result.error()), "Run failed", GUI::MessageBox::Type::Error);
+    }
 }
 
 void HackStudioWidget::hide_action_tabs()
@@ -1051,7 +1067,7 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_build_action()
             return;
 
         reveal_action_tab(*m_terminal_wrapper);
-        build(*m_terminal_wrapper);
+        build();
         m_stop_action->set_enabled(true);
     });
 }
@@ -1060,7 +1076,7 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_run_action()
 {
     return GUI::Action::create("&Run", { Mod_Ctrl, Key_R }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/program-run.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
         reveal_action_tab(*m_terminal_wrapper);
-        run(*m_terminal_wrapper);
+        run();
         m_stop_action->set_enabled(true);
     });
 }
@@ -1081,7 +1097,7 @@ void HackStudioWidget::create_action_tab(GUI::Widget& parent)
 
     m_find_in_files_widget = m_action_tab_widget->add_tab<FindInFilesWidget>("Find in files");
     m_todo_entries_widget = m_action_tab_widget->add_tab<ToDoEntriesWidget>("TODO");
-    m_terminal_wrapper = m_action_tab_widget->add_tab<TerminalWrapper>("Build", false);
+    m_terminal_wrapper = m_action_tab_widget->add_tab<TerminalWrapper>("Console", false);
     m_debug_info_widget = m_action_tab_widget->add_tab<DebugInfoWidget>("Debug");
 
     m_debug_info_widget->on_backtrace_frame_selection = [this](Debug::DebugInfo::SourcePosition const& source_position) {
@@ -1089,7 +1105,7 @@ void HackStudioWidget::create_action_tab(GUI::Widget& parent)
     };
 
     m_disassembly_widget = m_action_tab_widget->add_tab<DisassemblyWidget>("Disassembly");
-    m_git_widget = m_action_tab_widget->add_tab<GitWidget>("Git", LexicalPath(m_project->root_path()));
+    m_git_widget = m_action_tab_widget->add_tab<GitWidget>("Git", m_project->root_path());
     m_git_widget->set_view_diff_callback([this](const auto& original_content, const auto& diff) {
         m_diff_viewer->set_content(original_content, diff);
         set_edit_mode(EditMode::Diff);

@@ -39,7 +39,8 @@ public:
     void set_property(CSS::PropertyID, NonnullRefPtr<StyleValue> value);
     Optional<NonnullRefPtr<StyleValue>> property(CSS::PropertyID) const;
 
-    Length length_or_fallback(CSS::PropertyID, const Length& fallback) const;
+    Length length_or_fallback(CSS::PropertyID, Length const& fallback) const;
+    LengthPercentage length_percentage_or_fallback(CSS::PropertyID, LengthPercentage const& fallback) const;
     LengthBox length_box(CSS::PropertyID left_id, CSS::PropertyID top_id, CSS::PropertyID right_id, CSS::PropertyID bottom_id, const CSS::Length& default_value) const;
     Color color_or_fallback(CSS::PropertyID, Layout::NodeWithStyle const&, Color fallback) const;
     Optional<CSS::TextAlign> text_align() const;
@@ -50,6 +51,7 @@ public:
     Optional<CSS::WhiteSpace> white_space() const;
     Optional<CSS::LineStyle> line_style(CSS::PropertyID) const;
     Optional<CSS::TextDecorationLine> text_decoration_line() const;
+    Optional<CSS::TextDecorationStyle> text_decoration_style() const;
     Optional<CSS::TextTransform> text_transform() const;
     Optional<CSS::ListStyleType> list_style_type() const;
     Optional<CSS::FlexDirection> flex_direction() const;
@@ -62,7 +64,6 @@ public:
     Optional<CSS::JustifyContent> justify_content() const;
     Optional<CSS::Overflow> overflow_x() const;
     Optional<CSS::Overflow> overflow_y() const;
-    Optional<BackgroundRepeatData> background_repeat() const;
     Optional<CSS::BoxShadowData> box_shadow() const;
     CSS::BoxSizing box_sizing() const;
     Optional<CSS::PointerEvents> pointer_events() const;

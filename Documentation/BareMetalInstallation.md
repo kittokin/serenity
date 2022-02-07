@@ -8,7 +8,7 @@ Whilst it is possible to run Serenity on physical x86-compatible hardware, it is
 ## Hardware support and requirements
 
 Storage-wise Serenity requires a >= 2 GB parallel ATA or SATA IDE disk. Some older SATA chipsets already operate in IDE mode whilst some newer ones will depend upon adjusting a BIOS option to run your SATA controller in IDE (sometimes referred to as Legacy or PATA) mode. SATA AHCI is supported, but may not work on every controller due to bugs in the implementation.
-SCSI, SAS, eMMC and NVMe HBAs are all presently unsupported.
+NVMe drives are supported but it is recommended to use `nvme_poll` boot parameter in newer hardwares as we lack MSI(X) support at the moment. SCSI, SAS and eMMC HBAs are all presently unsupported.
 
 You must be willing to wipe your disk's contents to allow for writing the Serenity image so be sure to back up any important data on your disk first! Serenity uses the GRUB2 bootloader so it should be possible to multiboot it with any other OS that can be booted from GRUB2 post-installation.
 
@@ -20,7 +20,7 @@ For more details on known working hardware see the [SerenityOS Hardware Compatib
 
 ## Creating a Serenity GRUB disk image
 
-Before creating a Serenity disk image, you need to build the OS as described in the [SerenityOS build instructions](BuildInstructions.md). Follow those instructions up to and including running **ninja install**. After the OS has built, run **ninja grub-image** to create a new file called **grub_disk_image** with GRUB2 installed that can be booted on a real PC.
+Before creating a Serenity disk image, you need to build the OS as described in the [SerenityOS build instructions](BuildInstructions.md). Follow those instructions up to and including running **ninja install** (`Meta/serenity.sh image <arch>`). After the OS has built, run **ninja grub-image** to create a new file called **grub_disk_image** with GRUB2 installed that can be booted on a real PC. This command requires `parted` and `grub2` (Arch: `grub`) to be installed.
 
 The final step is copying **grub_disk_image** onto the disk you wish to use to boot Serenity using a command such as:
 
@@ -28,7 +28,7 @@ The final step is copying **grub_disk_image** onto the disk you wish to use to b
 $ sudo dd if=grub_disk_image of=/dev/sdx bs=64M && sync
 ```
 
-Replace **/dev/sdx** with the target device. The **bs=64M** argument is optional but will speed up the data transfer.
+Replace **/dev/sdx** with the target device. The **bs=64M** argument is optional but will speed up the data transfer. You can also use any other image flashing application. Flashing under Windows is possible; you can find the WSL files under `\\wsl$\<distro name>\<path to serenity directory>`.
 
 ## Troubleshooting Serenity boot issues with Linux using a null modem (serial) cable
 
@@ -58,3 +58,5 @@ adding **| MULTIBOOT_VIDEO_MODE** to the end of the **multiboot_flags** before b
 
 Setting a boot argument of `fbdev=off` will force the kernel to not initialize any framebuffer devices, hence allowing the system
 to boot into console-only mode as `SystemServer` will detect this condition and will not initialize `WindowServer`.
+
+If you do not see any output, it's possible that the Kernel panics before any video is initialized. In that case, you might try debugging the init sequence with the PC speaker to see where it gets stuck.

@@ -23,7 +23,7 @@
 
 namespace Kernel {
 
-class Inode : public ListedRefCounted<Inode>
+class Inode : public ListedRefCounted<Inode, LockType::Spinlock>
     , public Weakable<Inode> {
     friend class VirtualFileSystem;
     friend class FileSystem;
@@ -31,7 +31,7 @@ class Inode : public ListedRefCounted<Inode>
 public:
     virtual ~Inode();
 
-    virtual void one_ref_left() { }
+    virtual void remove_from_secondary_lists() { }
 
     FileSystem& fs() { return m_file_system; }
     FileSystem const& fs() const { return m_file_system; }
@@ -89,9 +89,9 @@ public:
     static void sync_all();
     void sync();
 
-    bool has_watchers() const { return !m_watchers.is_empty(); }
+    bool has_watchers() const;
 
-    void register_watcher(Badge<InodeWatcher>, InodeWatcher&);
+    ErrorOr<void> register_watcher(Badge<InodeWatcher>, InodeWatcher&);
     void unregister_watcher(Badge<InodeWatcher>, InodeWatcher&);
 
     ErrorOr<NonnullRefPtr<FIFO>> fifo();
@@ -106,8 +106,8 @@ protected:
     void set_metadata_dirty(bool);
     ErrorOr<void> prepare_to_write_data();
 
-    void did_add_child(InodeIdentifier const& child_id, String const& name);
-    void did_remove_child(InodeIdentifier const& child_id, String const& name);
+    void did_add_child(InodeIdentifier child_id, StringView);
+    void did_remove_child(InodeIdentifier child_id, StringView);
     void did_modify_contents();
     void did_delete_self();
 
@@ -118,7 +118,7 @@ private:
     InodeIndex m_index { 0 };
     WeakPtr<Memory::SharedInodeVMObject> m_shared_vmobject;
     RefPtr<LocalSocket> m_socket;
-    HashTable<InodeWatcher*> m_watchers;
+    SpinlockProtected<HashTable<InodeWatcher*>> m_watchers;
     bool m_metadata_dirty { false };
     RefPtr<FIFO> m_fifo;
     IntrusiveListNode<Inode> m_inode_list_node;
@@ -131,7 +131,7 @@ private:
         short type;
     };
 
-    Vector<Flock> m_flocks;
+    SpinlockProtected<Vector<Flock>> m_flocks;
 
 public:
     using AllInstancesList = IntrusiveList<&Inode::m_inode_list_node>;

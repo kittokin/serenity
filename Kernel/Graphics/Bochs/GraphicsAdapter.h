@@ -21,7 +21,6 @@ struct BochsDisplayMMIORegisters;
 
 class BochsGraphicsAdapter final : public GenericGraphicsAdapter
     , public PCI::Device {
-    AK_MAKE_ETERNAL
     friend class GraphicsManagement;
 
 private:
@@ -36,6 +35,8 @@ public:
     virtual bool double_framebuffering_capable() const override { return true; }
 
     virtual bool vga_compatible() const override;
+
+    ErrorOr<ByteBuffer> get_edid(size_t output_port_index) const override;
 
 private:
     // ^GenericGraphicsAdapter

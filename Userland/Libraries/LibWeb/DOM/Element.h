@@ -54,9 +54,11 @@ public:
     String attribute(const FlyString& name) const { return get_attribute(name); }
     String get_attribute(const FlyString& name) const;
     ExceptionOr<void> set_attribute(const FlyString& name, const String& value);
+    ExceptionOr<void> set_attribute_ns(FlyString const& namespace_, FlyString const& qualified_name, String const& value);
     void remove_attribute(const FlyString& name);
     size_t attribute_list_size() const { return m_attributes->length(); }
     NonnullRefPtr<NamedNodeMap> const& attributes() const { return m_attributes; }
+    Vector<String> get_attribute_names() const;
 
     RefPtr<DOMTokenList> const& class_list();
 
@@ -89,7 +91,8 @@ public:
 
     String name() const { return attribute(HTML::AttributeNames::name); }
 
-    const CSS::StyleProperties* specified_css_values() const { return m_specified_css_values.ptr(); }
+    CSS::StyleProperties const* specified_css_values() const { return m_specified_css_values.ptr(); }
+    void set_specified_css_values(RefPtr<CSS::StyleProperties> style) { m_specified_css_values = move(style); }
     NonnullRefPtr<CSS::StyleProperties> computed_style();
 
     const CSS::CSSStyleDeclaration* inline_style() const { return m_inline_style; }
@@ -100,8 +103,6 @@ public:
     ExceptionOr<void> set_inner_html(String const&);
 
     bool is_focused() const;
-    virtual bool is_focusable() const { return false; }
-
     bool is_active() const;
 
     NonnullRefPtr<HTMLCollection> get_elements_by_class_name(FlyString const&);
@@ -127,8 +128,12 @@ public:
 
     NonnullRefPtr<Geometry::DOMRect> get_bounding_client_rect() const;
 
+    virtual RefPtr<Layout::Node> create_layout_node(NonnullRefPtr<CSS::StyleProperties>);
+
+    virtual void did_receive_focus() { }
+    virtual void did_lose_focus() { }
+
 protected:
-    RefPtr<Layout::Node> create_layout_node() override;
     virtual void children_changed() override;
 
 private:

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,11 +9,10 @@
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/Intl/ListFormat.h>
 #include <LibJS/Runtime/IteratorOperations.h>
-#include <LibUnicode/Locale.h>
 
 namespace JS::Intl {
 
-// 13 ListFomat Objects, https://tc39.es/ecma402/#listformat-objects
+// 13 ListFormat Objects, https://tc39.es/ecma402/#listformat-objects
 ListFormat::ListFormat(Object& prototype)
     : Object(prototype)
 {
@@ -41,33 +40,6 @@ StringView ListFormat::type_string() const
         return "disjunction"sv;
     case Type::Unit:
         return "unit"sv;
-    default:
-        VERIFY_NOT_REACHED();
-    }
-}
-
-void ListFormat::set_style(StringView style)
-{
-    if (style == "narrow"sv) {
-        m_style = Style::Narrow;
-    } else if (style == "short"sv) {
-        m_style = Style::Short;
-    } else if (style == "long"sv) {
-        m_style = Style::Long;
-    } else {
-        VERIFY_NOT_REACHED();
-    }
-}
-
-StringView ListFormat::style_string() const
-{
-    switch (m_style) {
-    case Style::Narrow:
-        return "narrow"sv;
-    case Style::Short:
-        return "short"sv;
-    case Style::Long:
-        return "long"sv;
     default:
         VERIFY_NOT_REACHED();
     }
@@ -123,7 +95,7 @@ Vector<PatternPartition> deconstruct_pattern(StringView pattern, Placeables plac
 // 13.1.2 CreatePartsFromList ( listFormat, list ), https://tc39.es/ecma402/#sec-createpartsfromlist
 Vector<PatternPartition> create_parts_from_list(ListFormat const& list_format, Vector<String> const& list)
 {
-    auto list_patterns = Unicode::get_locale_list_patterns(list_format.locale(), list_format.type_string(), list_format.style_string());
+    auto list_patterns = Unicode::get_locale_list_patterns(list_format.locale(), list_format.type_string(), list_format.style());
     if (!list_patterns.has_value())
         return {};
 
@@ -276,7 +248,7 @@ ThrowCompletionOr<Vector<String>> string_list_from_iterable(GlobalObject& global
     }
 
     // 2. Let iteratorRecord be ? GetIterator(iterable).
-    auto* iterator_record = TRY(get_iterator(global_object, iterable));
+    auto iterator_record = TRY(get_iterator(global_object, iterable));
 
     // 3. Let list be a new empty List.
     Vector<String> list;
@@ -287,7 +259,7 @@ ThrowCompletionOr<Vector<String>> string_list_from_iterable(GlobalObject& global
     // 5. Repeat, while next is not false,
     do {
         // a. Set next to ? IteratorStep(iteratorRecord).
-        next = TRY(iterator_step(global_object, *iterator_record));
+        next = TRY(iterator_step(global_object, iterator_record));
 
         // b. If next is not false, then
         if (next != nullptr) {
@@ -300,7 +272,7 @@ ThrowCompletionOr<Vector<String>> string_list_from_iterable(GlobalObject& global
                 auto error = vm.throw_completion<TypeError>(global_object, ErrorType::NotAString, next_value);
 
                 // 2. Return ? IteratorClose(iteratorRecord, error).
-                return iterator_close(*iterator_record, move(error));
+                return iterator_close(global_object, iterator_record, move(error));
             }
 
             // iii. Append nextValue to the end of the List list.

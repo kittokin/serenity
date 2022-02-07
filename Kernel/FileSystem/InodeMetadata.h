@@ -8,6 +8,7 @@
 
 #include <AK/Error.h>
 #include <AK/Span.h>
+#include <Kernel/FileSystem/DeviceFileTypes.h>
 #include <Kernel/FileSystem/InodeIdentifier.h>
 #include <Kernel/Forward.h>
 #include <Kernel/UnixTypes.h>
@@ -16,12 +17,12 @@ namespace Kernel {
 
 class Process;
 
-constexpr u32 encoded_device(unsigned major, unsigned minor)
+constexpr u64 encoded_device(MajorNumber major, MinorNumber minor)
 {
-    return (minor & 0xff) | (major << 8) | ((minor & ~0xff) << 12);
+    return (minor.value() & 0xff) | (major.value() << 8) | ((minor.value() & ~0xff) << 12);
 }
-static inline unsigned int major_from_encoded_device(dev_t dev) { return (dev & 0xfff00u) >> 8u; }
-static inline unsigned int minor_from_encoded_device(dev_t dev) { return (dev & 0xffu) | ((dev >> 12u) & 0xfff00u); }
+static inline MajorNumber major_from_encoded_device(dev_t dev) { return (dev & 0xfff00u) >> 8u; }
+static inline MinorNumber minor_from_encoded_device(dev_t dev) { return (dev & 0xffu) | ((dev >> 12u) & 0xfff00u); }
 
 inline bool is_directory(mode_t mode) { return (mode & S_IFMT) == S_IFDIR; }
 inline bool is_character_device(mode_t mode) { return (mode & S_IFMT) == S_IFCHR; }
@@ -86,10 +87,11 @@ struct InodeMetadata {
     bool is_setuid() const { return Kernel::is_setuid(mode); }
     bool is_setgid() const { return Kernel::is_setgid(mode); }
 
-    ErrorOr<void> stat(stat& buffer) const
+    ErrorOr<struct stat> stat() const
     {
         if (!is_valid())
             return EIO;
+        struct stat buffer = {};
         buffer.st_rdev = encoded_device(major_device, minor_device);
         buffer.st_ino = inode.index().value();
         buffer.st_mode = mode;
@@ -106,7 +108,7 @@ struct InodeMetadata {
         buffer.st_mtim.tv_nsec = 0;
         buffer.st_ctim.tv_sec = ctime;
         buffer.st_ctim.tv_nsec = 0;
-        return {};
+        return buffer;
     }
 
     InodeIdentifier inode;
@@ -121,8 +123,8 @@ struct InodeMetadata {
     time_t dtime { 0 };
     blkcnt_t block_count { 0 };
     blksize_t block_size { 0 };
-    unsigned major_device { 0 };
-    unsigned minor_device { 0 };
+    MajorNumber major_device { 0 };
+    MinorNumber minor_device { 0 };
 };
 
 }

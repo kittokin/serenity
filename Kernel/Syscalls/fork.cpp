@@ -6,24 +6,28 @@
 
 #include <Kernel/Debug.h>
 #include <Kernel/FileSystem/Custody.h>
-#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Memory/Region.h>
 #include <Kernel/PerformanceManager.h>
 #include <Kernel/Process.h>
+#include <Kernel/Scheduler.h>
 
 namespace Kernel {
 
 ErrorOr<FlatPtr> Process::sys$fork(RegisterState& regs)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this);
-    REQUIRE_PROMISE(proc);
+    TRY(require_promise(Pledge::proc));
     RefPtr<Thread> child_first_thread;
     auto child_name = TRY(m_name->try_clone());
     auto child = TRY(Process::try_create(child_first_thread, move(child_name), uid(), gid(), pid(), m_is_kernel_process, m_cwd, m_executable, m_tty, this));
     child->m_veil_state = m_veil_state;
     child->m_unveiled_paths = m_unveiled_paths.deep_copy();
 
-    TRY(child->m_fds.try_clone(m_fds));
+    TRY(child->m_fds.with_exclusive([&](auto& child_fds) {
+        return m_fds.with_exclusive([&](auto& parent_fds) {
+            return child_fds.try_clone(parent_fds);
+        });
+    }));
 
     child->m_pg = m_pg;
 

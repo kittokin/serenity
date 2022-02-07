@@ -12,9 +12,9 @@ namespace Kernel {
 
 using BlockFlags = Thread::FileBlocker::BlockFlags;
 
-static ErrorOr<NonnullRefPtr<OpenFileDescription>> open_readable_file_description(Process::OpenFileDescriptions const& fds, int fd)
+static ErrorOr<NonnullRefPtr<OpenFileDescription>> open_readable_file_description(auto& fds, int fd)
 {
-    auto description = TRY(fds.open_file_description(fd));
+    auto description = TRY(fds.with_shared([&](auto& fds) { return fds.open_file_description(fd); }));
     if (!description->is_readable())
         return EBADF;
     if (description->is_directory())
@@ -40,7 +40,7 @@ static ErrorOr<void> check_blocked_read(OpenFileDescription* description)
 ErrorOr<FlatPtr> Process::sys$readv(int fd, Userspace<const struct iovec*> iov, int iov_count)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(stdio);
+    TRY(require_promise(Pledge::stdio));
     if (iov_count < 0)
         return EINVAL;
 
@@ -74,7 +74,7 @@ ErrorOr<FlatPtr> Process::sys$readv(int fd, Userspace<const struct iovec*> iov, 
 ErrorOr<FlatPtr> Process::sys$read(int fd, Userspace<u8*> buffer, size_t size)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(stdio);
+    TRY(require_promise(Pledge::stdio));
     if (size == 0)
         return 0;
     if (size > NumericLimits<ssize_t>::max())
@@ -86,16 +86,17 @@ ErrorOr<FlatPtr> Process::sys$read(int fd, Userspace<u8*> buffer, size_t size)
     return TRY(description->read(user_buffer, size));
 }
 
-ErrorOr<FlatPtr> Process::sys$pread(int fd, Userspace<u8*> buffer, size_t size, Userspace<off_t*> userspace_offset)
+// NOTE: The offset is passed by pointer because off_t is 64bit,
+// hence it can't be passed by register on 32bit platforms.
+ErrorOr<FlatPtr> Process::sys$pread(int fd, Userspace<u8*> buffer, size_t size, Userspace<off_t const*> userspace_offset)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(stdio);
+    TRY(require_promise(Pledge::stdio));
     if (size == 0)
         return 0;
     if (size > NumericLimits<ssize_t>::max())
         return EINVAL;
-    off_t offset;
-    TRY(copy_from_user(&offset, userspace_offset));
+    auto offset = TRY(copy_typed_from_user(userspace_offset));
     if (offset < 0)
         return EINVAL;
     dbgln_if(IO_DEBUG, "sys$pread({}, {}, {}, {})", fd, buffer.ptr(), size, offset);

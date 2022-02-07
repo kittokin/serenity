@@ -557,6 +557,30 @@ inline constexpr bool IsSpecializationOf = false;
 template<template<typename...> typename U, typename... Us>
 inline constexpr bool IsSpecializationOf<U<Us...>, U> = true;
 
+template<typename T>
+struct __decay {
+    typedef Detail::RemoveCVReference<T> type;
+};
+template<typename T>
+struct __decay<T[]> {
+    typedef T* type;
+};
+template<typename T, decltype(sizeof(T)) N>
+struct __decay<T[N]> {
+    typedef T* type;
+};
+// FIXME: Function decay
+template<typename T>
+using Decay = typename __decay<T>::type;
+
+template<typename T, typename U>
+inline constexpr bool IsPointerOfType = IsPointer<Decay<U>>&& IsSame<T, RemoveCV<RemovePointer<Decay<U>>>>;
+
+template<typename T, typename U>
+inline constexpr bool IsHashCompatible = false;
+template<typename T>
+inline constexpr bool IsHashCompatible<T, T> = true;
+
 }
 using AK::Detail::AddConst;
 using AK::Detail::AddLvalueReference;
@@ -587,6 +611,7 @@ using AK::Detail::IsEnum;
 using AK::Detail::IsFloatingPoint;
 using AK::Detail::IsFunction;
 using AK::Detail::IsFundamental;
+using AK::Detail::IsHashCompatible;
 using AK::Detail::IsIntegral;
 using AK::Detail::IsLvalueReference;
 using AK::Detail::IsMoveAssignable;

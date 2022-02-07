@@ -16,6 +16,7 @@
 #include <Kernel/Memory/SharedInodeVMObject.h>
 #include <Kernel/Panic.h>
 #include <Kernel/Process.h>
+#include <Kernel/Scheduler.h>
 #include <Kernel/Thread.h>
 
 namespace Kernel::Memory {
@@ -34,7 +35,9 @@ Region::Region(VirtualRange const& range, NonnullRefPtr<VMObject> vmobject, size
     VERIFY((m_range.size() % PAGE_SIZE) == 0);
 
     m_vmobject->add_region(*this);
-    MM.register_region(*this);
+
+    if (is_kernel())
+        MM.register_kernel_region(*this);
 }
 
 Region::~Region()
@@ -46,13 +49,20 @@ Region::~Region()
 
     m_vmobject->remove_region(*this);
 
-    MM.unregister_region(*this);
+    if (is_kernel())
+        MM.unregister_kernel_region(*this);
 
     if (m_page_directory) {
-        SpinlockLocker page_lock(m_page_directory->get_lock());
-        SpinlockLocker lock(s_mm_lock);
-        unmap(ShouldDeallocateVirtualRange::Yes);
-        VERIFY(!m_page_directory);
+        SpinlockLocker pd_locker(m_page_directory->get_lock());
+        if (!is_readable() && !is_writable() && !is_executable()) {
+            // If the region is "PROT_NONE", we didn't map it in the first place,
+            // so all we need to do here is deallocate the VM.
+            m_page_directory->range_allocator().deallocate(range());
+        } else {
+            SpinlockLocker mm_locker(s_mm_lock);
+            unmap_with_locks_held(ShouldDeallocateVirtualRange::Yes, ShouldFlushTLB::Yes, pd_locker, mm_locker);
+            VERIFY(!m_page_directory);
+        }
     }
 }
 
@@ -85,14 +95,15 @@ ErrorOr<NonnullOwnPtr<Region>> Region::try_clone()
     auto vmobject_clone = TRY(vmobject().try_clone());
 
     // Set up a COW region. The parent (this) region becomes COW as well!
-    remap();
+    if (is_writable())
+        remap();
 
     OwnPtr<KString> clone_region_name;
     if (m_name)
         clone_region_name = TRY(m_name->try_clone());
 
     auto clone_region = TRY(Region::try_create_user_accessible(
-        m_range, vmobject_clone, m_offset_in_vmobject, move(clone_region_name), access(), m_cacheable ? Cacheable::Yes : Cacheable::No, m_shared));
+        m_range, move(vmobject_clone), m_offset_in_vmobject, move(clone_region_name), access(), m_cacheable ? Cacheable::Yes : Cacheable::No, m_shared));
 
     if (m_stack) {
         VERIFY(is_readable());
@@ -132,7 +143,7 @@ size_t Region::amount_resident() const
 {
     size_t bytes = 0;
     for (size_t i = 0; i < page_count(); ++i) {
-        auto* page = physical_page(i);
+        auto const* page = physical_page(i);
         if (page && !page->is_shared_zero_page() && !page->is_lazy_committed_page())
             bytes += PAGE_SIZE;
     }
@@ -143,7 +154,7 @@ size_t Region::amount_shared() const
 {
     size_t bytes = 0;
     for (size_t i = 0; i < page_count(); ++i) {
-        auto* page = physical_page(i);
+        auto const* page = physical_page(i);
         if (page && page->ref_count() > 1 && !page->is_shared_zero_page() && !page->is_lazy_committed_page())
             bytes += PAGE_SIZE;
     }
@@ -177,15 +188,14 @@ void Region::set_should_cow(size_t page_index, bool cow)
 bool Region::map_individual_page_impl(size_t page_index)
 {
     VERIFY(m_page_directory->get_lock().is_locked_by_current_processor());
+    VERIFY(s_mm_lock.is_locked_by_current_processor());
+
     auto page_vaddr = vaddr_from_page_index(page_index);
 
-    bool user_allowed = page_vaddr.get() >= 0x00800000 && is_user_address(page_vaddr);
+    bool user_allowed = page_vaddr.get() >= USER_RANGE_BASE && is_user_address(page_vaddr);
     if (is_mmap() && !user_allowed) {
         PANIC("About to map mmap'ed page at a kernel address");
     }
-
-    // NOTE: We have to take the MM lock for PTE's to stay valid while we use them.
-    SpinlockLocker mm_locker(s_mm_lock);
 
     auto* pte = MM.ensure_pte(*m_page_directory, page_vaddr);
     if (!pte)
@@ -203,6 +213,8 @@ bool Region::map_individual_page_impl(size_t page_index)
             pte->set_writable(is_writable());
         if (Processor::current().has_feature(CPUFeature::NX))
             pte->set_execute_disabled(!is_executable());
+        if (Processor::current().has_feature(CPUFeature::PAT))
+            pte->set_pat(is_write_combine());
         pte->set_user_allowed(user_allowed);
     }
     return true;
@@ -215,6 +227,7 @@ bool Region::do_remap_vmobject_page(size_t page_index, bool with_flush)
     if (!translate_vmobject_page(page_index))
         return true; // not an error, region doesn't map this page
     SpinlockLocker page_lock(m_page_directory->get_lock());
+    SpinlockLocker lock(s_mm_lock);
     VERIFY(physical_page(page_index));
     bool success = map_individual_page_impl(page_index);
     if (with_flush)
@@ -234,18 +247,26 @@ bool Region::remap_vmobject_page(size_t page_index, bool with_flush)
     return success;
 }
 
-void Region::unmap(ShouldDeallocateVirtualRange deallocate_range)
+void Region::unmap(ShouldDeallocateVirtualRange should_deallocate_range, ShouldFlushTLB should_flush_tlb)
 {
     if (!m_page_directory)
         return;
-    SpinlockLocker page_lock(m_page_directory->get_lock());
-    SpinlockLocker lock(s_mm_lock);
+    SpinlockLocker pd_locker(m_page_directory->get_lock());
+    SpinlockLocker mm_locker(s_mm_lock);
+    unmap_with_locks_held(should_deallocate_range, should_flush_tlb, pd_locker, mm_locker);
+}
+
+void Region::unmap_with_locks_held(ShouldDeallocateVirtualRange deallocate_range, ShouldFlushTLB should_flush_tlb, SpinlockLocker<RecursiveSpinlock>&, SpinlockLocker<RecursiveSpinlock>&)
+{
+    if (!m_page_directory)
+        return;
     size_t count = page_count();
     for (size_t i = 0; i < count; ++i) {
         auto vaddr = vaddr_from_page_index(i);
-        MM.release_pte(*m_page_directory, vaddr, i == count - 1);
+        MM.release_pte(*m_page_directory, vaddr, i == count - 1 ? MemoryManager::IsLastPTERelease::Yes : MemoryManager::IsLastPTERelease::No);
     }
-    MemoryManager::flush_tlb(m_page_directory, vaddr(), page_count());
+    if (should_flush_tlb == ShouldFlushTLB::Yes)
+        MemoryManager::flush_tlb(m_page_directory, vaddr(), page_count());
     if (deallocate_range == ShouldDeallocateVirtualRange::Yes) {
         m_page_directory->range_allocator().deallocate(range());
     }
@@ -293,12 +314,24 @@ void Region::remap()
         TODO();
 }
 
+ErrorOr<void> Region::set_write_combine(bool enable)
+{
+    if (enable && !Processor::current().has_feature(CPUFeature::PAT)) {
+        dbgln("PAT is not supported, implement MTRR fallback if available");
+        return Error::from_errno(ENOTSUP);
+    }
+
+    m_write_combine = enable;
+    remap();
+    return {};
+}
+
 void Region::clear_to_zero()
 {
     VERIFY(vmobject().is_anonymous());
     SpinlockLocker locker(vmobject().m_lock);
     for (auto i = 0u; i < page_count(); ++i) {
-        auto page = physical_page_slot(i);
+        auto& page = physical_page_slot(i);
         VERIFY(page);
         if (page->is_shared_zero_page())
             continue;
@@ -375,11 +408,12 @@ PageFaultResponse Region::handle_zero_fault(size_t page_index_in_region)
         page_slot = static_cast<AnonymousVMObject&>(*m_vmobject).allocate_committed_page({});
         dbgln_if(PAGE_FAULT_DEBUG, "      >> ALLOCATED COMMITTED {}", page_slot->paddr());
     } else {
-        page_slot = MM.allocate_user_physical_page(MemoryManager::ShouldZeroFill::Yes);
-        if (page_slot.is_null()) {
+        auto page_or_error = MM.allocate_user_physical_page(MemoryManager::ShouldZeroFill::Yes);
+        if (page_or_error.is_error()) {
             dmesgln("MM: handle_zero_fault was unable to allocate a physical page");
             return PageFaultResponse::OutOfMemory;
         }
+        page_slot = page_or_error.release_value();
         dbgln_if(PAGE_FAULT_DEBUG, "      >> ALLOCATED {}", page_slot->paddr());
     }
 
@@ -463,12 +497,12 @@ PageFaultResponse Region::handle_inode_fault(size_t page_index_in_region)
         return PageFaultResponse::Continue;
     }
 
-    vmobject_physical_page_entry = MM.allocate_user_physical_page(MemoryManager::ShouldZeroFill::No);
-
-    if (vmobject_physical_page_entry.is_null()) {
+    auto vmobject_physical_page_or_error = MM.allocate_user_physical_page(MemoryManager::ShouldZeroFill::No);
+    if (vmobject_physical_page_or_error.is_error()) {
         dmesgln("MM: handle_inode_fault was unable to allocate a physical page");
         return PageFaultResponse::OutOfMemory;
     }
+    vmobject_physical_page_entry = vmobject_physical_page_or_error.release_value();
 
     {
         SpinlockLocker mm_locker(s_mm_lock);

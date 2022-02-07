@@ -15,11 +15,13 @@ set(SOURCES
     Bytecode/Pass/UnifySameBlocks.cpp
     Bytecode/StringTable.cpp
     Console.cpp
+    CyclicModule.cpp
     Heap/BlockAllocator.cpp
     Heap/CellAllocator.cpp
     Heap/Handle.cpp
     Heap/Heap.cpp
     Heap/HeapBlock.cpp
+    Heap/MarkedVector.cpp
     Interpreter.cpp
     Lexer.cpp
     MarkupGenerator.cpp
@@ -81,11 +83,14 @@ set(SOURCES
     Runtime/GeneratorFunctionConstructor.cpp
     Runtime/GeneratorFunctionPrototype.cpp
     Runtime/GeneratorObject.cpp
-    Runtime/GeneratorObjectPrototype.cpp
+    Runtime/GeneratorPrototype.cpp
     Runtime/GlobalEnvironment.cpp
     Runtime/GlobalObject.cpp
     Runtime/IndexedProperties.cpp
     Runtime/Intl/AbstractOperations.cpp
+    Runtime/Intl/Collator.cpp
+    Runtime/Intl/CollatorConstructor.cpp
+    Runtime/Intl/CollatorPrototype.cpp
     Runtime/Intl/DateTimeFormat.cpp
     Runtime/Intl/DateTimeFormatConstructor.cpp
     Runtime/Intl/DateTimeFormatFunction.cpp
@@ -104,6 +109,19 @@ set(SOURCES
     Runtime/Intl/NumberFormatConstructor.cpp
     Runtime/Intl/NumberFormatFunction.cpp
     Runtime/Intl/NumberFormatPrototype.cpp
+    Runtime/Intl/PluralRules.cpp
+    Runtime/Intl/PluralRulesConstructor.cpp
+    Runtime/Intl/PluralRulesPrototype.cpp
+    Runtime/Intl/RelativeTimeFormat.cpp
+    Runtime/Intl/RelativeTimeFormatConstructor.cpp
+    Runtime/Intl/RelativeTimeFormatPrototype.cpp
+    Runtime/Intl/Segmenter.cpp
+    Runtime/Intl/SegmenterConstructor.cpp
+    Runtime/Intl/SegmenterPrototype.cpp
+    Runtime/Intl/Segments.cpp
+    Runtime/Intl/SegmentIterator.cpp
+    Runtime/Intl/SegmentIteratorPrototype.cpp
+    Runtime/Intl/SegmentsPrototype.cpp
     Runtime/IteratorOperations.cpp
     Runtime/IteratorPrototype.cpp
     Runtime/JSONObject.cpp
@@ -114,6 +132,8 @@ set(SOURCES
     Runtime/MapPrototype.cpp
     Runtime/MarkedValueList.cpp
     Runtime/MathObject.cpp
+    Runtime/ModuleEnvironment.cpp
+    Runtime/ModuleNamespaceObject.cpp
     Runtime/NativeFunction.cpp
     Runtime/NumberConstructor.cpp
     Runtime/NumberObject.cpp
@@ -214,6 +234,7 @@ set(SOURCES
     Script.cpp
     SourceTextModule.cpp
     SyntaxHighlighter.cpp
+    SyntheticModule.cpp
     Token.cpp
 )
 

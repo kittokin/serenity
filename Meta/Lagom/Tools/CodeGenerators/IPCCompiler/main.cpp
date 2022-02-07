@@ -111,6 +111,10 @@ int main(int argc, char** argv)
     auto parse_parameter = [&](Vector<Parameter>& storage) {
         for (;;) {
             Parameter parameter;
+            if (lexer.is_eof()) {
+                warnln("EOF when parsing parameter");
+                VERIFY_NOT_REACHED();
+            }
             consume_whitespace();
             if (lexer.peek() == ')')
                 break;
@@ -128,7 +132,10 @@ int main(int argc, char** argv)
                     consume_whitespace();
                 }
             }
+            // FIXME: This is not entirely correct. Types can have spaces, for example `HashMap<int, String>`.
+            //        Maybe we should use LibCpp::Parser for parsing types.
             parameter.type = lexer.consume_until([](char ch) { return isspace(ch); });
+            VERIFY(!lexer.is_eof());
             consume_whitespace();
             parameter.name = lexer.consume_until([](char ch) { return isspace(ch) || ch == ',' || ch == ')'; });
             consume_whitespace();
@@ -368,9 +375,9 @@ public:
     static i32 static_message_id() { return (int)MessageID::@message.pascal_name@; }
     virtual const char* message_name() const override { return "@endpoint.name@::@message.pascal_name@"; }
 
-    static OwnPtr<@message.pascal_name@> decode(InputMemoryStream& stream, [[maybe_unused]] int sockfd)
+    static OwnPtr<@message.pascal_name@> decode(InputMemoryStream& stream, Core::Stream::LocalSocket& socket)
     {
-        IPC::Decoder decoder { stream, sockfd };
+        IPC::Decoder decoder { stream, socket };
 )~~~");
 
             for (auto& parameter : parameters) {
@@ -462,7 +469,7 @@ private:
                 parameter_generator.set("parameter.type", parameter.type);
                 parameter_generator.set("parameter.name", parameter.name);
                 parameter_generator.append(R"~~~(
-    @parameter.type@ m_@parameter.name@;
+    @parameter.type@ m_@parameter.name@ {};
 )~~~");
             }
 
@@ -632,7 +639,7 @@ public:
 
     static u32 static_magic() { return @endpoint.magic@; }
 
-    static OwnPtr<IPC::Message> decode_message(ReadonlyBytes buffer, [[maybe_unused]] int sockfd)
+    static OwnPtr<IPC::Message> decode_message(ReadonlyBytes buffer, [[maybe_unused]] Core::Stream::LocalSocket& socket)
     {
         InputMemoryStream stream { buffer };
         u32 message_endpoint_magic = 0;
@@ -685,7 +692,7 @@ public:
 
                 message_generator.append(R"~~~(
         case (int)Messages::@endpoint.name@::MessageID::@message.pascal_name@:
-            message = Messages::@endpoint.name@::@message.pascal_name@::decode(stream, sockfd);
+            message = Messages::@endpoint.name@::@message.pascal_name@::decode(stream, socket);
             break;
 )~~~");
             };

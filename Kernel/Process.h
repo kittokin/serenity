@@ -39,7 +39,7 @@
 
 namespace Kernel {
 
-MutexProtected<String>& hostname();
+MutexProtected<OwnPtr<KString>>& hostname();
 Time kgettimeofday();
 
 #define ENUMERATE_PLEDGE_PROMISES         \
@@ -86,7 +86,7 @@ using FutexQueues = HashMap<FlatPtr, RefPtr<FutexQueue>>;
 struct LoadResult;
 
 class Process final
-    : public AK::RefCountedBase
+    : public ListedRefCounted<Process, LockType::Spinlock>
     , public Weakable<Process> {
 
     class ProtectedValues {
@@ -121,7 +121,6 @@ public:
 
     friend class Thread;
     friend class Coredump;
-    friend class ProcFSProcessOpenFileDescriptions;
 
     // Helper class to temporarily unprotect a process's protected data so you can write to it.
     class ProtectedDataMutationScope {
@@ -183,10 +182,7 @@ public:
     static ErrorOr<NonnullRefPtr<Process>> try_create_user_process(RefPtr<Thread>& first_thread, StringView path, UserID, GroupID, NonnullOwnPtrVector<KString> arguments, NonnullOwnPtrVector<KString> environment, TTY*);
     static void register_new(Process&);
 
-    bool unref() const;
     ~Process();
-
-    static NonnullRefPtrVector<Process> all_processes();
 
     RefPtr<Thread> create_kernel_thread(void (*entry)(void*), void* entry_data, u32 priority, NonnullOwnPtr<KString> name, u32 affinity = THREAD_AFFINITY_DEFAULT, bool joinable = true);
 
@@ -294,14 +290,14 @@ public:
     ErrorOr<FlatPtr> sys$open(Userspace<const Syscall::SC_open_params*>);
     ErrorOr<FlatPtr> sys$close(int fd);
     ErrorOr<FlatPtr> sys$read(int fd, Userspace<u8*>, size_t);
-    ErrorOr<FlatPtr> sys$pread(int fd, Userspace<u8*>, size_t, Userspace<off_t*>);
+    ErrorOr<FlatPtr> sys$pread(int fd, Userspace<u8*>, size_t, Userspace<off_t const*>);
     ErrorOr<FlatPtr> sys$readv(int fd, Userspace<const struct iovec*> iov, int iov_count);
     ErrorOr<FlatPtr> sys$write(int fd, Userspace<const u8*>, size_t);
     ErrorOr<FlatPtr> sys$writev(int fd, Userspace<const struct iovec*> iov, int iov_count);
     ErrorOr<FlatPtr> sys$fstat(int fd, Userspace<stat*>);
     ErrorOr<FlatPtr> sys$stat(Userspace<const Syscall::SC_stat_params*>);
     ErrorOr<FlatPtr> sys$lseek(int fd, Userspace<off_t*>, int whence);
-    ErrorOr<FlatPtr> sys$ftruncate(int fd, Userspace<off_t*>);
+    ErrorOr<FlatPtr> sys$ftruncate(int fd, Userspace<off_t const*>);
     ErrorOr<FlatPtr> sys$kill(pid_t pid_or_pgid, int sig);
     [[noreturn]] void sys$exit(int status);
     ErrorOr<FlatPtr> sys$sigreturn(RegisterState& registers);
@@ -362,7 +358,7 @@ public:
     ErrorOr<FlatPtr> sys$rmdir(Userspace<const char*> pathname, size_t path_length);
     ErrorOr<FlatPtr> sys$mount(Userspace<const Syscall::SC_mount_params*>);
     ErrorOr<FlatPtr> sys$umount(Userspace<const char*> mountpoint, size_t mountpoint_length);
-    ErrorOr<FlatPtr> sys$chmod(Userspace<const char*> pathname, size_t path_length, mode_t);
+    ErrorOr<FlatPtr> sys$chmod(Userspace<Syscall::SC_chmod_params const*>);
     ErrorOr<FlatPtr> sys$fchmod(int fd, mode_t);
     ErrorOr<FlatPtr> sys$chown(Userspace<const Syscall::SC_chown_params*>);
     ErrorOr<FlatPtr> sys$fchown(int fd, UserID, GroupID);
@@ -441,7 +437,7 @@ public:
     NonnullOwnPtrVector<KString> const& arguments() const { return m_arguments; };
     NonnullOwnPtrVector<KString> const& environment() const { return m_environment; };
 
-    ErrorOr<void> exec(NonnullOwnPtr<KString> path, NonnullOwnPtrVector<KString> arguments, NonnullOwnPtrVector<KString> environment, int recusion_depth = 0);
+    ErrorOr<void> exec(NonnullOwnPtr<KString> path, NonnullOwnPtrVector<KString> arguments, NonnullOwnPtrVector<KString> environment, Thread*& new_main_thread, u32& prev_flags, int recursion_depth = 0);
 
     ErrorOr<LoadResult> load(NonnullRefPtr<OpenFileDescription> main_program_description, RefPtr<OpenFileDescription> interpreter_description, const ElfW(Ehdr) & main_program_header);
 
@@ -511,8 +507,8 @@ public:
 
     VirtualAddress signal_trampoline() const { return m_protected_values.signal_trampoline; }
 
-    void require_promise(Pledge);
-    void require_no_promises() const;
+    ErrorOr<void> require_promise(Pledge);
+    ErrorOr<void> require_no_promises() const;
 
 private:
     friend class MemoryManager;
@@ -531,7 +527,7 @@ private:
     void kill_threads_except_self();
     void kill_all_threads();
     ErrorOr<void> dump_core();
-    bool dump_perfcore();
+    ErrorOr<void> dump_perfcore();
     bool create_perf_events_buffer_if_needed();
     void delete_perf_events_buffer();
 
@@ -556,8 +552,6 @@ private:
 
     void clear_futex_queues_on_exec();
 
-    void setup_socket_fd(int fd, NonnullRefPtr<OpenFileDescription> description, int type);
-
     ErrorOr<void> remap_range_as_stack(FlatPtr address, size_t size);
 
 public:
@@ -570,7 +564,7 @@ public:
     ErrorOr<void> procfs_get_binary_link(KBufferBuilder& builder) const;
     ErrorOr<void> procfs_get_current_work_directory_link(KBufferBuilder& builder) const;
     mode_t binary_link_required_mode() const;
-    ErrorOr<size_t> procfs_get_thread_stack(ThreadID thread_id, KBufferBuilder& builder) const;
+    ErrorOr<void> procfs_get_thread_stack(ThreadID thread_id, KBufferBuilder& builder) const;
     ErrorOr<void> traverse_stacks_directory(FileSystemID, Function<ErrorOr<void>(FileSystem::DirectoryEntryView const&)> callback) const;
     ErrorOr<NonnullRefPtr<Inode>> lookup_stacks_directory(const ProcFS&, StringView name) const;
     ErrorOr<size_t> procfs_get_file_description_link(unsigned fd, KBufferBuilder& builder) const;
@@ -588,7 +582,7 @@ private:
         return nullptr;
     }
 
-    mutable IntrusiveListNode<Process> m_list_node;
+    IntrusiveListNode<Process> m_list_node;
 
     NonnullOwnPtr<KString> m_name;
 
@@ -637,15 +631,16 @@ public:
     class ScopedDescriptionAllocation;
     class OpenFileDescriptions {
         AK_MAKE_NONCOPYABLE(OpenFileDescriptions);
+        AK_MAKE_NONMOVABLE(OpenFileDescriptions);
         friend class Process;
 
     public:
+        OpenFileDescriptions() { }
         ALWAYS_INLINE const OpenFileDescriptionAndFlags& operator[](size_t i) const { return at(i); }
         ALWAYS_INLINE OpenFileDescriptionAndFlags& operator[](size_t i) { return at(i); }
 
         ErrorOr<void> try_clone(const Kernel::Process::OpenFileDescriptions& other)
         {
-            SpinlockLocker lock_other(other.m_fds_lock);
             TRY(try_resize(other.m_fds_metadatas.size()));
 
             for (size_t i = 0; i < other.m_fds_metadatas.size(); ++i) {
@@ -675,16 +670,13 @@ public:
 
         void clear()
         {
-            SpinlockLocker lock(m_fds_lock);
             m_fds_metadatas.clear();
         }
 
         ErrorOr<NonnullRefPtr<OpenFileDescription>> open_file_description(int fd) const;
 
     private:
-        OpenFileDescriptions() = default;
         static constexpr size_t s_max_open_file_descriptors { FD_SETSIZE };
-        mutable Spinlock m_fds_lock;
         Vector<OpenFileDescriptionAndFlags> m_fds_metadatas;
     };
 
@@ -706,6 +698,15 @@ public:
             swap(m_description, other.m_description);
         }
 
+        ScopedDescriptionAllocation& operator=(ScopedDescriptionAllocation&& other)
+        {
+            if (this != &other) {
+                m_description = exchange(other.m_description, nullptr);
+                fd = exchange(other.fd, -1);
+            }
+            return *this;
+        }
+
         ~ScopedDescriptionAllocation()
         {
             if (m_description && m_description->is_allocated() && !m_description->is_valid()) {
@@ -713,7 +714,7 @@ public:
             }
         }
 
-        const int fd { -1 };
+        int fd { -1 };
 
     private:
         OpenFileDescriptionAndFlags* m_description { nullptr };
@@ -745,8 +746,23 @@ public:
         WeakPtr<Process> m_process;
     };
 
-    OpenFileDescriptions& fds() { return m_fds; }
-    const OpenFileDescriptions& fds() const { return m_fds; }
+    MutexProtected<OpenFileDescriptions>& fds() { return m_fds; }
+    MutexProtected<OpenFileDescriptions> const& fds() const { return m_fds; }
+
+    ErrorOr<NonnullRefPtr<OpenFileDescription>> open_file_description(int fd)
+    {
+        return m_fds.with_shared([fd](auto& fds) { return fds.open_file_description(fd); });
+    }
+
+    ErrorOr<NonnullRefPtr<OpenFileDescription>> open_file_description(int fd) const
+    {
+        return m_fds.with_shared([fd](auto& fds) { return fds.open_file_description(fd); });
+    }
+
+    ErrorOr<ScopedDescriptionAllocation> allocate_fd()
+    {
+        return m_fds.with_exclusive([](auto& fds) { return fds.allocate(); });
+    }
 
 private:
     SpinlockProtected<Thread::ListInProcess>& thread_list() { return m_thread_list; }
@@ -754,7 +770,7 @@ private:
 
     SpinlockProtected<Thread::ListInProcess> m_thread_list;
 
-    OpenFileDescriptions m_fds;
+    MutexProtected<OpenFileDescriptions> m_fds;
 
     const bool m_is_kernel_process;
     Atomic<State> m_state { State::Running };
@@ -810,6 +826,7 @@ private:
 
 public:
     using List = IntrusiveListRelaxedConst<&Process::m_list_node>;
+    static SpinlockProtected<Process::List>& all_instances();
 };
 
 // Note: Process object should be 2 pages of 4096 bytes each.
@@ -820,13 +837,11 @@ static_assert(AssertSize<Process, (PAGE_SIZE * 2)>());
 
 extern RecursiveSpinlock g_profiling_lock;
 
-SpinlockProtected<Process::List>& processes();
-
 template<IteratorFunction<Process&> Callback>
 inline void Process::for_each(Callback callback)
 {
     VERIFY_INTERRUPTS_DISABLED();
-    processes().with([&](const auto& list) {
+    Process::all_instances().with([&](const auto& list) {
         for (auto it = list.begin(); it != list.end();) {
             auto& process = *it;
             ++it;
@@ -840,7 +855,7 @@ template<IteratorFunction<Process&> Callback>
 inline void Process::for_each_child(Callback callback)
 {
     ProcessID my_pid = pid();
-    processes().with([&](const auto& list) {
+    Process::all_instances().with([&](const auto& list) {
         for (auto it = list.begin(); it != list.end();) {
             auto& process = *it;
             ++it;
@@ -881,7 +896,7 @@ inline IterationDecision Process::for_each_thread(Callback callback)
 template<IteratorFunction<Process&> Callback>
 inline void Process::for_each_in_pgrp(ProcessGroupID pgid, Callback callback)
 {
-    processes().with([&](const auto& list) {
+    Process::all_instances().with([&](const auto& list) {
         for (auto it = list.begin(); it != list.end();) {
             auto& process = *it;
             ++it;
@@ -960,23 +975,13 @@ inline ProcessID Thread::pid() const
     return m_process->pid();
 }
 
-#define REQUIRE_PROMISE(promise)                             \
-    do {                                                     \
-        Process::current().require_promise(Pledge::promise); \
-    } while (0)
-
-#define REQUIRE_NO_PROMISES                       \
-    do {                                          \
-        Process::current().require_no_promises(); \
-    } while (0)
-
 }
 
 #define VERIFY_PROCESS_BIG_LOCK_ACQUIRED(process) \
-    VERIFY(process->big_lock().is_locked_by_current_thread());
+    VERIFY(process->big_lock().is_exclusively_locked_by_current_thread());
 
 #define VERIFY_NO_PROCESS_BIG_LOCK(process) \
-    VERIFY(!process->big_lock().is_locked_by_current_thread());
+    VERIFY(!process->big_lock().is_exclusively_locked_by_current_thread());
 
 inline static ErrorOr<NonnullOwnPtr<KString>> try_copy_kstring_from_user(const Kernel::Syscall::StringArgument& string)
 {

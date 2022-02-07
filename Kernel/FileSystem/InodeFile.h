@@ -27,14 +27,14 @@ public:
     const Inode& inode() const { return *m_inode; }
     Inode& inode() { return *m_inode; }
 
-    virtual bool can_read(const OpenFileDescription&, size_t) const override { return true; }
-    virtual bool can_write(const OpenFileDescription&, size_t) const override { return true; }
+    virtual bool can_read(const OpenFileDescription&, u64) const override { return true; }
+    virtual bool can_write(const OpenFileDescription&, u64) const override { return true; }
 
     virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
     virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
     virtual ErrorOr<void> ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg) override;
     virtual ErrorOr<Memory::Region*> mmap(Process&, OpenFileDescription&, Memory::VirtualRange const&, u64 offset, int prot, bool shared) override;
-    virtual ErrorOr<void> stat(::stat& buffer) const override { return inode().metadata().stat(buffer); }
+    virtual ErrorOr<struct stat> stat() const override { return inode().metadata().stat(); }
 
     virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override;
 

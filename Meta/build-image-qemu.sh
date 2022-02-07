@@ -1,5 +1,12 @@
 #!/bin/sh
 
+# Note: This is done before `set -e` to let `command` fail if needed
+FUSE2FS_PATH=$(command -v fuse2fs)
+
+if [ -z "$FUSE2FS_PATH" ]; then
+    FUSE2FS_PATH=/usr/sbin/fuse2fs
+fi
+
 set -e
 
 die() {
@@ -7,8 +14,15 @@ die() {
     exit 1
 }
 
+USE_FUSE2FS=0
+
 if [ "$(id -u)" != 0 ]; then
-    exec sudo -E -- "$0" "$@" || die "this script needs to run as root"
+    if [ -x "$FUSE2FS_PATH" ] && $FUSE2FS_PATH --help 2>&1 |grep fakeroot > /dev/null; then
+        USE_FUSE2FS=1
+    else
+        sudo -E -- "$0" "$@" || die "this script needs to run as root"
+        exit 0
+    fi
 else
     : "${SUDO_UID:=0}" "${SUDO_GID:=0}"
 fi
@@ -32,7 +46,7 @@ PATH="$SCRIPT_DIR/../Toolchain/Local/i686/bin:$PATH"
 
 # We depend on GNU coreutils du for the --apparent-size extension.
 # GNU coreutils is a build dependency.
-if type gdu > /dev/null 2>&1; then
+if command -v gdu > /dev/null 2>&1 && gdu --version | grep -q "GNU coreutils"; then
     GNUDU="gdu"
 else
     GNUDU="du"
@@ -60,6 +74,12 @@ DISK_SIZE_BYTES=$((($(disk_usage "$SERENITY_SOURCE_DIR/Base") + $(disk_usage Roo
 DISK_SIZE_BYTES=$(((DISK_SIZE_BYTES + (INODE_COUNT * INODE_SIZE * 2)) * 3))
 INODE_COUNT=$((INODE_COUNT * 7))
 
+E2FSCK="/usr/sbin/e2fsck"
+
+if [ ! -f "$E2FSCK" ]; then
+    E2FSCK=/sbin/e2fsck
+fi
+
 USE_EXISTING=0
 
 if [ -f _disk_image ]; then
@@ -67,7 +87,7 @@ if [ -f _disk_image ]; then
 
     echo "checking existing image"
     result=0
-    e2fsck -f -y _disk_image || result=$?
+    "$E2FSCK" -f -y _disk_image || result=$?
     if [ $result -ge 4 ]; then
         rm -f _disk_image
         USE_EXISTING=0
@@ -115,32 +135,39 @@ fi
 printf "mounting filesystem... "
 mkdir -p mnt
 use_genext2fs=0
-if [ "$(uname -s)" = "Darwin" ]; then
-  mount_cmd="fuse-ext2 _disk_image mnt -o rw+,allow_other,uid=501,gid=20"
+if [ $USE_FUSE2FS -eq 1 ]; then
+    mount_cmd="$FUSE2FS_PATH _disk_image mnt/ -o fakeroot,rw"
+elif [ "$(uname -s)" = "Darwin" ]; then
+    mount_cmd="fuse-ext2 _disk_image mnt -o rw+,allow_other,uid=501,gid=20"
 elif [ "$(uname -s)" = "OpenBSD" ]; then
-  mount_cmd="mount -t ext2fs "/dev/${VND}i" mnt/"
+    VND=$(vnconfig _disk_image)
+    mount_cmd="mount -t ext2fs "/dev/${VND}i" mnt/"
 elif [ "$(uname -s)" = "FreeBSD" ]; then
-  MD=$(mdconfig _disk_image)
-  mount_cmd="fuse-ext2 -o rw+,direct_io "/dev/${MD}" mnt/"
+    MD=$(mdconfig _disk_image)
+    mount_cmd="fuse-ext2 -o rw+,direct_io "/dev/${MD}" mnt/"
 else
-  mount_cmd="mount _disk_image mnt/"
+    mount_cmd="mount _disk_image mnt/"
 fi
 if ! eval "$mount_cmd"; then
-  if command -v genext2fs 1>/dev/null ; then
-    echo "mount failed but genext2fs exists, use it instead"
-    use_genext2fs=1
-  else
-    die "could not mount filesystem and genext2fs is missing"
-  fi
+    if command -v genext2fs 1>/dev/null ; then
+        echo "mount failed but genext2fs exists, use it instead"
+        use_genext2fs=1
+    else
+        die "could not mount filesystem and genext2fs is missing"
+    fi
 else
-  echo "done"
+    echo "done"
 fi
 
 cleanup() {
     if [ -d mnt ]; then
         if [ $use_genext2fs = 0 ] ; then
             printf "unmounting filesystem... "
-            umount mnt || ( sleep 1 && sync && umount mnt )
+            if [ $USE_FUSE2FS -eq 1 ]; then
+                fusermount -u mnt || (sleep 1 && sync && fusermount -u mnt)
+            else
+                umount mnt || ( sleep 1 && sync && umount mnt )
+            fi
             rmdir mnt
         else
             rm -rf mnt

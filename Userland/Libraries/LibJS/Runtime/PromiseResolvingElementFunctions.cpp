@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -12,6 +12,13 @@
 #include <LibJS/Runtime/PromiseResolvingElementFunctions.h>
 
 namespace JS {
+
+void PromiseValueList::visit_edges(Visitor& visitor)
+{
+    Cell::visit_edges(visitor);
+    for (auto& val : m_values)
+        visitor.visit(val);
+}
 
 PromiseResolvingElementFunction::PromiseResolvingElementFunction(size_t index, PromiseValueList& values, PromiseCapability capability, RemainingElements& remaining_elements, Object& prototype)
     : NativeFunction(prototype)
@@ -58,7 +65,7 @@ PromiseAllResolveElementFunction::PromiseAllResolveElementFunction(size_t index,
 {
 }
 
-Value PromiseAllResolveElementFunction::resolve_element()
+ThrowCompletionOr<Value> PromiseAllResolveElementFunction::resolve_element()
 {
     auto& vm = this->vm();
     auto& global_object = this->global_object();
@@ -73,7 +80,7 @@ Value PromiseAllResolveElementFunction::resolve_element()
         auto* values_array = Array::create_from(global_object, m_values.values());
 
         // b. Return ? Call(promiseCapability.[[Resolve]], undefined, « valuesArray »).
-        return TRY_OR_DISCARD(vm.call(*m_capability.resolve, js_undefined(), values_array));
+        return JS::call(global_object, *m_capability.resolve, js_undefined(), values_array);
     }
 
     // 11. Return undefined.
@@ -90,7 +97,7 @@ PromiseAllSettledResolveElementFunction::PromiseAllSettledResolveElementFunction
 {
 }
 
-Value PromiseAllSettledResolveElementFunction::resolve_element()
+ThrowCompletionOr<Value> PromiseAllSettledResolveElementFunction::resolve_element()
 {
     auto& vm = this->vm();
     auto& global_object = this->global_object();
@@ -114,7 +121,7 @@ Value PromiseAllSettledResolveElementFunction::resolve_element()
         auto* values_array = Array::create_from(global_object, m_values.values());
 
         // b. Return ? Call(promiseCapability.[[Resolve]], undefined, « valuesArray »).
-        return TRY_OR_DISCARD(vm.call(*m_capability.resolve, js_undefined(), values_array));
+        return JS::call(global_object, *m_capability.resolve, js_undefined(), values_array);
     }
 
     // 15. Return undefined.
@@ -131,7 +138,7 @@ PromiseAllSettledRejectElementFunction::PromiseAllSettledRejectElementFunction(s
 {
 }
 
-Value PromiseAllSettledRejectElementFunction::resolve_element()
+ThrowCompletionOr<Value> PromiseAllSettledRejectElementFunction::resolve_element()
 {
     auto& vm = this->vm();
     auto& global_object = this->global_object();
@@ -152,10 +159,10 @@ Value PromiseAllSettledRejectElementFunction::resolve_element()
     // 14. If remainingElementsCount.[[Value]] is 0, then
     if (--m_remaining_elements.value == 0) {
         // a. Let valuesArray be ! CreateArrayFromList(values).
-        auto values_array = Array::create_from(global_object, m_values.values());
+        auto* values_array = Array::create_from(global_object, m_values.values());
 
         // b. Return ? Call(promiseCapability.[[Resolve]], undefined, « valuesArray »).
-        return TRY_OR_DISCARD(vm.call(*m_capability.resolve, js_undefined(), values_array));
+        return JS::call(global_object, *m_capability.resolve, js_undefined(), values_array);
     }
 
     // 15. Return undefined.
@@ -172,7 +179,7 @@ PromiseAnyRejectElementFunction::PromiseAnyRejectElementFunction(size_t index, P
 {
 }
 
-Value PromiseAnyRejectElementFunction::resolve_element()
+ThrowCompletionOr<Value> PromiseAnyRejectElementFunction::resolve_element()
 {
     auto& vm = this->vm();
     auto& global_object = this->global_object();
@@ -187,11 +194,11 @@ Value PromiseAnyRejectElementFunction::resolve_element()
         auto* error = AggregateError::create(global_object);
 
         // b. Perform ! DefinePropertyOrThrow(error, "errors", PropertyDescriptor { [[Configurable]]: true, [[Enumerable]]: false, [[Writable]]: true, [[Value]]: ! CreateArrayFromList(errors) }).
-        auto errors_array = Array::create_from(global_object, m_values.values());
+        auto* errors_array = Array::create_from(global_object, m_values.values());
         MUST(error->define_property_or_throw(vm.names.errors, { .value = errors_array, .writable = true, .enumerable = false, .configurable = true }));
 
         // c. Return ? Call(promiseCapability.[[Reject]], undefined, « error »).
-        return TRY_OR_DISCARD(vm.call(*m_capability.reject, js_undefined(), error));
+        return JS::call(global_object, *m_capability.reject, js_undefined(), error);
     }
 
     return js_undefined();

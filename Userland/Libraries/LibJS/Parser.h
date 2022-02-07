@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@serenityos.org>
- * Copyright (c) 2021, David Tuin <davidot@serenityos.org>
+ * Copyright (c) 2021-2022, David Tuin <davidot@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -12,6 +12,7 @@
 #include <AK/StringBuilder.h>
 #include <LibJS/AST.h>
 #include <LibJS/Lexer.h>
+#include <LibJS/Runtime/FunctionConstructor.h>
 #include <LibJS/SourceRange.h>
 #include <stdio.h>
 
@@ -44,7 +45,7 @@ public:
     NonnullRefPtr<Program> parse_program(bool starts_in_strict_mode = false);
 
     template<typename FunctionNodeType>
-    NonnullRefPtr<FunctionNodeType> parse_function_node(u8 parse_options = FunctionNodeParseOptions::CheckForFunctionAndName);
+    NonnullRefPtr<FunctionNodeType> parse_function_node(u8 parse_options = FunctionNodeParseOptions::CheckForFunctionAndName, Optional<Position> const& function_start = {});
     Vector<FunctionNode::Parameter> parse_formal_parameters(int& function_length, u8 parse_options = 0);
 
     enum class AllowDuplicates {
@@ -120,7 +121,7 @@ public:
     NonnullRefPtr<ExportStatement> parse_export_statement(Program& program);
 
     RefPtr<FunctionExpression> try_parse_arrow_function_expression(bool expect_parens, bool is_async = false);
-    RefPtr<Statement> try_parse_labelled_statement(AllowLabelledFunction allow_function);
+    RefPtr<LabelledStatement> try_parse_labelled_statement(AllowLabelledFunction allow_function);
     RefPtr<MetaProperty> try_parse_new_target_expression();
     RefPtr<MetaProperty> try_parse_import_meta_expression();
     NonnullRefPtr<ImportCall> parse_import_call();
@@ -173,6 +174,9 @@ public:
         bool try_parse_arrow_function_expression_failed;
     };
 
+    // Needs to mess with m_state, and we're not going to expose a non-const getter for that :^)
+    friend ThrowCompletionOr<ECMAScriptFunctionObject*> FunctionConstructor::create_dynamic_function(GlobalObject&, FunctionObject&, FunctionObject*, FunctionKind, MarkedValueList const&);
+
 private:
     friend class ScopePusher;
 
@@ -185,6 +189,7 @@ private:
     bool match_secondary_expression(const Vector<TokenType>& forbidden = {}) const;
     bool match_statement() const;
     bool match_export_or_import() const;
+    bool match_assert_clause() const;
     bool match_declaration() const;
     bool try_match_let_declaration() const;
     bool match_variable_declaration() const;
@@ -209,7 +214,7 @@ private:
 
     RefPtr<BindingPattern> synthesize_binding_pattern(Expression const& expression);
 
-    Token next_token() const;
+    Token next_token(size_t steps = 1) const;
 
     void check_identifier_name_for_assignment_validity(StringView, bool force_strict = false);
 
@@ -220,6 +225,9 @@ private:
 
     bool parse_directive(ScopeNode& body);
     void parse_statement_list(ScopeNode& output_node, AllowLabelledFunction allow_labelled_functions = AllowLabelledFunction::No);
+
+    FlyString consume_string_value();
+    ModuleRequest parse_module_request();
 
     struct RulePosition {
         AK_MAKE_NONCOPYABLE(RulePosition);

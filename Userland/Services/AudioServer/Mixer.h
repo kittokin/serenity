@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
+ * Copyright (c) 2021, kleines Filmröllchen <filmroellchen@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -52,7 +52,8 @@ public:
             return false;
 
         sample = m_current->samples()[m_position++];
-        --m_remaining_samples;
+        if (m_remaining_samples > 0)
+            --m_remaining_samples;
         ++m_played_samples;
 
         if (m_position >= m_current->sample_count()) {
@@ -92,6 +93,8 @@ public:
     FadingProperty<double>& volume() { return m_volume; }
     double volume() const { return m_volume; }
     void set_volume(double const volume) { m_volume = volume; }
+    bool is_muted() const { return m_muted; }
+    void set_muted(bool muted) { m_muted = muted; }
 
 private:
     RefPtr<Audio::Buffer> m_current;
@@ -100,6 +103,7 @@ private:
     int m_remaining_samples { 0 };
     int m_played_samples { 0 };
     bool m_paused { false };
+    bool m_muted { false };
 
     WeakPtr<ClientConnection> m_client;
     FadingProperty<double> m_volume { 1 };

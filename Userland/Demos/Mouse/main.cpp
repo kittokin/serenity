@@ -138,7 +138,7 @@ public:
 
     void mousewheel_event(GUI::MouseEvent& event) override
     {
-        m_wheel_delta_acc = (m_wheel_delta_acc + event.wheel_delta() + 36) % 36;
+        m_wheel_delta_acc = (m_wheel_delta_acc + event.wheel_delta_y() + 36) % 36;
         m_show_scroll_wheel = true;
         update();
         if (!has_timer())
@@ -160,7 +160,7 @@ private:
 ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     auto app = TRY(GUI::Application::try_create(arguments));
-    auto app_icon = GUI::Icon::default_icon("app-mouse");
+    auto app_icon = TRY(GUI::Icon::try_create_default_icon("app-mouse"));
 
     TRY(Core::System::pledge("stdio recvfd sendfd rpath"));
     TRY(Core::System::unveil("/res", "r"));

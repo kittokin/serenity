@@ -61,35 +61,31 @@ public:
         return *this;
     }
 
-    [[nodiscard]] static Optional<ByteBuffer> create_uninitialized(size_t size)
+    [[nodiscard]] static ErrorOr<ByteBuffer> create_uninitialized(size_t size)
     {
         auto buffer = ByteBuffer();
-        if (buffer.try_resize(size).is_error())
-            return {};
+        TRY(buffer.try_resize(size));
         return { move(buffer) };
     }
 
-    [[nodiscard]] static Optional<ByteBuffer> create_zeroed(size_t size)
+    [[nodiscard]] static ErrorOr<ByteBuffer> create_zeroed(size_t size)
     {
-        auto buffer_result = create_uninitialized(size);
-        if (!buffer_result.has_value())
-            return {};
+        auto buffer = TRY(create_uninitialized(size));
 
-        auto& buffer = buffer_result.value();
         buffer.zero_fill();
         VERIFY(size == 0 || (buffer[0] == 0 && buffer[size - 1] == 0));
-        return buffer_result;
+        return { move(buffer) };
     }
 
-    [[nodiscard]] static Optional<ByteBuffer> copy(void const* data, size_t size)
+    [[nodiscard]] static ErrorOr<ByteBuffer> copy(void const* data, size_t size)
     {
-        auto buffer = create_uninitialized(size);
-        if (buffer.has_value() && size != 0)
-            __builtin_memcpy(buffer->data(), data, size);
-        return buffer;
+        auto buffer = TRY(create_uninitialized(size));
+        if (size != 0)
+            __builtin_memcpy(buffer.data(), data, size);
+        return { move(buffer) };
     }
 
-    [[nodiscard]] static Optional<ByteBuffer> copy(ReadonlyBytes bytes)
+    [[nodiscard]] static ErrorOr<ByteBuffer> copy(ReadonlyBytes bytes)
     {
         return copy(bytes.data(), bytes.size());
     }
@@ -182,12 +178,36 @@ public:
         return try_ensure_capacity_slowpath(new_capacity);
     }
 
+    /// Return a span of bytes past the end of this ByteBuffer for writing.
+    /// Ensures that the required space is available.
+    ErrorOr<Bytes> get_bytes_for_writing(size_t length)
+    {
+        TRY(try_ensure_capacity(size() + length));
+        return Bytes { data() + size(), length };
+    }
+
+    /// Like get_bytes_for_writing, but crashes if allocation fails.
+    Bytes must_get_bytes_for_writing(size_t length)
+    {
+        return MUST(get_bytes_for_writing(length));
+    }
+
+    void append(char byte)
+    {
+        MUST(try_append(byte));
+    }
+
     void append(ReadonlyBytes bytes)
     {
         MUST(try_append(bytes));
     }
 
     void append(void const* data, size_t data_size) { append({ data, data_size }); }
+
+    ErrorOr<void> try_append(char byte)
+    {
+        return try_append(&byte, 1);
+    }
 
     ErrorOr<void> try_append(ReadonlyBytes bytes)
     {
@@ -214,7 +234,7 @@ public:
     {
         // make sure we're not told to write past the end
         VERIFY(offset + data_size <= size());
-        __builtin_memcpy(this->data() + offset, data, data_size);
+        __builtin_memmove(this->data() + offset, data, data_size);
     }
 
     void zero_fill()

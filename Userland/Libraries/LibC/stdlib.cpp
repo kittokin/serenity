@@ -189,8 +189,7 @@ void exit(int status)
 
     extern void _fini();
     _fini();
-    fflush(stdout);
-    fflush(stderr);
+    fflush(nullptr);
 
 #ifndef _DYNAMIC_LOADER
     __pthread_key_destroy_for_current_thread();
@@ -209,6 +208,12 @@ int atexit(void (*handler)())
     return __cxa_atexit(__atexit_to_cxa_atexit, (void*)handler, nullptr);
 }
 
+void _abort()
+{
+    asm volatile("ud2");
+    __builtin_unreachable();
+}
+
 void abort()
 {
     // For starters, send ourselves a SIGABRT.
@@ -222,14 +227,14 @@ void abort()
     _abort();
 }
 
-static HashTable<const char*> s_malloced_environment_variables;
+static HashTable<FlatPtr> s_malloced_environment_variables;
 
 static void free_environment_variable_if_needed(const char* var)
 {
-    if (!s_malloced_environment_variables.contains(var))
+    if (!s_malloced_environment_variables.contains((FlatPtr)var))
         return;
     free(const_cast<char*>(var));
-    s_malloced_environment_variables.remove(var);
+    s_malloced_environment_variables.remove((FlatPtr)var);
 }
 
 char* getenv(const char* name)
@@ -257,6 +262,7 @@ char* secure_getenv(const char* name)
     return getenv(name);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/unsetenv.html
 int unsetenv(const char* name)
 {
     auto new_var_len = strlen(name);
@@ -297,6 +303,7 @@ int clearenv()
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/setenv.html
 int setenv(const char* name, const char* value, int overwrite)
 {
     if (!overwrite && getenv(name))
@@ -304,10 +311,11 @@ int setenv(const char* name, const char* value, int overwrite)
     auto length = strlen(name) + strlen(value) + 2;
     auto* var = (char*)malloc(length);
     snprintf(var, length, "%s=%s", name, value);
-    s_malloced_environment_variables.set(var);
+    s_malloced_environment_variables.set((FlatPtr)var);
     return putenv(var);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/putenv.html
 int putenv(char* new_var)
 {
     char* new_eq = strchr(new_var, '=');
@@ -377,6 +385,7 @@ void setprogname(const char* progname)
     __progname = progname;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/strtod.html
 double strtod(const char* str, char** endptr)
 {
     // Parse spaces, sign, and base
@@ -658,22 +667,26 @@ double strtod(const char* str, char** endptr)
     return value;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/strtold.html
 long double strtold(const char* str, char** endptr)
 {
     assert(sizeof(double) == sizeof(long double));
     return strtod(str, endptr);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/strtof.html
 float strtof(const char* str, char** endptr)
 {
     return strtod(str, endptr);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/atof.html
 double atof(const char* str)
 {
     return strtod(str, nullptr);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/atoi.html
 int atoi(const char* str)
 {
     long value = strtol(str, nullptr, 10);
@@ -683,17 +696,20 @@ int atoi(const char* str)
     return value;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/atol.html
 long atol(const char* str)
 {
     return strtol(str, nullptr, 10);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/atoll.html
 long long atoll(const char* str)
 {
     return strtoll(str, nullptr, 10);
 }
 
 static char ptsname_buf[32];
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/ptsname.html
 char* ptsname(int fd)
 {
     if (ptsname_r(fd, ptsname_buf, sizeof(ptsname_buf)) < 0)
@@ -709,42 +725,50 @@ int ptsname_r(int fd, char* buffer, size_t size)
 
 static unsigned long s_next_rand = 1;
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/rand.html
 int rand()
 {
     s_next_rand = s_next_rand * 1103515245 + 12345;
     return ((unsigned)(s_next_rand / ((RAND_MAX + 1) * 2)) % (RAND_MAX + 1));
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/srand.html
 void srand(unsigned seed)
 {
     s_next_rand = seed;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/abs.html
 int abs(int i)
 {
     return i < 0 ? -i : i;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/labs.html
 long int labs(long int i)
 {
     return i < 0 ? -i : i;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/llabs.html
 long long int llabs(long long int i)
 {
     return i < 0 ? -i : i;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/random.html
 long int random()
 {
     return rand();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/srandom.html
 void srandom(unsigned seed)
 {
     srand(seed);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/system.html
 int system(const char* command)
 {
     if (!command)
@@ -759,6 +783,7 @@ int system(const char* command)
     return WEXITSTATUS(wstatus);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/mktemp.html
 char* mktemp(char* pattern)
 {
     auto error = generate_unique_filename(pattern, [&] {
@@ -775,6 +800,7 @@ char* mktemp(char* pattern)
     return pattern;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkstemp.html
 int mkstemp(char* pattern)
 {
     int fd = -1;
@@ -791,6 +817,7 @@ int mkstemp(char* pattern)
     return fd;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkdtemp.html
 char* mkdtemp(char* pattern)
 {
     auto error = generate_unique_filename(pattern, [&] {
@@ -805,6 +832,7 @@ char* mkdtemp(char* pattern)
     return pattern;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/bsearch.html
 void* bsearch(const void* key, const void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*))
 {
     char* start = static_cast<char*>(const_cast<void*>(base));
@@ -823,6 +851,7 @@ void* bsearch(const void* key, const void* base, size_t nmemb, size_t size, int 
     return nullptr;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/div.html
 div_t div(int numerator, int denominator)
 {
     div_t result;
@@ -836,6 +865,7 @@ div_t div(int numerator, int denominator)
     return result;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/ldiv.html
 ldiv_t ldiv(long numerator, long denominator)
 {
     ldiv_t result;
@@ -849,6 +879,7 @@ ldiv_t ldiv(long numerator, long denominator)
     return result;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/lldiv.html
 lldiv_t lldiv(long long numerator, long long denominator)
 {
     lldiv_t result;
@@ -862,6 +893,7 @@ lldiv_t lldiv(long long numerator, long long denominator)
     return result;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/mblen.html
 int mblen(char const* s, size_t n)
 {
     // POSIX: Equivalent to mbtowc(NULL, s, n), but we mustn't change the state of mbtowc.
@@ -884,12 +916,14 @@ int mblen(char const* s, size_t n)
     return ret;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/mbstowcs.html
 size_t mbstowcs(wchar_t* pwcs, const char* s, size_t n)
 {
     static mbstate_t state = {};
     return mbsrtowcs(pwcs, &s, n, &state);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/mbtowc.html
 int mbtowc(wchar_t* pwc, const char* s, size_t n)
 {
     static mbstate_t internal_state = {};
@@ -912,6 +946,7 @@ int mbtowc(wchar_t* pwc, const char* s, size_t n)
     return ret;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/wctomb.html
 int wctomb(char* s, wchar_t wc)
 {
     static mbstate_t _internal_state = {};
@@ -923,6 +958,7 @@ int wctomb(char* s, wchar_t wc)
     return static_cast<int>(wcrtomb(s, wc, &_internal_state));
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/wcstombs.html
 size_t wcstombs(char* dest, const wchar_t* src, size_t max)
 {
     char* original_dest = dest;
@@ -945,6 +981,7 @@ size_t wcstombs(char* dest, const wchar_t* src, size_t max)
     return max;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/strtol.html
 long strtol(const char* str, char** endptr, int base)
 {
     long long value = strtoll(str, endptr, base);
@@ -958,6 +995,7 @@ long strtol(const char* str, char** endptr, int base)
     return value;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/strtoul.html
 unsigned long strtoul(const char* str, char** endptr, int base)
 {
     unsigned long long value = strtoull(str, endptr, base);
@@ -968,6 +1006,7 @@ unsigned long strtoul(const char* str, char** endptr, int base)
     return value;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/strtoll.html
 long long strtoll(const char* str, char** endptr, int base)
 {
     // Parse spaces and sign
@@ -1045,6 +1084,7 @@ long long strtoll(const char* str, char** endptr, int base)
     return digits.number();
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/strtoull.html
 unsigned long long strtoull(const char* str, char** endptr, int base)
 {
     // Parse spaces and sign
@@ -1125,21 +1165,51 @@ unsigned long long strtoull(const char* str, char** endptr, int base)
     return digits.number();
 }
 
-// Serenity's PRNG is not cryptographically secure. Do not rely on this for
-// any real crypto! These functions (for now) are for compatibility.
-// TODO: In the future, rand can be made deterministic and this not.
 uint32_t arc4random(void)
 {
     uint32_t buf;
-    syscall(SC_getrandom, &buf, sizeof(buf), 0);
+    arc4random_buf(&buf, sizeof(buf));
     return buf;
 }
 
+static pthread_mutex_t s_randomness_mutex = PTHREAD_MUTEX_INITIALIZER;
+static u8* s_randomness_buffer;
+static size_t s_randomness_index;
+
 void arc4random_buf(void* buffer, size_t buffer_size)
 {
-    // arc4random_buf should never fail, but user supplied buffers could fail.
-    // However, if the user passes a garbage buffer, that's on them.
-    syscall(SC_getrandom, buffer, buffer_size, 0);
+    pthread_mutex_lock(&s_randomness_mutex);
+
+    size_t bytes_needed = buffer_size;
+    auto* ptr = static_cast<u8*>(buffer);
+
+    while (bytes_needed > 0) {
+        if (!s_randomness_buffer || s_randomness_index >= PAGE_SIZE) {
+            if (!s_randomness_buffer) {
+                s_randomness_buffer = static_cast<u8*>(mmap(nullptr, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_RANDOMIZED, 0, 0));
+                VERIFY(s_randomness_buffer != MAP_FAILED);
+                __pthread_fork_atfork_register_child(
+                    [] {
+                        munmap(s_randomness_buffer, PAGE_SIZE);
+                        s_randomness_buffer = nullptr;
+                        s_randomness_index = 0;
+                    });
+            }
+            syscall(SC_getrandom, s_randomness_buffer, PAGE_SIZE);
+            s_randomness_index = 0;
+        }
+
+        size_t available_bytes = PAGE_SIZE - s_randomness_index;
+        size_t bytes_to_copy = min(bytes_needed, available_bytes);
+
+        memcpy(ptr, s_randomness_buffer + s_randomness_index, bytes_to_copy);
+
+        s_randomness_index += bytes_to_copy;
+        bytes_needed -= bytes_to_copy;
+        ptr += bytes_to_copy;
+    }
+
+    pthread_mutex_unlock(&s_randomness_mutex);
 }
 
 uint32_t arc4random_uniform(uint32_t max_bounds)
@@ -1147,6 +1217,7 @@ uint32_t arc4random_uniform(uint32_t max_bounds)
     return AK::get_random_uniform(max_bounds);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/realpath.html
 char* realpath(const char* pathname, char* buffer)
 {
     if (!pathname) {
@@ -1196,6 +1267,7 @@ char* realpath(const char* pathname, char* buffer)
     return buffer;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_openpt.html
 int posix_openpt(int flags)
 {
     if (flags & ~(O_RDWR | O_NOCTTY | O_CLOEXEC)) {
@@ -1206,17 +1278,20 @@ int posix_openpt(int flags)
     return open("/dev/ptmx", flags);
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/grantpt.html
 int grantpt([[maybe_unused]] int fd)
 {
     return 0;
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/unlockpt.html
 int unlockpt([[maybe_unused]] int fd)
 {
     return 0;
 }
 }
 
+// https://pubs.opengroup.org/onlinepubs/9699919799/functions/_Exit.html
 void _Exit(int status)
 {
     _exit(status);

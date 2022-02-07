@@ -40,7 +40,7 @@ public:
     static size_t calculate_framebuffer_size(size_t width, size_t height)
     {
         // VirtIO resources can only map on page boundaries!
-        return Memory::page_round_up(sizeof(u32) * width * height);
+        return Memory::page_round_up(sizeof(u32) * width * height).value();
     }
 
     u8* framebuffer_data();
@@ -61,6 +61,8 @@ private:
     virtual ErrorOr<void> set_head_buffer(size_t head, bool second_buffer) override;
     virtual ErrorOr<void> flush_head_buffer(size_t head) override;
     virtual ErrorOr<void> flush_rectangle(size_t head, FBRect const&) override;
+
+    virtual ErrorOr<ByteBuffer> get_edid(size_t head) const override;
 
     void flush_dirty_window(Protocol::Rect const&, Buffer&);
     void transfer_framebuffer_data_to_host(Protocol::Rect const&, Buffer&);

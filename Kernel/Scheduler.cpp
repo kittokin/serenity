@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BuiltinWrappers.h>
 #include <AK/ScopeGuard.h>
 #include <AK/Singleton.h>
 #include <AK/Time.h>
@@ -17,6 +18,7 @@
 #include <Kernel/Scheduler.h>
 #include <Kernel/Sections.h>
 #include <Kernel/Time/TimeManagement.h>
+#include <Kernel/kstdio.h>
 
 // Remove this once SMP is stable and can be enabled by default
 #define SCHEDULE_ON_ALL_PROCESSORS 0
@@ -77,7 +79,7 @@ Thread& Scheduler::pull_next_runnable_thread()
     return g_ready_queues->with([&](auto& ready_queues) -> Thread& {
         auto priority_mask = ready_queues.mask;
         while (priority_mask != 0) {
-            auto priority = __builtin_ffsl(priority_mask);
+            auto priority = bit_scan_forward(priority_mask);
             VERIFY(priority > 0);
             auto& ready_queue = ready_queues.queues[--priority];
             for (auto& thread : ready_queue.thread_list) {
@@ -116,7 +118,7 @@ Thread* Scheduler::peek_next_runnable_thread()
     return g_ready_queues->with([&](auto& ready_queues) -> Thread* {
         auto priority_mask = ready_queues.mask;
         while (priority_mask != 0) {
-            auto priority = __builtin_ffsl(priority_mask);
+            auto priority = bit_scan_forward(priority_mask);
             VERIFY(priority > 0);
             auto& ready_queue = ready_queues.queues[--priority];
             for (auto& thread : ready_queue.thread_list) {
@@ -197,13 +199,13 @@ UNMAP_AFTER_INIT void Scheduler::start()
     idle_thread.did_schedule();
     idle_thread.set_initialized(true);
     processor.init_context(idle_thread, false);
-    idle_thread.set_state(Thread::Running);
+    idle_thread.set_state(Thread::State::Running);
     VERIFY(idle_thread.affinity() == (1u << processor.id()));
     processor.initialize_context_switching(idle_thread);
     VERIFY_NOT_REACHED();
 }
 
-bool Scheduler::pick_next()
+void Scheduler::pick_next()
 {
     VERIFY_INTERRUPTS_DISABLED();
 
@@ -239,14 +241,14 @@ bool Scheduler::pick_next()
     critical.leave();
 
     thread_to_schedule.set_ticks_left(time_slice_for(thread_to_schedule));
-    return context_switch(&thread_to_schedule);
+    context_switch(&thread_to_schedule);
 }
 
-bool Scheduler::yield()
+void Scheduler::yield()
 {
     InterruptDisabler disabler;
 
-    auto current_thread = Thread::current();
+    auto const* current_thread = Thread::current();
     dbgln_if(SCHEDULER_DEBUG, "Scheduler[{}]: yielding thread {} in_irq={}", Processor::current_id(), *current_thread, Processor::current_in_irq());
     VERIFY(current_thread != nullptr);
     if (Processor::current_in_irq() || Processor::in_critical()) {
@@ -254,18 +256,13 @@ bool Scheduler::yield()
         // a critical section where we don't want to switch contexts, then
         // delay until exiting the trap or critical section
         Processor::current().invoke_scheduler_async();
-        return false;
+        return;
     }
 
-    if (!Scheduler::pick_next())
-        return false;
-
-    if constexpr (SCHEDULER_DEBUG)
-        dbgln("Scheduler[{}]: yield returns to thread {} in_irq={}", Processor::current_id(), *current_thread, Processor::current_in_irq());
-    return true;
+    Scheduler::pick_next();
 }
 
-bool Scheduler::context_switch(Thread* thread)
+void Scheduler::context_switch(Thread* thread)
 {
     if (Memory::s_mm_lock.is_locked_by_current_processor()) {
         PANIC("In context switch while holding Memory::s_mm_lock");
@@ -273,31 +270,31 @@ bool Scheduler::context_switch(Thread* thread)
 
     thread->did_schedule();
 
-    auto from_thread = Thread::current();
-    if (from_thread == thread)
-        return false;
+    auto* from_thread = Thread::current();
+    VERIFY(from_thread);
 
-    if (from_thread) {
-        // If the last process hasn't blocked (still marked as running),
-        // mark it as runnable for the next round.
-        if (from_thread->state() == Thread::Running)
-            from_thread->set_state(Thread::Runnable);
+    if (from_thread == thread)
+        return;
+
+    // If the last process hasn't blocked (still marked as running),
+    // mark it as runnable for the next round.
+    if (from_thread->state() == Thread::State::Running)
+        from_thread->set_state(Thread::State::Runnable);
 
 #ifdef LOG_EVERY_CONTEXT_SWITCH
-        const auto msg = "Scheduler[{}]: {} -> {} [prio={}] {:#04x}:{:p}";
+    const auto msg = "Scheduler[{}]: {} -> {} [prio={}] {:#04x}:{:p}";
 
-        dbgln(msg,
-            Processor::current_id(), from_thread->tid().value(),
-            thread->tid().value(), thread->priority(), thread->regs().cs, thread->regs().ip());
+    dbgln(msg,
+        Processor::current_id(), from_thread->tid().value(),
+        thread->tid().value(), thread->priority(), thread->regs().cs, thread->regs().ip());
 #endif
-    }
 
     auto& proc = Processor::current();
     if (!thread->is_initialized()) {
         proc.init_context(*thread, false);
         thread->set_initialized(true);
     }
-    thread->set_state(Thread::Running);
+    thread->set_state(Thread::State::Running);
 
     PerformanceManager::add_context_switch_perf_event(*from_thread, *thread);
 
@@ -305,21 +302,11 @@ bool Scheduler::context_switch(Thread* thread)
 
     // NOTE: from_thread at this point reflects the thread we were
     // switched from, and thread reflects Thread::current()
-    enter_current(*from_thread, false);
+    enter_current(*from_thread);
     VERIFY(thread == Thread::current());
-
-    if (thread->process().is_user_process() && thread->previous_mode() != Thread::PreviousMode::KernelMode && thread->current_trap()) {
-        auto& regs = thread->get_register_dump_from_stack();
-        auto iopl = get_iopl_from_eflags(regs.flags());
-        if (iopl != 0) {
-            PANIC("Switched to thread {} with non-zero IOPL={}", Thread::current()->tid().value(), iopl);
-        }
-    }
-
-    return true;
 }
 
-void Scheduler::enter_current(Thread& prev_thread, bool is_first)
+void Scheduler::enter_current(Thread& prev_thread)
 {
     VERIFY(g_scheduler_lock.is_locked_by_current_processor());
 
@@ -329,21 +316,16 @@ void Scheduler::enter_current(Thread& prev_thread, bool is_first)
     auto* current_thread = Thread::current();
     current_thread->update_time_scheduled(scheduler_time, true, false);
 
-    prev_thread.set_active(false);
-    if (prev_thread.state() == Thread::Dying) {
+    // NOTE: When doing an exec(), we will context switch from and to the same thread!
+    //       In that case, we must not mark the previous thread as inactive.
+    if (&prev_thread != current_thread)
+        prev_thread.set_active(false);
+
+    if (prev_thread.state() == Thread::State::Dying) {
         // If the thread we switched from is marked as dying, then notify
         // the finalizer. Note that as soon as we leave the scheduler lock
         // the finalizer may free from_thread!
         notify_finalizer();
-    } else if (!is_first) {
-        // Check if we have any signals we should deliver (even if we don't
-        // end up switching to another thread).
-        if (!current_thread->is_in_block() && current_thread->previous_mode() != Thread::PreviousMode::KernelMode && current_thread->current_trap()) {
-            SpinlockLocker lock(current_thread->get_lock());
-            if (current_thread->state() == Thread::Running && current_thread->pending_signals_for_state()) {
-                current_thread->dispatch_one_pending_signal();
-            }
-        }
     }
 }
 
@@ -437,7 +419,7 @@ UNMAP_AFTER_INIT Thread* Scheduler::create_ap_idle_thread(u32 cpu)
     VERIFY(Processor::is_bootstrap_processor());
 
     VERIFY(s_colonel_process);
-    Thread* idle_thread = s_colonel_process->create_kernel_thread(idle_loop, nullptr, THREAD_PRIORITY_MIN, KString::must_create(String::formatted("idle thread #{}", cpu)), 1 << cpu, false);
+    Thread* idle_thread = s_colonel_process->create_kernel_thread(idle_loop, nullptr, THREAD_PRIORITY_MIN, MUST(KString::formatted("idle thread #{}", cpu)), 1 << cpu, false);
     VERIFY(idle_thread);
     return idle_thread;
 }
@@ -456,7 +438,7 @@ void Scheduler::timer_tick(const RegisterState& regs)
     VERIFY_INTERRUPTS_DISABLED();
     VERIFY(Processor::current_in_irq());
 
-    auto current_thread = Processor::current_thread();
+    auto* current_thread = Processor::current_thread();
     if (!current_thread)
         return;
 
@@ -479,7 +461,7 @@ void Scheduler::timer_tick(const RegisterState& regs)
     if (current_thread->previous_mode() == Thread::PreviousMode::UserMode && current_thread->should_die() && !current_thread->is_blocked()) {
         SpinlockLocker scheduler_lock(g_scheduler_lock);
         dbgln_if(SCHEDULER_DEBUG, "Scheduler[{}]: Terminating user mode thread {}", Processor::current_id(), *current_thread);
-        current_thread->set_state(Thread::Dying);
+        current_thread->set_state(Thread::State::Dying);
         Processor::current().invoke_scheduler_async();
         return;
     }
@@ -516,7 +498,7 @@ void Scheduler::invoke_async()
 
 void Scheduler::notify_finalizer()
 {
-    if (g_finalizer_has_work.exchange(true, AK::MemoryOrder::memory_order_acq_rel) == false)
+    if (!g_finalizer_has_work.exchange(true, AK::MemoryOrder::memory_order_acq_rel))
         g_finalizer_wait_queue->wake_all();
 }
 
@@ -575,7 +557,7 @@ void dump_thread_list(bool with_stack_traces)
 
     Thread::for_each([&](Thread& thread) {
         switch (thread.state()) {
-        case Thread::Dying:
+        case Thread::State::Dying:
             dmesgln("  {:14} {:30} @ {:04x}:{:08x} Finalizable: {}, (nsched: {})",
                 thread.state_string(),
                 thread,
@@ -594,8 +576,14 @@ void dump_thread_list(bool with_stack_traces)
                 thread.times_scheduled());
             break;
         }
-        if (with_stack_traces)
-            dbgln("{}", thread.backtrace());
+        if (with_stack_traces) {
+            auto trace_or_error = thread.backtrace();
+            if (!trace_or_error.is_error()) {
+                auto trace = trace_or_error.release_value();
+                dbgln("Backtrace:");
+                kernelputstr(trace->characters(), trace->length());
+            }
+        }
         return IterationDecision::Continue;
     });
 }

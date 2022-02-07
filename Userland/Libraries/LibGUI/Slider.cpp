@@ -104,9 +104,9 @@ void Slider::mousedown_event(MouseEvent& event)
             auto knob_first_edge = knob_rect().first_edge_for_orientation(orientation());
             auto knob_last_edge = knob_rect().last_edge_for_orientation(orientation());
             if (mouse_offset > knob_last_edge)
-                set_value(value() + page_step());
+                increase_slider_by_page_steps(1);
             else if (mouse_offset < knob_first_edge)
-                set_value(value() - page_step());
+                decrease_slider_by_page_steps(1);
         }
     }
     return Widget::mousedown_event(event);
@@ -139,7 +139,7 @@ void Slider::mouseup_event(MouseEvent& event)
 void Slider::mousewheel_event(MouseEvent& event)
 {
     auto acceleration_modifier = step();
-    auto wheel_delta = event.wheel_delta();
+    auto wheel_delta = event.wheel_delta_y();
 
     if (event.modifiers() == KeyModifier::Mod_Ctrl)
         acceleration_modifier *= 6;
@@ -147,9 +147,9 @@ void Slider::mousewheel_event(MouseEvent& event)
         wheel_delta /= abs(wheel_delta);
 
     if (orientation() == Orientation::Horizontal)
-        set_value(value() - wheel_delta * acceleration_modifier);
+        decrease_slider_by(wheel_delta * acceleration_modifier);
     else
-        set_value(value() + wheel_delta * acceleration_modifier);
+        increase_slider_by(wheel_delta * acceleration_modifier);
 
     Widget::mousewheel_event(event);
 }

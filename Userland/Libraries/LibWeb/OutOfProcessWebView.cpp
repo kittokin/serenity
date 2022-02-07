@@ -62,7 +62,7 @@ void OutOfProcessWebView::create_client()
 {
     m_client_state = {};
 
-    m_client_state.client = WebContentClient::construct(*this);
+    m_client_state.client = WebContentClient::try_create(*this).release_value_but_fixme_should_propagate_errors();
     m_client_state.client->on_web_content_process_crash = [this] {
         deferred_invoke([this] {
             handle_web_content_process_crash();
@@ -183,7 +183,7 @@ void OutOfProcessWebView::mousemove_event(GUI::MouseEvent& event)
 
 void OutOfProcessWebView::mousewheel_event(GUI::MouseEvent& event)
 {
-    client().async_mouse_wheel(to_content_position(event.position()), event.button(), event.buttons(), event.modifiers(), event.wheel_delta());
+    client().async_mouse_wheel(to_content_position(event.position()), event.button(), event.buttons(), event.modifiers(), event.wheel_delta_x(), event.wheel_delta_y());
 }
 
 void OutOfProcessWebView::theme_change_event(GUI::ThemeChangeEvent& event)
@@ -243,8 +243,8 @@ void OutOfProcessWebView::notify_server_did_change_title(Badge<WebContentClient>
 
 void OutOfProcessWebView::notify_server_did_request_scroll(Badge<WebContentClient>, i32 x_delta, i32 y_delta)
 {
-    horizontal_scrollbar().set_value(horizontal_scrollbar().value() + x_delta);
-    vertical_scrollbar().set_value(vertical_scrollbar().value() + y_delta);
+    horizontal_scrollbar().increase_slider_by(x_delta);
+    vertical_scrollbar().increase_slider_by(y_delta);
 }
 
 void OutOfProcessWebView::notify_server_did_request_scroll_to(Badge<WebContentClient>, Gfx::IntPoint const& scroll_position)
@@ -493,6 +493,16 @@ void OutOfProcessWebView::set_content_filters(Vector<String> filters)
 void OutOfProcessWebView::set_preferred_color_scheme(Web::CSS::PreferredColorScheme color_scheme)
 {
     client().async_set_preferred_color_scheme(color_scheme);
+}
+
+void OutOfProcessWebView::focusin_event(GUI::FocusEvent&)
+{
+    client().async_set_has_focus(true);
+}
+
+void OutOfProcessWebView::focusout_event(GUI::FocusEvent&)
+{
+    client().async_set_has_focus(false);
 }
 
 }

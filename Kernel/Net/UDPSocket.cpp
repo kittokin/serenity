@@ -29,16 +29,13 @@ MutexProtected<HashMap<u16, UDPSocket*>>& UDPSocket::sockets_by_port()
     return *s_map;
 }
 
-SocketHandle<UDPSocket> UDPSocket::from_port(u16 port)
+RefPtr<UDPSocket> UDPSocket::from_port(u16 port)
 {
-    return sockets_by_port().with_shared([&](const auto& table) -> SocketHandle<UDPSocket> {
-        RefPtr<UDPSocket> socket;
+    return sockets_by_port().with_shared([&](const auto& table) -> RefPtr<UDPSocket> {
         auto it = table.find(port);
         if (it == table.end())
             return {};
-        socket = (*it).value;
-        VERIFY(socket);
-        return { *socket };
+        return (*it).value;
     });
 }
 
@@ -57,6 +54,13 @@ UDPSocket::~UDPSocket()
 ErrorOr<NonnullRefPtr<UDPSocket>> UDPSocket::try_create(int protocol, NonnullOwnPtr<DoubleBuffer> receive_buffer)
 {
     return adopt_nonnull_ref_or_enomem(new (nothrow) UDPSocket(protocol, move(receive_buffer)));
+}
+
+ErrorOr<size_t> UDPSocket::protocol_size(ReadonlyBytes raw_ipv4_packet)
+{
+    auto& ipv4_packet = *(const IPv4Packet*)(raw_ipv4_packet.data());
+    auto& udp_packet = *static_cast<const UDPPacket*>(ipv4_packet.payload());
+    return udp_packet.length() - sizeof(UDPPacket);
 }
 
 ErrorOr<size_t> UDPSocket::protocol_receive(ReadonlyBytes raw_ipv4_packet, UserOrKernelBuffer& buffer, size_t buffer_size, [[maybe_unused]] int flags)

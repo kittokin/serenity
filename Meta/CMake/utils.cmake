@@ -57,7 +57,9 @@ function(serenity_libc target_name fs_name)
         target_link_libraries(${target_name} clang_rt.builtins)
         # FIXME: Implement -static-libstdc++ in the next toolchain update.
         target_link_options(${target_name} PRIVATE -nostdlib++ -Wl,-Bstatic -lc++ -Wl,-Bdynamic)
-        target_link_options(${target_name} PRIVATE -Wl,--no-dependent-libraries)
+        if (NOT ENABLE_MOLD_LINKER)
+            target_link_options(${target_name} PRIVATE -Wl,--no-dependent-libraries)
+        endif()
     endif()
     target_link_directories(LibC PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
     serenity_generated_sources(${target_name})
@@ -151,4 +153,60 @@ function(embed_resource target section file)
         COMMENT "Generating ${asm_file}"
     )
     target_sources("${target}" PRIVATE "${asm_file}")
+endfunction()
+
+function(link_with_unicode_data target)
+    if (ENABLE_UNICODE_DATABASE_DOWNLOAD)
+        target_link_libraries("${target}" LibUnicodeData)
+    endif()
+endfunction()
+
+function(remove_path_if_version_changed version version_file cache_path)
+    set(version_differs YES)
+
+    if (EXISTS "${version_file}")
+        file(STRINGS "${version_file}" active_version)
+        if (version STREQUAL active_version)
+            set(version_differs NO)
+        endif()
+    endif()
+
+    if (version_differs)
+        message(STATUS "Removing outdated ${cache_path} for version ${version}")
+        file(REMOVE_RECURSE "${cache_path}")
+        file(WRITE "${version_file}" "${version}")
+    endif()
+endfunction()
+
+function(invoke_generator name generator version_file prefix header implementation)
+    cmake_parse_arguments(invoke_generator "" "" "arguments" ${ARGN})
+
+    add_custom_command(
+        OUTPUT "${header}" "${implementation}"
+        COMMAND $<TARGET_FILE:${generator}> -h "${header}.tmp" -c "${implementation}.tmp" ${invoke_generator_arguments}
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${header}.tmp" "${header}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${implementation}.tmp" "${implementation}"
+        COMMAND "${CMAKE_COMMAND}" -E remove "${header}.tmp" "${implementation}.tmp"
+        VERBATIM
+        DEPENDS ${generator} "${version_file}"
+    )
+
+    add_custom_target("generate_${prefix}${name}" DEPENDS "${header}" "${implementation}")
+    add_dependencies(all_generated "generate_${prefix}${name}")
+endfunction()
+
+function(download_file url path)
+    if (NOT EXISTS "${path}")
+        get_filename_component(file "${path}" NAME)
+        message(STATUS "Downloading file ${file} from ${url}")
+
+        file(DOWNLOAD "${url}" "${path}" INACTIVITY_TIMEOUT 10 STATUS download_result)
+        list(GET download_result 0 status_code)
+        list(GET download_result 1 error_message)
+
+        if (NOT status_code EQUAL 0)
+            file(REMOVE "${path}")
+            message(FATAL_ERROR "Failed to download ${url}: ${error_message}")
+        endif()
+    endif()
 endfunction()

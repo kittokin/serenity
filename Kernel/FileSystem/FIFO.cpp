@@ -99,12 +99,12 @@ void FIFO::detach(Direction direction)
     evaluate_block_conditions();
 }
 
-bool FIFO::can_read(const OpenFileDescription&, size_t) const
+bool FIFO::can_read(const OpenFileDescription&, u64) const
 {
     return !m_buffer->is_empty() || !m_writers;
 }
 
-bool FIFO::can_write(const OpenFileDescription&, size_t) const
+bool FIFO::can_write(const OpenFileDescription&, u64) const
 {
     return m_buffer->space_for_writing() || !m_readers;
 }
@@ -137,11 +137,11 @@ ErrorOr<NonnullOwnPtr<KString>> FIFO::pseudo_path(const OpenFileDescription&) co
     return KString::formatted("fifo:{}", m_fifo_id);
 }
 
-ErrorOr<void> FIFO::stat(::stat& st) const
+ErrorOr<struct stat> FIFO::stat() const
 {
-    memset(&st, 0, sizeof(st));
+    struct stat st = {};
     st.st_mode = S_IFIFO;
-    return {};
+    return st;
 }
 
 }

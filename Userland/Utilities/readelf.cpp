@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -242,6 +242,7 @@ int main(int argc, char** argv)
     static bool display_unwind_info = false;
     static bool display_dynamic_section = false;
     static bool display_hardening = false;
+    StringView string_dump_section {};
 
     Core::ArgsParser args_parser;
     args_parser.add_option(display_all, "Display all", "all", 'a');
@@ -256,6 +257,7 @@ int main(int argc, char** argv)
     args_parser.add_option(display_relocations, "Display relocations", "relocs", 'r');
     args_parser.add_option(display_unwind_info, "Display unwind info", "unwind", 'u');
     args_parser.add_option(display_hardening, "Display security hardening info", "checksec", 'c');
+    args_parser.add_option(string_dump_section, "Display the contents of a section as strings", "string-dump", 'p', "section-name");
     args_parser.add_positional_argument(path, "ELF path", "path");
     args_parser.parse(argc, argv);
 
@@ -298,20 +300,21 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    String interpreter_path;
-
-    if (!ELF::validate_program_headers(*(const ElfW(Ehdr)*)elf_image_data.data(), elf_image_data.size(), (const u8*)elf_image_data.data(), elf_image_data.size(), &interpreter_path)) {
+    StringBuilder interpreter_path_builder;
+    auto result_or_error = ELF::validate_program_headers(*(const ElfW(Ehdr)*)elf_image_data.data(), elf_image_data.size(), elf_image_data, &interpreter_path_builder);
+    if (result_or_error.is_error() || !result_or_error.value()) {
         warnln("Invalid ELF headers");
         return -1;
     }
+    auto interpreter_path = interpreter_path_builder.string_view();
 
     auto& header = *reinterpret_cast<const ElfW(Ehdr)*>(elf_image_data.data());
 
     RefPtr<ELF::DynamicObject> object = nullptr;
 
     if (elf_image.is_dynamic()) {
-        if (interpreter_path.is_null()) {
-            interpreter_path = "/usr/lib/Loader.so";
+        if (interpreter_path.is_empty()) {
+            interpreter_path = "/usr/lib/Loader.so"sv;
             warnln("Warning: Dynamic ELF object has no interpreter path. Using: {}", interpreter_path);
         }
 
@@ -716,5 +719,19 @@ int main(int argc, char** argv)
         outln();
     }
 
+    if (!string_dump_section.is_null()) {
+        auto maybe_section = elf_image.lookup_section(string_dump_section);
+        if (maybe_section.has_value()) {
+            outln("String dump of section \'{}\':", string_dump_section);
+            StringView data(maybe_section->raw_data(), maybe_section->size());
+            data.for_each_split_view('\0', false, [&data](auto string) {
+                auto offset = string.characters_without_null_termination() - data.characters_without_null_termination();
+                outln("[{:6x}] {}", offset, string);
+            });
+        } else {
+            warnln("Could not find section \'{}\'", string_dump_section);
+            return 1;
+        }
+    }
     return 0;
 }

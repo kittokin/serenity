@@ -23,7 +23,7 @@ public:
 
     void initialize_menubar(GUI::Window&);
     void create_toolbar();
-    void open_file(int fd, const String& path);
+    void open_file(Core::File&);
 
 private:
     PDFViewerWidget();
@@ -35,6 +35,12 @@ private:
     RefPtr<GUI::Action> m_go_to_prev_page_action;
     RefPtr<GUI::Action> m_go_to_next_page_action;
     RefPtr<GUI::Action> m_toggle_sidebar_action;
+    RefPtr<GUI::Action> m_zoom_in_action;
+    RefPtr<GUI::Action> m_zoom_out_action;
+    RefPtr<GUI::Action> m_reset_zoom_action;
+    RefPtr<GUI::Action> m_rotate_counterclockwise_action;
+    RefPtr<GUI::Action> m_rotate_clockwise_action;
+
     bool m_sidebar_open { false };
     ByteBuffer m_buffer;
 };

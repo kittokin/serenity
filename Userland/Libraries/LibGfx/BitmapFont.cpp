@@ -6,6 +6,7 @@
 
 #include "BitmapFont.h"
 #include "Emoji.h"
+#include <AK/BuiltinWrappers.h>
 #include <AK/Utf32View.h>
 #include <AK/Utf8View.h>
 #include <LibCore/FileStream.h>
@@ -95,7 +96,7 @@ NonnullRefPtr<BitmapFont> BitmapFont::masked_character_set() const
     }
     size_t new_glyph_count { 0 };
     for (size_t i = 0; i < new_range_mask_size; ++i) {
-        new_glyph_count += 256 * __builtin_popcount(new_range_mask[i]);
+        new_glyph_count += 256 * popcount(new_range_mask[i]);
     }
     size_t bytes_per_glyph = sizeof(u32) * m_glyph_height;
     auto* new_rows = static_cast<u8*>(calloc(new_glyph_count, bytes_per_glyph));
@@ -113,8 +114,8 @@ NonnullRefPtr<BitmapFont> BitmapFont::masked_character_set() const
 }
 
 BitmapFont::BitmapFont(String name, String family, u8* rows, u8* widths, bool is_fixed_width, u8 glyph_width, u8 glyph_height, u8 glyph_spacing, u16 range_mask_size, u8* range_mask, u8 baseline, u8 mean_line, u8 presentation_size, u16 weight, u8 slope, bool owns_arrays)
-    : m_name(name)
-    , m_family(family)
+    : m_name(move(name))
+    , m_family(move(family))
     , m_range_mask_size(range_mask_size)
     , m_range_mask(range_mask)
     , m_rows(rows)
@@ -170,9 +171,9 @@ BitmapFont::~BitmapFont()
     }
 }
 
-RefPtr<BitmapFont> BitmapFont::load_from_memory(const u8* data)
+RefPtr<BitmapFont> BitmapFont::load_from_memory(u8 const* data)
 {
-    auto& header = *reinterpret_cast<const FontFileHeader*>(data);
+    auto const& header = *reinterpret_cast<const FontFileHeader*>(data);
     if (memcmp(header.magic, "!Fnt", 4)) {
         dbgln("header.magic != '!Fnt', instead it's '{:c}{:c}{:c}{:c}'", header.magic[0], header.magic[1], header.magic[2], header.magic[3]);
         return nullptr;
@@ -191,7 +192,7 @@ RefPtr<BitmapFont> BitmapFont::load_from_memory(const u8* data)
     size_t glyph_count { 0 };
     u8* range_mask = const_cast<u8*>(data + sizeof(FontFileHeader));
     for (size_t i = 0; i < header.range_mask_size; ++i)
-        glyph_count += 256 * __builtin_popcount(range_mask[i]);
+        glyph_count += 256 * popcount(range_mask[i]);
     u8* rows = range_mask + header.range_mask_size;
     u8* widths = (u8*)(rows) + glyph_count * bytes_per_glyph;
     return adopt_ref(*new BitmapFont(String(header.name), String(header.family), rows, widths, !header.is_variable_width, header.glyph_width, header.glyph_height, header.glyph_spacing, header.range_mask_size, range_mask, header.baseline, header.mean_line, header.presentation_size, header.weight, header.slope));
@@ -206,7 +207,7 @@ RefPtr<BitmapFont> BitmapFont::load_from_file(String const& path)
     if (file_or_error.is_error())
         return nullptr;
 
-    auto font = load_from_memory((const u8*)file_or_error.value()->data());
+    auto font = load_from_memory((u8 const*)file_or_error.value()->data());
     if (!font)
         return nullptr;
 
@@ -244,10 +245,7 @@ bool BitmapFont::write_to_file(String const& path)
     stream << ReadonlyBytes { m_glyph_widths, m_glyph_count };
 
     stream.flush();
-    if (stream.handle_any_error())
-        return false;
-
-    return true;
+    return !stream.handle_any_error();
 }
 
 Glyph BitmapFont::glyph(u32 code_point) const
@@ -310,10 +308,10 @@ int BitmapFont::glyph_or_emoji_width_for_variable_width_font(u32 code_point) con
         return glyph_width(0xFFFD);
     }
 
-    auto* emoji = Emoji::emoji_for_code_point(code_point);
+    auto const* emoji = Emoji::emoji_for_code_point(code_point);
     if (emoji == nullptr)
         return glyph_width(0xFFFD);
-    return emoji->size().width();
+    return glyph_height() * emoji->width() / emoji->height();
 }
 
 int BitmapFont::width(StringView view) const { return unicode_view_width(Utf8View(view)); }
@@ -347,14 +345,14 @@ ALWAYS_INLINE int BitmapFont::unicode_view_width(T const& view) const
 
 String BitmapFont::qualified_name() const
 {
-    return String::formatted("{} {} {}", family(), presentation_size(), weight());
+    return String::formatted("{} {} {} {}", family(), presentation_size(), weight(), slope());
 }
 
 String BitmapFont::variant() const
 {
     StringBuilder builder;
     builder.append(weight_to_name(weight()));
-    if (slope()) {
+    if (slope() != 0) {
         if (builder.string_view() == "Regular"sv)
             builder.clear();
         else
@@ -368,7 +366,7 @@ Font const& Font::bold_variant() const
 {
     if (m_bold_variant)
         return *m_bold_variant;
-    m_bold_variant = Gfx::FontDatabase::the().get(family(), presentation_size(), 700);
+    m_bold_variant = Gfx::FontDatabase::the().get(family(), presentation_size(), 700, 0);
     if (!m_bold_variant)
         m_bold_variant = this;
     return *m_bold_variant;

@@ -43,6 +43,8 @@ public:
     void set_opacity(u8);
     float opacity() { return m_opacity; };
 
+    void set_show_scrollbar(bool);
+
     enum class BellMode {
         Visible,
         AudibleBeep,
@@ -200,6 +202,8 @@ private:
         Up,
         Down
     };
+
+    void set_auto_scroll_direction(AutoScrollDirection);
 
     AutoScrollDirection m_auto_scroll_direction { AutoScrollDirection::None };
 

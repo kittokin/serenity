@@ -21,7 +21,7 @@ endpoint WebContentServer
     mouse_down(Gfx::IntPoint position, unsigned button, unsigned buttons, unsigned modifiers) =|
     mouse_move(Gfx::IntPoint position, unsigned button, unsigned buttons, unsigned modifiers) =|
     mouse_up(Gfx::IntPoint position, unsigned button, unsigned buttons, unsigned modifiers) =|
-    mouse_wheel(Gfx::IntPoint position, unsigned button, unsigned buttons, unsigned modifiers, i32 wheel_delta) =|
+    mouse_wheel(Gfx::IntPoint position, unsigned button, unsigned buttons, unsigned modifiers, i32 wheel_delta_x, i32 wheel_delta_y) =|
 
     key_down(i32 key, unsigned modifiers, u32 code_point) =|
     key_up(i32 key, unsigned modifiers, u32 code_point) =|
@@ -43,5 +43,7 @@ endpoint WebContentServer
 
     set_content_filters(Vector<String> filters) =|
     set_preferred_color_scheme(Web::CSS::PreferredColorScheme color_scheme) =|
+
+    set_has_focus(bool has_focus) =|
 
 }

@@ -12,23 +12,29 @@
 
 class KeypadValue {
     friend class Keypad;
+    friend class Calculator;
 
 public:
     KeypadValue(i64, u8);
     KeypadValue(i64);
+
+    explicit KeypadValue(StringView);
 
     KeypadValue operator+(KeypadValue const&);
     KeypadValue operator-(KeypadValue const&);
     KeypadValue operator*(KeypadValue const&);
     KeypadValue operator-(void) const;
     bool operator<(KeypadValue const&);
-    bool operator>(KeypadValue const&);
     bool operator==(KeypadValue const&);
 
-    explicit KeypadValue(double);
-    explicit operator double();
+    KeypadValue sqrt() const;
+    KeypadValue invert() const;
+    KeypadValue operator/(KeypadValue const&);
 
 private:
+    explicit KeypadValue(double);
+    explicit operator double() const;
+
     template<typename T, typename F>
     T operator_helper(KeypadValue const& lhs, KeypadValue const& rhs, F callback);
 

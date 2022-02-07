@@ -176,11 +176,7 @@ NonnullRefPtr<CSSStyleSheet> Parser::parse_a_stylesheet(TokenStream<T>& tokens)
             rules.append(*rule);
     }
 
-    auto stylesheet = CSSStyleSheet::create(rules);
-    if constexpr (CSS_PARSER_DEBUG) {
-        dump_sheet(stylesheet);
-    }
-    return stylesheet;
+    return CSSStyleSheet::create(rules);
 }
 
 Optional<SelectorList> Parser::parse_as_selector()
@@ -509,7 +505,7 @@ Result<Selector::SimpleSelector, Parser::ParsingResult> Parser::parse_simple_sel
             } else if (pseudo_name.equals_ignoring_case("first-line")) {
                 simple_selector.pseudo_element = Selector::SimpleSelector::PseudoElement::FirstLine;
             } else {
-                dbgln("Unrecognized pseudo-element: '::{}'", pseudo_name);
+                dbgln_if(CSS_PARSER_DEBUG, "Unrecognized pseudo-element: '::{}'", pseudo_name);
                 return ParsingResult::SyntaxError;
             }
 
@@ -577,7 +573,7 @@ Result<Selector::SimpleSelector, Parser::ParsingResult> Parser::parse_simple_sel
                 simple_selector.type = Selector::SimpleSelector::Type::PseudoElement;
                 simple_selector.pseudo_element = Selector::SimpleSelector::PseudoElement::FirstLine;
             } else {
-                dbgln("Unrecognized pseudo-class: ':{}'", pseudo_name);
+                dbgln_if(CSS_PARSER_DEBUG, "Unrecognized pseudo-class: ':{}'", pseudo_name);
                 return ParsingResult::SyntaxError;
             }
 
@@ -616,7 +612,7 @@ Result<Selector::SimpleSelector, Parser::ParsingResult> Parser::parse_simple_sel
                     return ParsingResult::SyntaxError;
                 }
             } else {
-                dbgln("Unrecognized pseudo-class function: ':{}'()", pseudo_function.name());
+                dbgln_if(CSS_PARSER_DEBUG, "Unrecognized pseudo-class function: ':{}'()", pseudo_function.name());
                 return ParsingResult::SyntaxError;
             }
 
@@ -674,14 +670,22 @@ RefPtr<MediaQuery> Parser::parse_as_media_query()
     return nullptr;
 }
 
+// `<media-query>`, https://www.w3.org/TR/mediaqueries-4/#typedef-media-query
 NonnullRefPtr<MediaQuery> Parser::parse_media_query(TokenStream<StyleComponentValueRule>& tokens)
 {
-    // Returns whether to negate the query
-    auto consume_initial_modifier = [](auto& tokens) -> Optional<bool> {
+    // `<media-query> = <media-condition>
+    //                | [ not | only ]? <media-type> [ and <media-condition-without-or> ]?`
+    auto position = tokens.position();
+    tokens.skip_whitespace();
+
+    // `[ not | only ]?`, Returns whether to negate the query
+    auto parse_initial_modifier = [](auto& tokens) -> Optional<bool> {
+        auto position = tokens.position();
+        tokens.skip_whitespace();
         auto& token = tokens.next_token();
 
         if (!token.is(Token::Type::Ident)) {
-            tokens.reconsume_current_input_token();
+            tokens.rewind_to_position(position);
             return {};
         }
 
@@ -691,7 +695,7 @@ NonnullRefPtr<MediaQuery> Parser::parse_media_query(TokenStream<StyleComponentVa
         } else if (ident.equals_ignoring_case("only")) {
             return false;
         }
-        tokens.reconsume_current_input_token();
+        tokens.rewind_to_position(position);
         return {};
     };
 
@@ -702,14 +706,15 @@ NonnullRefPtr<MediaQuery> Parser::parse_media_query(TokenStream<StyleComponentVa
             dbgln("Invalid media query:");
             tokens.dump_all_tokens();
         }
+        tokens.rewind_to_position(position);
         return MediaQuery::create_not_all();
     };
 
     auto media_query = MediaQuery::create();
     tokens.skip_whitespace();
 
-    // Only `<media-condition>`
-    if (auto media_condition = consume_media_condition(tokens)) {
+    // `<media-condition>`
+    if (auto media_condition = parse_media_condition(tokens, MediaCondition::AllowOr::Yes)) {
         tokens.skip_whitespace();
         if (tokens.has_next_token())
             return invalid_media_query();
@@ -717,14 +722,14 @@ NonnullRefPtr<MediaQuery> Parser::parse_media_query(TokenStream<StyleComponentVa
         return media_query;
     }
 
-    // Optional `"only" | "not"`
-    if (auto modifier = consume_initial_modifier(tokens); modifier.has_value()) {
+    // `[ not | only ]?`
+    if (auto modifier = parse_initial_modifier(tokens); modifier.has_value()) {
         media_query->m_negated = modifier.value();
         tokens.skip_whitespace();
     }
 
     // `<media-type>`
-    if (auto media_type = consume_media_type(tokens); media_type.has_value()) {
+    if (auto media_type = parse_media_type(tokens); media_type.has_value()) {
         media_query->m_media_type = media_type.value();
         tokens.skip_whitespace();
     } else {
@@ -734,9 +739,9 @@ NonnullRefPtr<MediaQuery> Parser::parse_media_query(TokenStream<StyleComponentVa
     if (!tokens.has_next_token())
         return media_query;
 
-    // Optional "and <media-condition>"
+    // `[ and <media-condition-without-or> ]?`
     if (auto maybe_and = tokens.next_token(); maybe_and.is(Token::Type::Ident) && maybe_and.token().ident().equals_ignoring_case("and")) {
-        if (auto media_condition = consume_media_condition(tokens)) {
+        if (auto media_condition = parse_media_condition(tokens, MediaCondition::AllowOr::No)) {
             tokens.skip_whitespace();
             if (tokens.has_next_token())
                 return invalid_media_query();
@@ -749,189 +754,322 @@ NonnullRefPtr<MediaQuery> Parser::parse_media_query(TokenStream<StyleComponentVa
     return invalid_media_query();
 }
 
-OwnPtr<MediaQuery::MediaCondition> Parser::consume_media_condition(TokenStream<StyleComponentValueRule>& tokens)
+// `<media-condition>`, https://www.w3.org/TR/mediaqueries-4/#typedef-media-condition
+// `<media-condition-widthout-or>`, https://www.w3.org/TR/mediaqueries-4/#typedef-media-condition-without-or
+// (We distinguish between these two with the `allow_or` parameter.)
+OwnPtr<MediaCondition> Parser::parse_media_condition(TokenStream<StyleComponentValueRule>& tokens, MediaCondition::AllowOr allow_or)
 {
-    // "not <media-condition>"
-    // ( `<media-not>` in the grammar )
+    // `<media-not> | <media-in-parens> [ <media-and>* | <media-or>* ]`
     auto position = tokens.position();
-    auto& first_token = tokens.peek_token();
-    if (first_token.is(Token::Type::Ident) && first_token.token().ident().equals_ignoring_case("not"sv)) {
-        tokens.next_token();
+    tokens.skip_whitespace();
 
-        auto condition = new MediaQuery::MediaCondition;
-        condition->type = MediaQuery::MediaCondition::Type::Not;
+    // `<media-not> = not <media-in-parens>`
+    auto parse_media_not = [&](auto& tokens) -> OwnPtr<MediaCondition> {
+        auto position = tokens.position();
+        tokens.skip_whitespace();
 
-        if (auto child_condition = consume_media_condition(tokens)) {
-            condition->conditions.append(child_condition.release_nonnull());
-            return adopt_own(*condition);
+        auto& first_token = tokens.next_token();
+        if (first_token.is(Token::Type::Ident) && first_token.token().ident().equals_ignoring_case("not"sv)) {
+            if (auto child_condition = parse_media_condition(tokens, MediaCondition::AllowOr::Yes))
+                return MediaCondition::from_not(child_condition.release_nonnull());
         }
 
         tokens.rewind_to_position(position);
         return {};
-    }
+    };
 
-    // "<media-condition> ([and | or] <media-condition>)*"
-    // ( `<media-in-parens> [ <media-and>* | <media-or>* ]` in the grammar )
-    NonnullOwnPtrVector<MediaQuery::MediaCondition> child_conditions;
-    Optional<MediaQuery::MediaCondition::Type> condition_type {};
-    auto as_condition_type = [](auto& token) -> Optional<MediaQuery::MediaCondition::Type> {
-        if (!token.is(Token::Type::Ident))
-            return {};
-        auto ident = token.token().ident();
-        if (ident.equals_ignoring_case("and"))
-            return MediaQuery::MediaCondition::Type::And;
-        if (ident.equals_ignoring_case("or"))
-            return MediaQuery::MediaCondition::Type::Or;
+    auto parse_media_with_combinator = [&](auto& tokens, StringView combinator) -> OwnPtr<MediaCondition> {
+        auto position = tokens.position();
+        tokens.skip_whitespace();
+
+        auto& first = tokens.next_token();
+        if (first.is(Token::Type::Ident) && first.token().ident().equals_ignoring_case(combinator)) {
+            tokens.skip_whitespace();
+            if (auto media_in_parens = parse_media_in_parens(tokens))
+                return media_in_parens;
+        }
+
+        tokens.rewind_to_position(position);
         return {};
     };
 
-    bool is_invalid = false;
-    tokens.skip_whitespace();
-    while (tokens.has_next_token()) {
-        if (!child_conditions.is_empty()) {
-            // Expect an "and" or "or" here
-            auto maybe_combination = as_condition_type(tokens.next_token());
-            if (!maybe_combination.has_value()) {
-                is_invalid = true;
-                break;
+    // `<media-and> = and <media-in-parens>`
+    auto parse_media_and = [&](auto& tokens) { return parse_media_with_combinator(tokens, "and"sv); };
+    // `<media-or> = or <media-in-parens>`
+    auto parse_media_or = [&](auto& tokens) { return parse_media_with_combinator(tokens, "or"sv); };
+
+    // `<media-not>`
+    if (auto maybe_media_not = parse_media_not(tokens))
+        return maybe_media_not.release_nonnull();
+
+    // `<media-in-parens> [ <media-and>* | <media-or>* ]`
+    if (auto maybe_media_in_parens = parse_media_in_parens(tokens)) {
+        tokens.skip_whitespace();
+        // Only `<media-in-parens>`
+        if (!tokens.has_next_token())
+            return maybe_media_in_parens.release_nonnull();
+
+        NonnullOwnPtrVector<MediaCondition> child_conditions;
+        child_conditions.append(maybe_media_in_parens.release_nonnull());
+
+        // `<media-and>*`
+        if (auto media_and = parse_media_and(tokens)) {
+            child_conditions.append(media_and.release_nonnull());
+
+            tokens.skip_whitespace();
+            while (tokens.has_next_token()) {
+                if (auto next_media_and = parse_media_and(tokens)) {
+                    child_conditions.append(next_media_and.release_nonnull());
+                    tokens.skip_whitespace();
+                    continue;
+                }
+                // We failed - invalid syntax!
+                tokens.rewind_to_position(position);
+                return {};
             }
-            if (!condition_type.has_value()) {
-                condition_type = maybe_combination.value();
-            } else if (maybe_combination != condition_type) {
-                is_invalid = true;
-                break;
-            }
+
+            return MediaCondition::from_and_list(move(child_conditions));
         }
 
-        tokens.skip_whitespace();
+        // `<media-or>*`
+        if (allow_or == MediaCondition::AllowOr::Yes) {
+            if (auto media_or = parse_media_or(tokens)) {
+                child_conditions.append(media_or.release_nonnull());
 
-        if (auto child_feature = consume_media_feature(tokens); child_feature.has_value()) {
-            auto child = new MediaQuery::MediaCondition;
-            child->type = MediaQuery::MediaCondition::Type::Single;
-            child->feature = child_feature.value();
-            child_conditions.append(adopt_own(*child));
-        } else {
-            auto& token = tokens.next_token();
-            if (!token.is_block() || !token.block().is_paren()) {
-                is_invalid = true;
-                break;
-            }
-            auto block_tokens = TokenStream { token.block().values() };
-            if (auto child = consume_media_condition(block_tokens)) {
-                child_conditions.append(child.release_nonnull());
-            } else {
-                is_invalid = true;
-                break;
+                tokens.skip_whitespace();
+                while (tokens.has_next_token()) {
+                    if (auto next_media_or = parse_media_or(tokens)) {
+                        child_conditions.append(next_media_or.release_nonnull());
+                        tokens.skip_whitespace();
+                        continue;
+                    }
+                    // We failed - invalid syntax!
+                    tokens.rewind_to_position(position);
+                    return {};
+                }
+
+                return MediaCondition::from_or_list(move(child_conditions));
             }
         }
-
-        tokens.skip_whitespace();
-    }
-
-    if (!is_invalid && !child_conditions.is_empty()) {
-        if (child_conditions.size() == 1)
-            return move(child_conditions.ptr_at(0));
-
-        auto condition = new MediaQuery::MediaCondition;
-        condition->type = condition_type.value();
-        condition->conditions = move(child_conditions);
-        return adopt_own(*condition);
-    }
-
-    // `<media-feature>`
-    tokens.rewind_to_position(position);
-    if (auto feature = consume_media_feature(tokens); feature.has_value()) {
-        auto condition = new MediaQuery::MediaCondition;
-        condition->type = MediaQuery::MediaCondition::Type::Single;
-        condition->feature = feature.value();
-        return adopt_own(*condition);
-    }
-
-    // `<general-enclosed>`
-    tokens.rewind_to_position(position);
-    if (auto general_enclosed = parse_general_enclosed(tokens); general_enclosed.has_value()) {
-        auto condition = new MediaQuery::MediaCondition;
-        condition->type = MediaQuery::MediaCondition::Type::GeneralEnclosed;
-        condition->general_enclosed = general_enclosed.release_value();
-        return adopt_own(*condition);
     }
 
     tokens.rewind_to_position(position);
     return {};
 }
 
-Optional<MediaQuery::MediaFeature> Parser::consume_media_feature(TokenStream<StyleComponentValueRule>& outer_tokens)
+// `<media-feature>`, https://www.w3.org/TR/mediaqueries-4/#typedef-media-feature
+Optional<MediaFeature> Parser::parse_media_feature(TokenStream<StyleComponentValueRule>& tokens)
 {
-    outer_tokens.skip_whitespace();
+    // `[ <mf-plain> | <mf-boolean> | <mf-range> ]`
+    auto position = tokens.position();
+    tokens.skip_whitespace();
 
-    auto invalid_feature = [&]() -> Optional<MediaQuery::MediaFeature> {
-        outer_tokens.reconsume_current_input_token();
+    // `<mf-name> = <ident>`
+    auto parse_mf_name = [](auto& tokens, bool allow_min_max_prefix) -> Optional<String> {
+        auto& token = tokens.peek_token();
+        if (token.is(Token::Type::Ident)) {
+            auto name = token.token().ident();
+            if (is_media_feature_name(name)) {
+                tokens.next_token();
+                return name;
+            }
+
+            if (allow_min_max_prefix && (name.starts_with("min-", CaseSensitivity::CaseInsensitive) || name.starts_with("max-", CaseSensitivity::CaseInsensitive))) {
+                auto adjusted_name = name.substring_view(4);
+                if (is_media_feature_name(adjusted_name)) {
+                    tokens.next_token();
+                    return name;
+                }
+            }
+        }
         return {};
     };
 
-    auto& block_token = outer_tokens.next_token();
-    if (block_token.is_block() && block_token.block().is_paren()) {
-        TokenStream tokens { block_token.block().values() };
-
-        tokens.skip_whitespace();
-        auto& name_token = tokens.next_token();
-
-        // FIXME: Range syntax allows a value to come before the name
-        //        https://www.w3.org/TR/mediaqueries-4/#mq-range-context
-        if (!name_token.is(Token::Type::Ident))
-            return invalid_feature();
-
-        auto feature_name = name_token.token().ident();
+    // `<mf-boolean> = <mf-name>`
+    auto parse_mf_boolean = [&](auto& tokens) -> Optional<MediaFeature> {
+        auto position = tokens.position();
         tokens.skip_whitespace();
 
-        if (!tokens.has_next_token()) {
-            return MediaQuery::MediaFeature {
-                .type = MediaQuery::MediaFeature::Type::IsTrue,
-                .name = feature_name,
-            };
+        auto maybe_name = parse_mf_name(tokens, false);
+        if (maybe_name.has_value()) {
+            tokens.skip_whitespace();
+            if (!tokens.has_next_token())
+                return MediaFeature::boolean(maybe_name.release_value());
         }
 
-        if (!tokens.next_token().is(Token::Type::Colon))
-            return invalid_feature();
+        tokens.rewind_to_position(position);
+        return {};
+    };
+
+    // `<mf-plain> = <mf-name> : <mf-value>`
+    auto parse_mf_plain = [&](auto& tokens) -> Optional<MediaFeature> {
+        auto position = tokens.position();
         tokens.skip_whitespace();
 
-        auto value = parse_css_value(PropertyID::Custom, tokens);
-        if (value.is_error())
-            return invalid_feature();
-
-        if (tokens.has_next_token())
-            return invalid_feature();
-
-        if (feature_name.starts_with("min-", CaseSensitivity::CaseInsensitive)) {
-            return MediaQuery::MediaFeature {
-                .type = MediaQuery::MediaFeature::Type::MinValue,
-                .name = feature_name.substring_view(4),
-                .value = value.release_value(),
-            };
-        } else if (feature_name.starts_with("max-", CaseSensitivity::CaseInsensitive)) {
-            return MediaQuery::MediaFeature {
-                .type = MediaQuery::MediaFeature::Type::MaxValue,
-                .name = feature_name.substring_view(4),
-                .value = value.release_value(),
-            };
+        if (auto maybe_name = parse_mf_name(tokens, true); maybe_name.has_value()) {
+            tokens.skip_whitespace();
+            if (tokens.next_token().is(Token::Type::Colon)) {
+                tokens.skip_whitespace();
+                if (auto maybe_value = parse_media_feature_value(tokens); maybe_value.has_value()) {
+                    tokens.skip_whitespace();
+                    if (!tokens.has_next_token())
+                        return MediaFeature::plain(maybe_name.release_value(), maybe_value.release_value());
+                }
+            }
         }
 
-        return MediaQuery::MediaFeature {
-            .type = MediaQuery::MediaFeature::Type::ExactValue,
-            .name = feature_name,
-            .value = value.release_value(),
-        };
-    }
+        tokens.rewind_to_position(position);
+        return {};
+    };
 
-    return invalid_feature();
+    // `<mf-lt> = '<' '='?
+    //  <mf-gt> = '>' '='?
+    //  <mf-eq> = '='
+    //  <mf-comparison> = <mf-lt> | <mf-gt> | <mf-eq>`
+    auto parse_comparison = [](auto& tokens) -> Optional<MediaFeature::Comparison> {
+        auto position = tokens.position();
+        tokens.skip_whitespace();
+
+        auto& first = tokens.next_token();
+        if (first.is(Token::Type::Delim)) {
+            auto first_delim = first.token().delim();
+            if (first_delim == "="sv)
+                return MediaFeature::Comparison::Equal;
+            if (first_delim == "<"sv) {
+                auto& second = tokens.peek_token();
+                if (second.is(Token::Type::Delim) && second.token().delim() == "="sv) {
+                    tokens.next_token();
+                    return MediaFeature::Comparison::LessThanOrEqual;
+                }
+                return MediaFeature::Comparison::LessThan;
+            }
+            if (first_delim == ">"sv) {
+                auto& second = tokens.peek_token();
+                if (second.is(Token::Type::Delim) && second.token().delim() == "="sv) {
+                    tokens.next_token();
+                    return MediaFeature::Comparison::GreaterThanOrEqual;
+                }
+                return MediaFeature::Comparison::GreaterThan;
+            }
+        }
+
+        tokens.rewind_to_position(position);
+        return {};
+    };
+
+    auto flip = [](MediaFeature::Comparison comparison) {
+        switch (comparison) {
+        case MediaFeature::Comparison::Equal:
+            return MediaFeature::Comparison::Equal;
+        case MediaFeature::Comparison::LessThan:
+            return MediaFeature::Comparison::GreaterThan;
+        case MediaFeature::Comparison::LessThanOrEqual:
+            return MediaFeature::Comparison::GreaterThanOrEqual;
+        case MediaFeature::Comparison::GreaterThan:
+            return MediaFeature::Comparison::LessThan;
+        case MediaFeature::Comparison::GreaterThanOrEqual:
+            return MediaFeature::Comparison::LessThanOrEqual;
+        }
+        VERIFY_NOT_REACHED();
+    };
+
+    auto comparisons_match = [](MediaFeature::Comparison a, MediaFeature::Comparison b) -> bool {
+        switch (a) {
+        case MediaFeature::Comparison::Equal:
+            return b == MediaFeature::Comparison::Equal;
+        case MediaFeature::Comparison::LessThan:
+        case MediaFeature::Comparison::LessThanOrEqual:
+            return b == MediaFeature::Comparison::LessThan || b == MediaFeature::Comparison::LessThanOrEqual;
+        case MediaFeature::Comparison::GreaterThan:
+        case MediaFeature::Comparison::GreaterThanOrEqual:
+            return b == MediaFeature::Comparison::GreaterThan || b == MediaFeature::Comparison::GreaterThanOrEqual;
+        }
+        VERIFY_NOT_REACHED();
+    };
+
+    // `<mf-range> = <mf-name> <mf-comparison> <mf-value>
+    //             | <mf-value> <mf-comparison> <mf-name>
+    //             | <mf-value> <mf-lt> <mf-name> <mf-lt> <mf-value>
+    //             | <mf-value> <mf-gt> <mf-name> <mf-gt> <mf-value>`
+    auto parse_mf_range = [&](auto& tokens) -> Optional<MediaFeature> {
+        auto position = tokens.position();
+        tokens.skip_whitespace();
+
+        // `<mf-name> <mf-comparison> <mf-value>`
+        // NOTE: We have to check for <mf-name> first, since all <mf-name>s will also parse as <mf-value>.
+        if (auto maybe_name = parse_mf_name(tokens, false); maybe_name.has_value()) {
+            tokens.skip_whitespace();
+            if (auto maybe_comparison = parse_comparison(tokens); maybe_comparison.has_value()) {
+                tokens.skip_whitespace();
+                if (auto maybe_value = parse_media_feature_value(tokens); maybe_value.has_value()) {
+                    tokens.skip_whitespace();
+                    if (!tokens.has_next_token() && !maybe_value->is_ident())
+                        return MediaFeature::half_range(maybe_value.release_value(), flip(maybe_comparison.release_value()), maybe_name.release_value());
+                }
+            }
+        }
+
+        //  `<mf-value> <mf-comparison> <mf-name>
+        // | <mf-value> <mf-lt> <mf-name> <mf-lt> <mf-value>
+        // | <mf-value> <mf-gt> <mf-name> <mf-gt> <mf-value>`
+        if (auto maybe_left_value = parse_media_feature_value(tokens); maybe_left_value.has_value()) {
+            tokens.skip_whitespace();
+            if (auto maybe_left_comparison = parse_comparison(tokens); maybe_left_comparison.has_value()) {
+                tokens.skip_whitespace();
+                if (auto maybe_name = parse_mf_name(tokens, false); maybe_name.has_value()) {
+                    tokens.skip_whitespace();
+
+                    if (!tokens.has_next_token())
+                        return MediaFeature::half_range(maybe_left_value.release_value(), maybe_left_comparison.release_value(), maybe_name.release_value());
+
+                    if (auto maybe_right_comparison = parse_comparison(tokens); maybe_right_comparison.has_value()) {
+                        tokens.skip_whitespace();
+                        if (auto maybe_right_value = parse_media_feature_value(tokens); maybe_right_value.has_value()) {
+                            tokens.skip_whitespace();
+                            // For this to be valid, the following must be true:
+                            // - Comparisons must either both be >/>= or both be </<=.
+                            // - Neither comparison can be `=`.
+                            // - Neither value can be an ident.
+                            auto left_comparison = maybe_left_comparison.release_value();
+                            auto right_comparison = maybe_right_comparison.release_value();
+
+                            if (!tokens.has_next_token()
+                                && comparisons_match(left_comparison, right_comparison)
+                                && left_comparison != MediaFeature::Comparison::Equal
+                                && !maybe_left_value->is_ident() && !maybe_right_value->is_ident()) {
+                                return MediaFeature::range(maybe_left_value.release_value(), left_comparison, maybe_name.release_value(), right_comparison, maybe_right_value.release_value());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tokens.rewind_to_position(position);
+        return {};
+    };
+
+    if (auto maybe_mf_boolean = parse_mf_boolean(tokens); maybe_mf_boolean.has_value())
+        return maybe_mf_boolean.release_value();
+
+    if (auto maybe_mf_plain = parse_mf_plain(tokens); maybe_mf_plain.has_value())
+        return maybe_mf_plain.release_value();
+
+    if (auto maybe_mf_range = parse_mf_range(tokens); maybe_mf_range.has_value())
+        return maybe_mf_range.release_value();
+
+    tokens.rewind_to_position(position);
+    return {};
 }
 
-Optional<MediaQuery::MediaType> Parser::consume_media_type(TokenStream<StyleComponentValueRule>& tokens)
+Optional<MediaQuery::MediaType> Parser::parse_media_type(TokenStream<StyleComponentValueRule>& tokens)
 {
+    auto position = tokens.position();
+    tokens.skip_whitespace();
     auto& token = tokens.next_token();
 
     if (!token.is(Token::Type::Ident)) {
-        tokens.reconsume_current_input_token();
+        tokens.rewind_to_position(position);
         return {};
     }
 
@@ -960,7 +1098,62 @@ Optional<MediaQuery::MediaType> Parser::consume_media_type(TokenStream<StyleComp
         return MediaQuery::MediaType::TV;
     }
 
-    tokens.reconsume_current_input_token();
+    tokens.rewind_to_position(position);
+    return {};
+}
+
+// `<media-in-parens>`, https://www.w3.org/TR/mediaqueries-4/#typedef-media-in-parens
+OwnPtr<MediaCondition> Parser::parse_media_in_parens(TokenStream<StyleComponentValueRule>& tokens)
+{
+    // `<media-in-parens> = ( <media-condition> ) | ( <media-feature> ) | <general-enclosed>`
+    auto position = tokens.position();
+    tokens.skip_whitespace();
+
+    // `( <media-condition> ) | ( <media-feature> )`
+    auto& first_token = tokens.peek_token();
+    if (first_token.is_block() && first_token.block().is_paren()) {
+        TokenStream inner_token_stream { first_token.block().values() };
+        if (auto maybe_media_condition = parse_media_condition(inner_token_stream, MediaCondition::AllowOr::Yes)) {
+            tokens.next_token();
+            return maybe_media_condition.release_nonnull();
+        }
+        if (auto maybe_media_feature = parse_media_feature(inner_token_stream); maybe_media_feature.has_value()) {
+            tokens.next_token();
+            return MediaCondition::from_feature(maybe_media_feature.release_value());
+        }
+    }
+
+    // `<general-enclosed>`
+    if (auto maybe_general_enclosed = parse_general_enclosed(tokens); maybe_general_enclosed.has_value())
+        return MediaCondition::from_general_enclosed(maybe_general_enclosed.release_value());
+
+    tokens.rewind_to_position(position);
+    return {};
+}
+
+// `<mf-value>`, https://www.w3.org/TR/mediaqueries-4/#typedef-mf-value
+Optional<MediaFeatureValue> Parser::parse_media_feature_value(TokenStream<StyleComponentValueRule>& tokens)
+{
+    // `<number> | <dimension> | <ident> | <ratio>`
+    auto position = tokens.position();
+    tokens.skip_whitespace();
+    auto& first = tokens.next_token();
+
+    // `<number>`
+    if (first.is(Token::Type::Number))
+        return MediaFeatureValue(first.token().number_value());
+
+    // `<dimension>`
+    if (auto length = parse_length(first); length.has_value())
+        return MediaFeatureValue(length.release_value());
+
+    // `<ident>`
+    if (first.is(Token::Type::Ident))
+        return MediaFeatureValue(first.token().ident());
+
+    // FIXME: `<ratio>`, once we have ratios.
+
+    tokens.rewind_to_position(position);
     return {};
 }
 
@@ -1130,16 +1323,13 @@ Optional<GeneralEnclosed> Parser::parse_general_enclosed(TokenStream<StyleCompon
 
     auto& first_token = tokens.next_token();
 
-    // `[ <function-token> <any-value> ) ]`
+    // `[ <function-token> <any-value>? ) ]`
     if (first_token.is_function())
         return GeneralEnclosed { first_token.to_string() };
 
-    // `( <ident> <any-value> )`
-    if (first_token.is_block() && first_token.block().is_paren()) {
-        auto& block = first_token.block();
-        if (!block.values().is_empty() && block.values().first().is(Token::Type::Ident))
-            return GeneralEnclosed { first_token.to_string() };
-    }
+    // `( <any-value>? )`
+    if (first_token.is_block() && first_token.block().is_paren())
+        return GeneralEnclosed { first_token.to_string() };
 
     tokens.rewind_to_position(start_position);
     return {};
@@ -1487,7 +1677,7 @@ Vector<DeclarationOrAtRule> Parser::consume_a_list_of_declarations(TokenStream<T
             auto& peek = tokens.peek_token();
             if (peek.is(Token::Type::Semicolon) || peek.is(Token::Type::EndOfFile))
                 break;
-            dbgln("Discarding token: '{}'", peek.to_debug_string());
+            dbgln_if(CSS_PARSER_DEBUG, "Discarding token: '{}'", peek.to_debug_string());
             (void)consume_a_component_value(tokens);
         }
     }
@@ -1776,7 +1966,7 @@ RefPtr<CSSRule> Parser::convert_to_rule(NonnullRefPtr<StyleRule> rule)
             if (url.has_value())
                 return CSSImportRule::create(url.value(), const_cast<DOM::Document&>(*m_context.document()));
             else
-                dbgln("Unable to parse url from @import rule");
+                dbgln_if(CSS_PARSER_DEBUG, "Unable to parse url from @import rule");
 
         } else if (rule->m_name.equals_ignoring_case("supports"sv)) {
 
@@ -1784,7 +1974,7 @@ RefPtr<CSSRule> Parser::convert_to_rule(NonnullRefPtr<StyleRule> rule)
             auto supports = parse_a_supports(supports_tokens);
             if (!supports) {
                 if constexpr (CSS_PARSER_DEBUG) {
-                    dbgln("CSSParser: @supports rule invalid; discarding.");
+                    dbgln_if(CSS_PARSER_DEBUG, "CSSParser: @supports rule invalid; discarding.");
                     supports_tokens.dump_all_tokens();
                 }
                 return {};
@@ -1801,7 +1991,7 @@ RefPtr<CSSRule> Parser::convert_to_rule(NonnullRefPtr<StyleRule> rule)
             return CSSSupportsRule::create(supports.release_nonnull(), move(child_rules));
 
         } else {
-            dbgln("Unrecognized CSS at-rule: @{}", rule->m_name);
+            dbgln_if(CSS_PARSER_DEBUG, "Unrecognized CSS at-rule: @{}", rule->m_name);
         }
 
         // FIXME: More at rules!
@@ -1812,7 +2002,7 @@ RefPtr<CSSRule> Parser::convert_to_rule(NonnullRefPtr<StyleRule> rule)
 
         if (selectors.is_error()) {
             if (selectors.error() != ParsingResult::IncludesIgnoredVendorPrefix) {
-                dbgln("CSSParser: style rule selectors invalid; discarding.");
+                dbgln_if(CSS_PARSER_DEBUG, "CSSParser: style rule selectors invalid; discarding.");
                 if constexpr (CSS_PARSER_DEBUG) {
                     prelude_stream.dump_all_tokens();
                 }
@@ -1821,13 +2011,13 @@ RefPtr<CSSRule> Parser::convert_to_rule(NonnullRefPtr<StyleRule> rule)
         }
 
         if (selectors.value().is_empty()) {
-            dbgln("CSSParser: empty selector; discarding.");
+            dbgln_if(CSS_PARSER_DEBUG, "CSSParser: empty selector; discarding.");
             return {};
         }
 
         auto declaration = convert_to_declaration(*rule->m_block);
         if (!declaration) {
-            dbgln("CSSParser: style rule declaration invalid; discarding.");
+            dbgln_if(CSS_PARSER_DEBUG, "CSSParser: style rule declaration invalid; discarding.");
             return {};
         }
 
@@ -1857,7 +2047,7 @@ Optional<StyleProperty> Parser::convert_to_style_property(StyleDeclarationRule c
         } else if (has_ignored_vendor_prefix(property_name)) {
             return {};
         } else if (!property_name.starts_with("-")) {
-            dbgln("Unrecognized CSS property '{}'", property_name);
+            dbgln_if(CSS_PARSER_DEBUG, "Unrecognized CSS property '{}'", property_name);
             return {};
         }
     }
@@ -1866,7 +2056,7 @@ Optional<StyleProperty> Parser::convert_to_style_property(StyleDeclarationRule c
     auto value = parse_css_value(property_id, value_token_stream);
     if (value.is_error()) {
         if (value.error() != ParsingResult::IncludesIgnoredVendorPrefix) {
-            dbgln("Unable to parse value for CSS property '{}'.", property_name);
+            dbgln_if(CSS_PARSER_DEBUG, "Unable to parse value for CSS property '{}'.", property_name);
             if constexpr (CSS_PARSER_DEBUG) {
                 value_token_stream.dump_all_tokens();
             }
@@ -1897,17 +2087,51 @@ RefPtr<StyleValue> Parser::parse_builtin_value(StyleComponentValueRule const& co
     return {};
 }
 
+RefPtr<StyleValue> Parser::parse_calculated_value(Vector<StyleComponentValueRule> const& component_values)
+{
+    auto calc_expression = parse_calc_expression(component_values);
+    if (calc_expression == nullptr)
+        return nullptr;
+
+    auto calc_type = calc_expression->resolved_type();
+    if (!calc_type.has_value()) {
+        dbgln_if(CSS_PARSER_DEBUG, "calc() resolved as invalid!!!");
+        return nullptr;
+    }
+
+    [[maybe_unused]] auto to_string = [](CalculatedStyleValue::ResolvedType type) {
+        switch (type) {
+        case CalculatedStyleValue::ResolvedType::Angle:
+            return "Angle"sv;
+        case CalculatedStyleValue::ResolvedType::Frequency:
+            return "Frequency"sv;
+        case CalculatedStyleValue::ResolvedType::Integer:
+            return "Integer"sv;
+        case CalculatedStyleValue::ResolvedType::Length:
+            return "Length"sv;
+        case CalculatedStyleValue::ResolvedType::Number:
+            return "Number"sv;
+        case CalculatedStyleValue::ResolvedType::Percentage:
+            return "Percentage"sv;
+        case CalculatedStyleValue::ResolvedType::Time:
+            return "Time"sv;
+        }
+        VERIFY_NOT_REACHED();
+    };
+    dbgln_if(CSS_PARSER_DEBUG, "Deduced calc() resolved type as: {}", to_string(calc_type.value()));
+
+    return CalculatedStyleValue::create(calc_expression.release_nonnull(), calc_type.release_value());
+}
+
 RefPtr<StyleValue> Parser::parse_dynamic_value(StyleComponentValueRule const& component_value)
 {
     if (component_value.is_function()) {
         auto& function = component_value.function();
 
-        if (function.name().equals_ignoring_case("calc")) {
-            auto calc_expression = parse_calc_expression(function.values());
-            // FIXME: Either produce a string value of calc() here, or do so in CalculatedStyleValue::to_string().
-            if (calc_expression)
-                return CalculatedStyleValue::create("(FIXME:calc to string)", calc_expression.release_nonnull());
-        } else if (function.name().equals_ignoring_case("var")) {
+        if (function.name().equals_ignoring_case("calc"))
+            return parse_calculated_value(function.values());
+
+        if (function.name().equals_ignoring_case("var")) {
             // Declarations using `var()` should already be parsed as an UnresolvedStyleValue before this point.
             VERIFY_NOT_REACHED();
         }
@@ -1916,94 +2140,109 @@ RefPtr<StyleValue> Parser::parse_dynamic_value(StyleComponentValueRule const& co
     return {};
 }
 
-Optional<Length> Parser::parse_length(StyleComponentValueRule const& component_value)
+Optional<Parser::Dimension> Parser::parse_dimension(StyleComponentValueRule const& component_value)
 {
-    Length::Type type = Length::Type::Undefined;
-    Optional<float> numeric_value;
-
     if (component_value.is(Token::Type::Dimension)) {
-        numeric_value = component_value.token().dimension_value();
+        float numeric_value = component_value.token().dimension_value();
         auto unit_string = component_value.token().dimension_unit();
+        Optional<Length::Type> length_type = Length::Type::Undefined;
 
-        if (unit_string.equals_ignoring_case("px")) {
-            type = Length::Type::Px;
-        } else if (unit_string.equals_ignoring_case("pt")) {
-            type = Length::Type::Pt;
-        } else if (unit_string.equals_ignoring_case("pc")) {
-            type = Length::Type::Pc;
-        } else if (unit_string.equals_ignoring_case("mm")) {
-            type = Length::Type::Mm;
-        } else if (unit_string.equals_ignoring_case("rem")) {
-            type = Length::Type::Rem;
-        } else if (unit_string.equals_ignoring_case("em")) {
-            type = Length::Type::Em;
-        } else if (unit_string.equals_ignoring_case("ex")) {
-            type = Length::Type::Ex;
-        } else if (unit_string.equals_ignoring_case("ch")) {
-            type = Length::Type::Ch;
-        } else if (unit_string.equals_ignoring_case("vw")) {
-            type = Length::Type::Vw;
-        } else if (unit_string.equals_ignoring_case("vh")) {
-            type = Length::Type::Vh;
-        } else if (unit_string.equals_ignoring_case("vmax")) {
-            type = Length::Type::Vmax;
-        } else if (unit_string.equals_ignoring_case("vmin")) {
-            type = Length::Type::Vmin;
-        } else if (unit_string.equals_ignoring_case("cm")) {
-            type = Length::Type::Cm;
-        } else if (unit_string.equals_ignoring_case("in")) {
-            type = Length::Type::In;
-        } else if (unit_string.equals_ignoring_case("Q")) {
-            type = Length::Type::Q;
-        } else if (unit_string.equals_ignoring_case("%")) {
+        if (unit_string.equals_ignoring_case("px"sv)) {
+            length_type = Length::Type::Px;
+        } else if (unit_string.equals_ignoring_case("pt"sv)) {
+            length_type = Length::Type::Pt;
+        } else if (unit_string.equals_ignoring_case("pc"sv)) {
+            length_type = Length::Type::Pc;
+        } else if (unit_string.equals_ignoring_case("mm"sv)) {
+            length_type = Length::Type::Mm;
+        } else if (unit_string.equals_ignoring_case("rem"sv)) {
+            length_type = Length::Type::Rem;
+        } else if (unit_string.equals_ignoring_case("em"sv)) {
+            length_type = Length::Type::Em;
+        } else if (unit_string.equals_ignoring_case("ex"sv)) {
+            length_type = Length::Type::Ex;
+        } else if (unit_string.equals_ignoring_case("ch"sv)) {
+            length_type = Length::Type::Ch;
+        } else if (unit_string.equals_ignoring_case("vw"sv)) {
+            length_type = Length::Type::Vw;
+        } else if (unit_string.equals_ignoring_case("vh"sv)) {
+            length_type = Length::Type::Vh;
+        } else if (unit_string.equals_ignoring_case("vmax"sv)) {
+            length_type = Length::Type::Vmax;
+        } else if (unit_string.equals_ignoring_case("vmin"sv)) {
+            length_type = Length::Type::Vmin;
+        } else if (unit_string.equals_ignoring_case("cm"sv)) {
+            length_type = Length::Type::Cm;
+        } else if (unit_string.equals_ignoring_case("in"sv)) {
+            length_type = Length::Type::In;
+        } else if (unit_string.equals_ignoring_case("Q"sv)) {
+            length_type = Length::Type::Q;
+        } else if (unit_string.equals_ignoring_case("%"sv)) {
             // A number followed by `%` must always result in a Percentage token.
             VERIFY_NOT_REACHED();
-        } else {
-            return {};
         }
-    } else if (component_value.is(Token::Type::Percentage)) {
-        type = Length::Type::Percentage;
-        numeric_value = component_value.token().percentage();
-    } else if (component_value.is(Token::Type::Ident) && component_value.token().ident().equals_ignoring_case("auto")) {
-        return Length::make_auto();
-    } else if (component_value.is(Token::Type::Number)) {
-        numeric_value = component_value.token().number_value();
-        if (numeric_value == 0) {
-            type = Length::Type::Px;
-        } else if (m_context.in_quirks_mode() && property_has_quirk(m_context.current_property_id(), Quirk::UnitlessLength)) {
+
+        if (length_type.has_value())
+            return Length { numeric_value, length_type.value() };
+    }
+
+    if (component_value.is(Token::Type::Percentage))
+        return Percentage { static_cast<float>(component_value.token().percentage()) };
+
+    if (component_value.is(Token::Type::Number)) {
+        float numeric_value = component_value.token().number_value();
+        if (numeric_value == 0)
+            return Length::make_px(0);
+        if (m_context.in_quirks_mode() && property_has_quirk(m_context.current_property_id(), Quirk::UnitlessLength)) {
             // https://quirks.spec.whatwg.org/#quirky-length-value
             // FIXME: Disallow quirk when inside a CSS sub-expression (like `calc()`)
             // "The <quirky-length> value must not be supported in arguments to CSS expressions other than the rect()
             // expression, and must not be supported in the supports() static method of the CSS interface."
-            type = Length::Type::Px;
+            return Length::make_px(numeric_value);
         }
     }
 
-    if (!numeric_value.has_value())
-        return {};
-
-    return Length(numeric_value.value(), type);
+    return {};
 }
 
-RefPtr<StyleValue> Parser::parse_length_value(StyleComponentValueRule const& component_value)
+Optional<Length> Parser::parse_length(StyleComponentValueRule const& component_value)
+{
+    auto dimension = parse_dimension(component_value);
+    if (!dimension.has_value())
+        return {};
+
+    if (dimension->is_length())
+        return dimension->length();
+
+    // FIXME: auto isn't a length!
+    if (component_value.is(Token::Type::Ident) && component_value.token().ident().equals_ignoring_case("auto"))
+        return Length::make_auto();
+
+    return {};
+}
+
+RefPtr<StyleValue> Parser::parse_dimension_value(StyleComponentValueRule const& component_value)
 {
     // Numbers with no units can be lengths, in two situations:
     // 1) We're in quirks mode, and it's an integer.
     // 2) It's a 0.
     // We handle case 1 here. Case 2 is handled by NumericStyleValue pretending to be a LengthStyleValue if it is 0.
 
-    // FIXME: "auto" is also treated as a Length, and most of the time that is how it is used, but not always.
-    // Possibly it should always be an Identifier, and then quietly converted to a Length when needed, like 0 above.
-    // Right now, it instead is quietly converted to an Identifier when needed.
-    if (component_value.is(Token::Type::Dimension) || component_value.is(Token::Type::Percentage)
-        || (component_value.is(Token::Type::Ident) && component_value.token().ident().equals_ignoring_case("auto"sv))
-        || (m_context.in_quirks_mode() && property_has_quirk(m_context.current_property_id(), Quirk::UnitlessLength) && component_value.is(Token::Type::Number) && component_value.token().number_value() != 0)) {
-        auto length = parse_length(component_value);
-        if (length.has_value())
-            return LengthStyleValue::create(length.value());
-    }
+    if (component_value.is(Token::Type::Number) && !(m_context.in_quirks_mode() && property_has_quirk(m_context.current_property_id(), Quirk::UnitlessLength)))
+        return {};
 
-    return {};
+    if (component_value.is(Token::Type::Ident) && component_value.token().ident().equals_ignoring_case("auto"))
+        return LengthStyleValue::create(Length::make_auto());
+
+    auto dimension = parse_dimension(component_value);
+    if (!dimension.has_value())
+        return {};
+
+    if (dimension->is_length())
+        return LengthStyleValue::create(dimension->length());
+    if (dimension->is_percentage())
+        return PercentageStyleValue::create(dimension->percentage());
+    VERIFY_NOT_REACHED();
 }
 
 RefPtr<StyleValue> Parser::parse_numeric_value(StyleComponentValueRule const& component_value)
@@ -2289,7 +2528,7 @@ RefPtr<StyleValue> Parser::parse_comma_separated_value_list(Vector<StyleComponen
         return {};
     }
 
-    return StyleValueList::create(move(values));
+    return StyleValueList::create(move(values), StyleValueList::Separator::Comma);
 }
 
 RefPtr<StyleValue> Parser::parse_simple_comma_separated_value_list(Vector<StyleComponentValueRule> const& component_values)
@@ -2461,13 +2700,13 @@ RefPtr<StyleValue> Parser::parse_background_value(Vector<StyleComponentValueRule
             background_color = property_initial_value(PropertyID::BackgroundColor);
         return BackgroundStyleValue::create(
             background_color.release_nonnull(),
-            StyleValueList::create(move(background_images)),
-            StyleValueList::create(move(background_positions)),
-            StyleValueList::create(move(background_sizes)),
-            StyleValueList::create(move(background_repeats)),
-            StyleValueList::create(move(background_attachments)),
-            StyleValueList::create(move(background_origins)),
-            StyleValueList::create(move(background_clips)));
+            StyleValueList::create(move(background_images), StyleValueList::Separator::Comma),
+            StyleValueList::create(move(background_positions), StyleValueList::Separator::Comma),
+            StyleValueList::create(move(background_sizes), StyleValueList::Separator::Comma),
+            StyleValueList::create(move(background_repeats), StyleValueList::Separator::Comma),
+            StyleValueList::create(move(background_attachments), StyleValueList::Separator::Comma),
+            StyleValueList::create(move(background_origins), StyleValueList::Separator::Comma),
+            StyleValueList::create(move(background_clips), StyleValueList::Separator::Comma));
     }
 
     if (!background_color)
@@ -2549,12 +2788,12 @@ RefPtr<StyleValue> Parser::parse_single_background_position_value(TokenStream<St
         }
     };
 
-    auto zero_offset = Length::make_px(0);
-    auto center_offset = Length { 50, Length::Type::Percentage };
+    LengthPercentage zero_offset = Length::make_px(0);
+    LengthPercentage center_offset = Percentage { 50 };
 
     struct EdgeOffset {
         PositionEdge edge;
-        Length offset;
+        LengthPercentage offset;
         bool edge_provided;
         bool offset_provided;
     };
@@ -2576,6 +2815,17 @@ RefPtr<StyleValue> Parser::parse_single_background_position_value(TokenStream<St
         tokens.next_token();
         auto value = maybe_value.release_nonnull();
 
+        if (value->is_percentage()) {
+            if (!horizontal.has_value()) {
+                horizontal = EdgeOffset { PositionEdge::Left, value->as_percentage().percentage(), false, true };
+            } else if (!vertical.has_value()) {
+                vertical = EdgeOffset { PositionEdge::Top, value->as_percentage().percentage(), false, true };
+            } else {
+                return error();
+            }
+            continue;
+        }
+
         if (value->has_length()) {
             if (!horizontal.has_value()) {
                 horizontal = EdgeOffset { PositionEdge::Left, value->to_length(), false, true };
@@ -2590,24 +2840,24 @@ RefPtr<StyleValue> Parser::parse_single_background_position_value(TokenStream<St
         if (value->has_identifier()) {
             auto identifier = value->to_identifier();
             if (is_horizontal(identifier)) {
-                Length offset = zero_offset;
+                LengthPercentage offset = zero_offset;
                 bool offset_provided = false;
                 if (tokens.has_next_token()) {
-                    auto maybe_offset = parse_length(tokens.peek_token());
-                    if (maybe_offset.has_value()) {
-                        offset = maybe_offset.value();
+                    auto maybe_offset = parse_dimension(tokens.peek_token());
+                    if (maybe_offset.has_value() && maybe_offset.value().is_length_percentage()) {
+                        offset = maybe_offset.value().length_percentage();
                         offset_provided = true;
                         tokens.next_token();
                     }
                 }
                 horizontal = EdgeOffset { *to_edge(identifier), offset, true, offset_provided };
             } else if (is_vertical(identifier)) {
-                Length offset = zero_offset;
+                LengthPercentage offset = zero_offset;
                 bool offset_provided = false;
                 if (tokens.has_next_token()) {
-                    auto maybe_offset = parse_length(tokens.peek_token());
-                    if (maybe_offset.has_value()) {
-                        offset = maybe_offset.value();
+                    auto maybe_offset = parse_dimension(tokens.peek_token());
+                    if (maybe_offset.has_value() && maybe_offset.value().is_length_percentage()) {
+                        offset = maybe_offset.value().length_percentage();
                         offset_provided = true;
                         tokens.next_token();
                     }
@@ -2726,6 +2976,14 @@ RefPtr<StyleValue> Parser::parse_single_background_size_value(TokenStream<StyleC
         return nullptr;
     };
 
+    auto get_length_percentage = [](StyleValue& style_value) -> Optional<LengthPercentage> {
+        if (style_value.is_percentage())
+            return LengthPercentage { style_value.as_percentage().percentage() };
+        if (style_value.has_length())
+            return LengthPercentage { style_value.to_length() };
+        return {};
+    };
+
     auto maybe_x_value = parse_css_value(tokens.next_token());
     if (!maybe_x_value || !property_accepts_value(PropertyID::BackgroundSize, *maybe_x_value))
         return error();
@@ -2735,13 +2993,20 @@ RefPtr<StyleValue> Parser::parse_single_background_size_value(TokenStream<StyleC
         return x_value;
 
     auto maybe_y_value = parse_css_value(tokens.peek_token());
-    if (!maybe_y_value || !property_accepts_value(PropertyID::BackgroundSize, *maybe_y_value))
-        return BackgroundSizeStyleValue::create(x_value->to_length(), x_value->to_length());
+    if (!maybe_y_value || !property_accepts_value(PropertyID::BackgroundSize, *maybe_y_value)) {
+        auto x_size = get_length_percentage(*x_value);
+        if (!x_size.has_value())
+            return error();
+        return BackgroundSizeStyleValue::create(x_size.value(), x_size.value());
+    }
+
     tokens.next_token();
     auto y_value = maybe_y_value.release_nonnull();
+    auto x_size = get_length_percentage(*x_value);
+    auto y_size = get_length_percentage(*y_value);
 
-    if (x_value->has_length() && y_value->has_length())
-        return BackgroundSizeStyleValue::create(x_value->to_length(), y_value->to_length());
+    if (x_size.has_value() && y_size.has_value())
+        return BackgroundSizeStyleValue::create(x_size.release_value(), y_size.release_value());
 
     return error();
 }
@@ -2795,18 +3060,18 @@ RefPtr<StyleValue> Parser::parse_border_value(Vector<StyleComponentValueRule> co
 RefPtr<StyleValue> Parser::parse_border_radius_value(Vector<StyleComponentValueRule> const& component_values)
 {
     if (component_values.size() == 2) {
-        auto horizontal = parse_length(component_values[0]);
-        auto vertical = parse_length(component_values[1]);
-        if (horizontal.has_value() && vertical.has_value())
-            return BorderRadiusStyleValue::create(horizontal.value(), vertical.value());
+        auto horizontal = parse_dimension(component_values[0]);
+        auto vertical = parse_dimension(component_values[1]);
+        if (horizontal.has_value() && horizontal->is_length_percentage() && vertical.has_value() && vertical->is_length_percentage())
+            return BorderRadiusStyleValue::create(horizontal->length_percentage(), vertical->length_percentage());
 
         return nullptr;
     }
 
     if (component_values.size() == 1) {
-        auto radius = parse_length(component_values[0]);
-        if (radius.has_value())
-            return BorderRadiusStyleValue::create(radius.value(), radius.value());
+        auto radius = parse_dimension(component_values[0]);
+        if (radius.has_value() && radius->is_length_percentage())
+            return BorderRadiusStyleValue::create(radius->length_percentage(), radius->length_percentage());
         return nullptr;
     }
 
@@ -2892,7 +3157,7 @@ RefPtr<StyleValue> Parser::parse_border_radius_shorthand_value(Vector<StyleCompo
     border_radii.append(BorderRadiusStyleValue::create(bottom_left(horizontal_radii),
         vertical_radii.is_empty() ? bottom_left(horizontal_radii) : bottom_left(vertical_radii)));
 
-    return StyleValueList::create(move(border_radii));
+    return StyleValueList::create(move(border_radii), StyleValueList::Separator::Space);
 }
 
 RefPtr<StyleValue> Parser::parse_box_shadow_value(Vector<StyleComponentValueRule> const& component_values)
@@ -3222,7 +3487,7 @@ RefPtr<StyleValue> Parser::parse_font_family_value(Vector<StyleComponentValueRul
 
     if (font_families.is_empty())
         return nullptr;
-    return StyleValueList::create(move(font_families));
+    return StyleValueList::create(move(font_families), StyleValueList::Separator::Comma);
 }
 
 RefPtr<StyleValue> Parser::parse_list_style_value(Vector<StyleComponentValueRule> const& component_values)
@@ -3406,14 +3671,14 @@ RefPtr<StyleValue> Parser::parse_transform_value(Vector<StyleComponentValueRule>
                 auto number = parse_numeric_value(value);
                 values.append(number.release_nonnull());
             } else {
-                dbgln("FIXME: Unsupported value type for transformation!");
+                dbgln_if(CSS_PARSER_DEBUG, "FIXME: Unsupported value type for transformation!");
                 return nullptr;
             }
         }
 
         transformations.append(TransformationStyleValue::create(maybe_function.value(), move(values)));
     }
-    return StyleValueList::create(move(transformations));
+    return StyleValueList::create(move(transformations), StyleValueList::Separator::Space);
 }
 
 RefPtr<StyleValue> Parser::parse_as_css_value(PropertyID property_id)
@@ -3581,7 +3846,7 @@ Result<NonnullRefPtr<StyleValue>, Parser::ParsingResult> Parser::parse_css_value
             parsed_values.append(parsed_value.release_nonnull());
         }
         if (!parsed_values.is_empty() && parsed_values.size() <= property_maximum_value_count(property_id))
-            return { StyleValueList::create(move(parsed_values)) };
+            return { StyleValueList::create(move(parsed_values), StyleValueList::Separator::Space) };
     }
 
     return ParsingResult::SyntaxError;
@@ -3599,8 +3864,8 @@ RefPtr<StyleValue> Parser::parse_css_value(StyleComponentValueRule const& compon
     if (auto color = parse_color_value(component_value))
         return color;
 
-    if (auto length = parse_length_value(component_value))
-        return length;
+    if (auto dimension = parse_dimension_value(component_value))
+        return dimension;
 
     if (auto numeric = parse_numeric_value(component_value))
         return numeric;
@@ -3624,7 +3889,7 @@ Optional<Selector::SimpleSelector::ANPlusBPattern> Parser::parse_a_n_plus_b_patt
 
     auto syntax_error = [&]() -> Optional<Selector::SimpleSelector::ANPlusBPattern> {
         if constexpr (CSS_PARSER_DEBUG) {
-            dbgln("Invalid An+B value:");
+            dbgln_if(CSS_PARSER_DEBUG, "Invalid An+B value:");
             values.dump_all_tokens();
         }
         return {};
@@ -3635,7 +3900,7 @@ Optional<Selector::SimpleSelector::ANPlusBPattern> Parser::parse_a_n_plus_b_patt
         values.skip_whitespace();
         if (values.has_next_token()) {
             if constexpr (CSS_PARSER_DEBUG) {
-                dbgln("Extra tokens at end of An+B value:");
+                dbgln_if(CSS_PARSER_DEBUG, "Extra tokens at end of An+B value:");
                 values.dump_all_tokens();
             }
             return syntax_error();
@@ -3937,13 +4202,23 @@ Optional<CalculatedStyleValue::CalcValue> Parser::parse_calc_value(TokenStream<S
     }
 
     if (current_token.is(Token::Type::Number))
-        return CalculatedStyleValue::CalcValue { static_cast<float>(current_token.token().number_value()) };
+        return CalculatedStyleValue::CalcValue {
+            CalculatedStyleValue::Number {
+                .is_integer = current_token.token().number_type() == Token::NumberType::Integer,
+                .value = static_cast<float>(current_token.token().number_value()) }
+        };
 
     if (current_token.is(Token::Type::Dimension) || current_token.is(Token::Type::Percentage)) {
-        auto maybe_length = parse_length(current_token);
-        if (maybe_length.has_value() && !maybe_length.value().is_undefined())
-            return CalculatedStyleValue::CalcValue { maybe_length.value() };
-        return {};
+        auto maybe_dimension = parse_dimension(current_token);
+        if (!maybe_dimension.has_value())
+            return {};
+        auto& dimension = maybe_dimension.value();
+
+        if (dimension.is_length())
+            return CalculatedStyleValue::CalcValue { dimension.length() };
+        if (dimension.is_percentage())
+            return CalculatedStyleValue::CalcValue { dimension.percentage() };
+        VERIFY_NOT_REACHED();
     }
 
     return {};
@@ -3953,8 +4228,8 @@ OwnPtr<CalculatedStyleValue::CalcProductPartWithOperator> Parser::parse_calc_pro
 {
     // Note: The default value is not used or passed around.
     auto product_with_operator = make<CalculatedStyleValue::CalcProductPartWithOperator>(
-        CalculatedStyleValue::CalcProductPartWithOperator::Multiply,
-        CalculatedStyleValue::CalcNumberValue(0));
+        CalculatedStyleValue::ProductOperation::Multiply,
+        CalculatedStyleValue::CalcNumberValue { CalculatedStyleValue::Number { false, 0 } });
 
     tokens.skip_whitespace();
 
@@ -3966,16 +4241,17 @@ OwnPtr<CalculatedStyleValue::CalcProductPartWithOperator> Parser::parse_calc_pro
     if (op == "*"sv) {
         tokens.next_token();
         tokens.skip_whitespace();
-        product_with_operator->op = CalculatedStyleValue::CalcProductPartWithOperator::Multiply;
+        product_with_operator->op = CalculatedStyleValue::ProductOperation::Multiply;
         auto parsed_calc_value = parse_calc_value(tokens);
         if (!parsed_calc_value.has_value())
             return nullptr;
         product_with_operator->value = { parsed_calc_value.release_value() };
 
     } else if (op == "/"sv) {
+        // FIXME: Detect divide-by-zero if possible
         tokens.next_token();
         tokens.skip_whitespace();
-        product_with_operator->op = CalculatedStyleValue::CalcProductPartWithOperator::Divide;
+        product_with_operator->op = CalculatedStyleValue::ProductOperation::Divide;
         auto parsed_calc_number_value = parse_calc_number_value(tokens);
         if (!parsed_calc_number_value.has_value())
             return nullptr;
@@ -3991,8 +4267,8 @@ OwnPtr<CalculatedStyleValue::CalcNumberProductPartWithOperator> Parser::parse_ca
 {
     // Note: The default value is not used or passed around.
     auto number_product_with_operator = make<CalculatedStyleValue::CalcNumberProductPartWithOperator>(
-        CalculatedStyleValue::CalcNumberProductPartWithOperator::Multiply,
-        CalculatedStyleValue::CalcNumberValue(0));
+        CalculatedStyleValue::ProductOperation::Multiply,
+        CalculatedStyleValue::CalcNumberValue { CalculatedStyleValue::Number { false, 0 } });
 
     tokens.skip_whitespace();
 
@@ -4004,11 +4280,12 @@ OwnPtr<CalculatedStyleValue::CalcNumberProductPartWithOperator> Parser::parse_ca
     if (op == "*"sv) {
         tokens.next_token();
         tokens.skip_whitespace();
-        number_product_with_operator->op = CalculatedStyleValue::CalcNumberProductPartWithOperator::Multiply;
+        number_product_with_operator->op = CalculatedStyleValue::ProductOperation::Multiply;
     } else if (op == "/"sv) {
+        // FIXME: Detect divide-by-zero if possible
         tokens.next_token();
         tokens.skip_whitespace();
-        number_product_with_operator->op = CalculatedStyleValue::CalcNumberProductPartWithOperator::Divide;
+        number_product_with_operator->op = CalculatedStyleValue::ProductOperation::Divide;
     } else {
         return nullptr;
     }
@@ -4024,7 +4301,7 @@ OwnPtr<CalculatedStyleValue::CalcNumberProductPartWithOperator> Parser::parse_ca
 OwnPtr<CalculatedStyleValue::CalcNumberProduct> Parser::parse_calc_number_product(TokenStream<StyleComponentValueRule>& tokens)
 {
     auto calc_number_product = make<CalculatedStyleValue::CalcNumberProduct>(
-        CalculatedStyleValue::CalcNumberValue(0),
+        CalculatedStyleValue::CalcNumberValue { CalculatedStyleValue::Number { false, 0 } },
         NonnullOwnPtrVector<CalculatedStyleValue::CalcNumberProductPartWithOperator> {});
 
     auto first_calc_number_value_or_error = parse_calc_number_value(tokens);
@@ -4052,12 +4329,12 @@ OwnPtr<CalculatedStyleValue::CalcNumberSumPartWithOperator> Parser::parse_calc_n
     auto& token = tokens.next_token();
     tokens.skip_whitespace();
 
-    CalculatedStyleValue::CalcNumberSumPartWithOperator::Operation op;
+    CalculatedStyleValue::SumOperation op;
     auto delim = token.token().delim();
     if (delim == "+"sv)
-        op = CalculatedStyleValue::CalcNumberSumPartWithOperator::Operation::Add;
+        op = CalculatedStyleValue::SumOperation::Add;
     else if (delim == "-"sv)
-        op = CalculatedStyleValue::CalcNumberSumPartWithOperator::Operation::Subtract;
+        op = CalculatedStyleValue::SumOperation::Subtract;
     else
         return nullptr;
 
@@ -4095,20 +4372,24 @@ Optional<CalculatedStyleValue::CalcNumberValue> Parser::parse_calc_number_value(
         auto block_values = TokenStream(first.block().values());
         auto calc_number_sum = parse_calc_number_sum(block_values);
         if (calc_number_sum)
-            return { calc_number_sum.release_nonnull() };
+            return CalculatedStyleValue::CalcNumberValue { calc_number_sum.release_nonnull() };
     }
 
     if (!first.is(Token::Type::Number))
         return {};
     tokens.next_token();
 
-    return first.token().number_value();
+    return CalculatedStyleValue::CalcNumberValue {
+        CalculatedStyleValue::Number {
+            .is_integer = first.token().number_type() == Token::NumberType::Integer,
+            .value = static_cast<float>(first.token().number_value()) }
+    };
 }
 
 OwnPtr<CalculatedStyleValue::CalcProduct> Parser::parse_calc_product(TokenStream<StyleComponentValueRule>& tokens)
 {
     auto calc_product = make<CalculatedStyleValue::CalcProduct>(
-        CalculatedStyleValue::CalcValue(0),
+        CalculatedStyleValue::CalcValue { CalculatedStyleValue::Number { false, 0 } },
         NonnullOwnPtrVector<CalculatedStyleValue::CalcProductPartWithOperator> {});
 
     auto first_calc_value_or_error = parse_calc_value(tokens);
@@ -4138,12 +4419,12 @@ OwnPtr<CalculatedStyleValue::CalcSumPartWithOperator> Parser::parse_calc_sum_par
     auto& token = tokens.next_token();
     tokens.skip_whitespace();
 
-    CalculatedStyleValue::CalcSumPartWithOperator::Operation op;
+    CalculatedStyleValue::SumOperation op;
     auto delim = token.token().delim();
     if (delim == "+"sv)
-        op = CalculatedStyleValue::CalcSumPartWithOperator::Operation::Add;
+        op = CalculatedStyleValue::SumOperation::Add;
     else if (delim == "-"sv)
-        op = CalculatedStyleValue::CalcSumPartWithOperator::Operation::Subtract;
+        op = CalculatedStyleValue::SumOperation::Subtract;
     else
         return nullptr;
 
@@ -4194,6 +4475,40 @@ RefPtr<StyleValue> Parser::parse_css_value(Badge<StyleComputer>, ParsingContext 
     if (result.is_error())
         return {};
     return result.release_value();
+}
+
+bool Parser::Dimension::is_length() const
+{
+    return m_value.has<Length>();
+}
+
+Length Parser::Dimension::length() const
+{
+    return m_value.get<Length>();
+}
+
+bool Parser::Dimension::is_percentage() const
+{
+    return m_value.has<Percentage>();
+}
+
+Percentage Parser::Dimension::percentage() const
+{
+    return m_value.get<Percentage>();
+}
+
+bool Parser::Dimension::is_length_percentage() const
+{
+    return is_length() || is_percentage();
+}
+
+LengthPercentage Parser::Dimension::length_percentage() const
+{
+    if (is_length())
+        return length();
+    if (is_percentage())
+        return percentage();
+    VERIFY_NOT_REACHED();
 }
 
 }

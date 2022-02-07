@@ -38,6 +38,8 @@ enum {
     _SC_PAGESIZE,
     _SC_GETPW_R_SIZE_MAX,
     _SC_CLK_TCK,
+    _SC_SYMLOOP_MAX,
+    _SC_MAPPED_FILES,
 };
 
 #define _SC_MONOTONIC_CLOCK _SC_MONOTONIC_CLOCK
@@ -49,6 +51,8 @@ enum {
 #define _SC_TTY_NAME_MAX _SC_TTY_NAME_MAX
 #define _SC_GETPW_R_SIZE_MAX _SC_GETPW_R_SIZE_MAX
 #define _SC_CLK_TCK _SC_CLK_TCK
+#define _SC_SYMLOOP_MAX _SC_SYMLOOP_MAX
+#define _SC_MAPPED_FILES _SC_MAPPED_FILES
 
 #ifdef __cplusplus
 }

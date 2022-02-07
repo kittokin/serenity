@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
+ * Copyright (c) 2021, kleines Filmröllchen <filmroellchen@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -97,6 +97,8 @@ void Mixer::mix()
                 Audio::Sample sample;
                 if (!queue->get_next_sample(sample))
                     break;
+                if (queue->is_muted())
+                    continue;
                 sample.log_multiply(SAMPLE_HEADROOM);
                 sample.log_multiply(queue->volume());
                 mixed_sample += sample;
@@ -161,7 +163,7 @@ void Mixer::set_muted(bool muted)
     request_setting_sync();
 
     ClientConnection::for_each([muted](ClientConnection& client) {
-        client.did_change_muted_state({}, muted);
+        client.did_change_main_mix_muted_state({}, muted);
     });
 }
 

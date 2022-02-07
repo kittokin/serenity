@@ -27,12 +27,14 @@ namespace Kernel {
 void __panic(const char* file, unsigned int line, const char* function)
 {
     // Avoid lock ranking checks on crashing paths, just try to get some debugging messages out.
-    auto thread = Thread::current();
+    auto* thread = Thread::current();
     if (thread)
         thread->set_crashing();
 
     critical_dmesgln("at {}:{} in {}", file, line, function);
     dump_backtrace(PrintToScreen::Yes);
+    if (!CommandLine::was_initialized())
+        Processor::halt();
     switch (kernel_command_line().panic_mode()) {
     case PanicMode::Shutdown:
         __shutdown();

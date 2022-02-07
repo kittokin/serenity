@@ -121,9 +121,9 @@ public:
             [&](auto const&) {
                 if (code_point <= 0x7f)
                     return 1;
-                else if (code_point <= 0x07ff)
+                if (code_point <= 0x07ff)
                     return 2;
-                else if (code_point <= 0xffff)
+                if (code_point <= 0xffff)
                     return 3;
                 return 4;
             });
@@ -172,6 +172,9 @@ public:
                 return new_views;
             },
             [](Utf32View view) {
+                if (view.is_empty())
+                    return Vector<RegexStringView> { view };
+
                 Vector<RegexStringView> views;
                 u32 newline = '\n';
                 while (!view.is_empty()) {
@@ -187,6 +190,9 @@ public:
                 return views;
             },
             [](Utf16View view) {
+                if (view.is_empty())
+                    return Vector<RegexStringView> { view };
+
                 Vector<RegexStringView> views;
                 u16 newline = '\n';
                 while (!view.is_empty()) {
@@ -201,7 +207,10 @@ public:
                     views.empend(view);
                 return views;
             },
-            [](Utf8View& view) {
+            [](Utf8View const& view) {
+                if (view.is_empty())
+                    return Vector<RegexStringView> { view };
+
                 Vector<RegexStringView> views;
                 auto it = view.begin();
                 auto previous_newline_position_it = it;
@@ -376,7 +385,7 @@ public:
 
     bool equals(RegexStringView other) const
     {
-        return other.m_view.visit([&](auto const& view) { return operator==(view); });
+        return other.m_view.visit([this](auto const& view) { return operator==(view); });
     }
 
     bool equals_ignoring_case(RegexStringView other) const
@@ -451,7 +460,7 @@ public:
     Match() = default;
     ~Match() = default;
 
-    Match(RegexStringView const view_, size_t const line_, size_t const column_, size_t const global_offset_)
+    Match(RegexStringView view_, size_t const line_, size_t const column_, size_t const global_offset_)
         : view(view_)
         , line(line_)
         , column(column_)
@@ -460,7 +469,7 @@ public:
     {
     }
 
-    Match(String const string_, size_t const line_, size_t const column_, size_t const global_offset_)
+    Match(String string_, size_t const line_, size_t const column_, size_t const global_offset_)
         : string(move(string_))
         , view(string.value().view())
         , line(line_)
@@ -514,6 +523,7 @@ struct MatchInput {
     mutable size_t fail_counter { 0 };
     mutable Vector<size_t> saved_positions;
     mutable Vector<size_t> saved_code_unit_positions;
+    mutable Vector<size_t> saved_forks_since_last_save;
     mutable HashMap<u64, u64> checkpoints;
     mutable Optional<size_t> fork_to_replace;
 };
@@ -524,6 +534,7 @@ struct MatchState {
     size_t string_position_in_code_units { 0 };
     size_t instruction_position { 0 };
     size_t fork_at_position { 0 };
+    size_t forks_since_last_save { 0 };
     Optional<size_t> initiating_fork;
     Vector<Match> matches;
     Vector<Vector<Match>> capture_group_matches;

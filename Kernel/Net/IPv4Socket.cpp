@@ -6,6 +6,7 @@
 
 #include <AK/Singleton.h>
 #include <AK/StringBuilder.h>
+#include <Kernel/API/POSIX/errno.h>
 #include <Kernel/Debug.h>
 #include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Net/ARP.h>
@@ -21,7 +22,6 @@
 #include <Kernel/Net/UDPSocket.h>
 #include <Kernel/Process.h>
 #include <Kernel/UnixTypes.h>
-#include <LibC/errno_numbers.h>
 #include <LibC/sys/ioctl_numbers.h>
 
 namespace Kernel {
@@ -161,7 +161,7 @@ ErrorOr<void> IPv4Socket::connect(OpenFileDescription& description, Userspace<co
     return protocol_connect(description, should_block);
 }
 
-bool IPv4Socket::can_read(const OpenFileDescription&, size_t) const
+bool IPv4Socket::can_read(const OpenFileDescription&, u64) const
 {
     if (m_role == Role::Listener)
         return can_accept();
@@ -170,7 +170,7 @@ bool IPv4Socket::can_read(const OpenFileDescription&, size_t) const
     return m_can_read;
 }
 
-bool IPv4Socket::can_write(const OpenFileDescription&, size_t) const
+bool IPv4Socket::can_write(const OpenFileDescription&, u64) const
 {
     return true;
 }
@@ -474,36 +474,38 @@ ErrorOr<NonnullOwnPtr<KString>> IPv4Socket::pseudo_path(const OpenFileDescriptio
         return KString::try_create("socket"sv);
 
     StringBuilder builder;
-    builder.append("socket:");
+    TRY(builder.try_append("socket:"));
 
-    builder.appendff("{}:{}", m_local_address.to_string(), m_local_port);
+    TRY(builder.try_appendff("{}:{}", m_local_address.to_string(), m_local_port));
     if (m_role == Role::Accepted || m_role == Role::Connected)
-        builder.appendff(" / {}:{}", m_peer_address.to_string(), m_peer_port);
+        TRY(builder.try_appendff(" / {}:{}", m_peer_address.to_string(), m_peer_port));
 
     switch (m_role) {
     case Role::Listener:
-        builder.append(" (listening)");
+        TRY(builder.try_append(" (listening)"));
         break;
     case Role::Accepted:
-        builder.append(" (accepted)");
+        TRY(builder.try_append(" (accepted)"));
         break;
     case Role::Connected:
-        builder.append(" (connected)");
+        TRY(builder.try_append(" (connected)"));
         break;
     case Role::Connecting:
-        builder.append(" (connecting)");
+        TRY(builder.try_append(" (connecting)"));
         break;
     default:
         VERIFY_NOT_REACHED();
     }
 
-    return KString::try_create(builder.to_string());
+    return KString::try_create(builder.string_view());
 }
 
 ErrorOr<void> IPv4Socket::setsockopt(int level, int option, Userspace<const void*> user_value, socklen_t user_value_size)
 {
     if (level != IPPROTO_IP)
         return Socket::setsockopt(level, option, user_value, user_value_size);
+
+    MutexLocker locker(mutex());
 
     switch (option) {
     case IP_TTL: {
@@ -569,6 +571,8 @@ ErrorOr<void> IPv4Socket::getsockopt(OpenFileDescription& description, int level
     if (level != IPPROTO_IP)
         return Socket::getsockopt(description, level, option, value, value_size);
 
+    MutexLocker locker(mutex());
+
     socklen_t size;
     TRY(copy_from_user(&size, value_size.unsafe_userspace_ptr()));
 
@@ -603,7 +607,7 @@ ErrorOr<void> IPv4Socket::getsockopt(OpenFileDescription& description, int level
 
 ErrorOr<void> IPv4Socket::ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg)
 {
-    REQUIRE_PROMISE(inet);
+    TRY(Process::current().require_promise(Pledge::inet));
 
     auto ioctl_route = [request, arg]() -> ErrorOr<void> {
         auto user_route = static_ptr_cast<rtentry*>(arg);
@@ -712,7 +716,7 @@ ErrorOr<void> IPv4Socket::ioctl(OpenFileDescription&, unsigned request, Userspac
 
         case SIOCGIFHWADDR: {
             auto mac_address = adapter->mac_address();
-            ifr.ifr_hwaddr.sa_family = AF_INET;
+            ifr.ifr_hwaddr.sa_family = ARPHRD_ETHER; // FIXME: Query the underlying network interface for it's type
             mac_address.copy_to(Bytes { ifr.ifr_hwaddr.sa_data, sizeof(ifr.ifr_hwaddr.sa_data) });
             return copy_to_user(user_ifr, &ifr);
         }
@@ -774,7 +778,15 @@ ErrorOr<void> IPv4Socket::ioctl(OpenFileDescription&, unsigned request, Userspac
         return ioctl_arp();
 
     case FIONREAD: {
-        int readable = m_receive_buffer->immediately_readable();
+        int readable = 0;
+        if (buffer_mode() == BufferMode::Bytes) {
+            readable = static_cast<int>(m_receive_buffer->immediately_readable());
+        } else {
+            if (m_receive_queue.size() != 0u) {
+                readable = static_cast<int>(TRY(protocol_size(m_receive_queue.first().data->bytes())));
+            }
+        }
+
         return copy_to_user(static_ptr_cast<int*>(arg), &readable);
     }
     }

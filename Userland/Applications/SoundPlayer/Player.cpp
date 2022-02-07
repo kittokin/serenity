@@ -48,7 +48,7 @@ void Player::play_file_path(String const& path)
         return;
     }
 
-    if (path.ends_with(".m3u", AK::CaseSensitivity::CaseInsensitive) || path.ends_with(".m3u8", AK::CaseSensitivity::CaseInsensitive)) {
+    if (is_playlist(path)) {
         playlist_loaded(path, m_playlist.load(path));
         return;
     }
@@ -67,6 +67,12 @@ void Player::play_file_path(String const& path)
     m_playback_manager.set_loader(move(loader));
 
     play();
+}
+
+bool Player::is_playlist(String const& path)
+{
+    return (path.ends_with(".m3u", AK::CaseSensitivity::CaseInsensitive)
+        || path.ends_with(".m3u8", AK::CaseSensitivity::CaseInsensitive));
 }
 
 void Player::set_play_state(PlayState state)
@@ -91,6 +97,15 @@ void Player::set_volume(double volume)
     m_volume = clamp(volume, 0, 1.5);
     m_audio_client_connection.set_self_volume(m_volume);
     volume_changed(m_volume);
+}
+
+void Player::set_mute(bool muted)
+{
+    if (m_muted != muted) {
+        m_muted = muted;
+        m_audio_client_connection.set_self_muted(muted);
+        mute_changed(muted);
+    }
 }
 
 void Player::set_shuffle_mode(ShuffleMode mode)
@@ -124,6 +139,16 @@ void Player::stop()
 {
     m_playback_manager.stop();
     set_play_state(PlayState::Stopped);
+}
+
+void Player::mute()
+{
+    set_mute(true);
+}
+
+void Player::toggle_mute()
+{
+    set_mute(!m_muted);
 }
 
 void Player::seek(int sample)

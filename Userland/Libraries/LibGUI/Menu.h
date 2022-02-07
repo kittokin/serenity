@@ -45,9 +45,13 @@ public:
 
     void visibility_did_change(Badge<WindowServerConnection>, bool visible);
 
+    void set_children_actions_enabled(bool enabled);
+
     Function<void(bool)> on_visibility_change;
 
     bool is_visible() const { return m_visible; }
+
+    NonnullOwnPtrVector<MenuItem> const& items() const { return m_items; }
 
 private:
     friend class Menubar;

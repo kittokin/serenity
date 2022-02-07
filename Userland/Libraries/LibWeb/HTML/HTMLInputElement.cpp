@@ -41,13 +41,9 @@ void HTMLInputElement::did_click_button(Badge<Layout::ButtonBox>)
     }
 }
 
-RefPtr<Layout::Node> HTMLInputElement::create_layout_node()
+RefPtr<Layout::Node> HTMLInputElement::create_layout_node(NonnullRefPtr<CSS::StyleProperties> style)
 {
     if (type() == "hidden")
-        return nullptr;
-
-    auto style = document().style_computer().compute_style(*this);
-    if (style->display().is_none())
         return nullptr;
 
     if (type().equals_ignoring_case("submit") || type().equals_ignoring_case("button"))
@@ -114,6 +110,21 @@ void HTMLInputElement::create_shadow_tree_if_needed()
     element->append_child(*m_text_node);
     shadow_root->append_child(move(element));
     set_shadow_root(move(shadow_root));
+}
+
+void HTMLInputElement::did_receive_focus()
+{
+    auto* browsing_context = document().browsing_context();
+    if (!browsing_context)
+        return;
+    if (!m_text_node)
+        return;
+    browsing_context->set_cursor_position(DOM::Position { *m_text_node, 0 });
+}
+
+bool HTMLInputElement::is_focusable() const
+{
+    return m_text_node;
 }
 
 void HTMLInputElement::inserted()

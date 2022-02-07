@@ -309,6 +309,30 @@ U32Triplet Tokenizer::peek_triplet() const
     return values;
 }
 
+U32Twin Tokenizer::start_of_input_stream_twin()
+{
+    U32Twin twin;
+    // FIXME: Reconsuming just to read the current code point again is weird.
+    reconsume_current_input_code_point();
+    twin.first = next_code_point();
+    twin.second = peek_code_point();
+
+    return twin;
+}
+
+U32Triplet Tokenizer::start_of_input_stream_triplet()
+{
+    U32Triplet triplet;
+    // FIXME: Reconsuming just to read the current code point again is weird.
+    reconsume_current_input_code_point();
+    triplet.first = next_code_point();
+    auto next_two = peek_twin();
+    triplet.second = next_two.first;
+    triplet.third = next_two.second;
+
+    return triplet;
+}
+
 Token Tokenizer::create_new_token(Token::Type type)
 {
     Token token = {};
@@ -639,8 +663,7 @@ String Tokenizer::consume_a_name()
         }
 
         // the stream starts with a valid escape
-        auto next = peek_code_point();
-        if (!is_eof(next) && is_valid_escape_sequence({ input, next })) {
+        if (is_valid_escape_sequence(start_of_input_stream_twin())) {
             // Consume an escaped code point. Append the returned code point to result.
             result.append_code_point(consume_escaped_code_point());
             continue;
@@ -681,14 +704,11 @@ Token Tokenizer::consume_a_url_token()
 
     // 3. Repeatedly consume the next input code point from the stream:
     for (;;) {
-        // NOTE: We peek here instead of consuming, so that we can peek a twin later
-        // to determine if it's a valid escape sequence.
-        auto input = peek_code_point();
+        auto input = next_code_point();
 
         // U+0029 RIGHT PARENTHESIS ())
         if (is_right_paren(input)) {
             // Return the <url-token>.
-            (void)next_code_point(); // Not to spec, see NOTE above.
             return make_token();
         }
 
@@ -731,7 +751,6 @@ Token Tokenizer::consume_a_url_token()
         if (is_quotation_mark(input) || is_apostrophe(input) || is_left_paren(input) || is_non_printable(input)) {
             // This is a parse error. Consume the remnants of a bad url, create a <bad-url-token>, and return it.
             log_parse_error();
-            (void)next_code_point(); // Not to spec, see NOTE above.
             consume_the_remnants_of_a_bad_url();
             return create_new_token(Token::Type::BadUrl);
         }
@@ -739,13 +758,12 @@ Token Tokenizer::consume_a_url_token()
         // U+005C REVERSE SOLIDUS (\)
         if (is_reverse_solidus(input)) {
             // If the stream starts with a valid escape,
-            if (is_valid_escape_sequence(peek_twin())) {
+            if (is_valid_escape_sequence(start_of_input_stream_twin())) {
                 // consume an escaped code point and append the returned code point to the <url-token>’s value.
                 builder.append_code_point(consume_escaped_code_point());
             } else {
                 // Otherwise, this is a parse error.
                 log_parse_error();
-                (void)next_code_point(); // Not to spec, see NOTE above.
                 // Consume the remnants of a bad url, create a <bad-url-token>, and return it.
                 consume_the_remnants_of_a_bad_url();
                 return create_new_token(Token::Type::BadUrl);
@@ -755,7 +773,6 @@ Token Tokenizer::consume_a_url_token()
         // anything else
         // Append the current input code point to the <url-token>’s value.
         builder.append_code_point(input);
-        (void)next_code_point(); // Not to spec, see NOTE above.
     }
 }
 
@@ -769,31 +786,25 @@ void Tokenizer::consume_the_remnants_of_a_bad_url()
 
     // Repeatedly consume the next input code point from the stream:
     for (;;) {
-        // NOTE: We peek instead of consuming so is_valid_escape_sequence() can peek a twin.
-        //       So, we have to consume the code point later.
-        auto input = peek_code_point();
+        auto input = next_code_point();
 
         // U+0029 RIGHT PARENTHESIS ())
         // EOF
         if (is_eof(input) || is_right_paren(input)) {
-            (void)next_code_point(); // Not to spec, see NOTE above.
             // Return.
             return;
         }
 
         // the input stream starts with a valid escape
-        if (is_valid_escape_sequence(peek_twin())) {
+        if (is_valid_escape_sequence(start_of_input_stream_twin())) {
             // Consume an escaped code point.
             // This allows an escaped right parenthesis ("\)") to be encountered without ending
             // the <bad-url-token>. This is otherwise identical to the "anything else" clause.
-            (void)next_code_point(); // Not to spec, see NOTE above.
             (void)consume_escaped_code_point();
         }
 
         // anything else
         // Do nothing.
-
-        (void)next_code_point(); // Not to spec, see NOTE above.
     }
 }
 
@@ -820,7 +831,7 @@ Token Tokenizer::consume_a_numeric_token()
     auto number = consume_a_number();
 
     // If the next 3 input code points would start an identifier, then:
-    if (would_start_an_identifier()) {
+    if (would_start_an_identifier(peek_triplet())) {
         // 1. Create a <dimension-token> with the same value and type flag as number,
         //    and a unit set initially to the empty string.
         auto token = create_new_token(Token::Type::Dimension);
@@ -830,7 +841,7 @@ Token Tokenizer::consume_a_numeric_token()
 
         // 2. Consume a name. Set the <dimension-token>’s unit to the returned value.
         auto unit = consume_a_name();
-        VERIFY(!unit.is_empty() && !unit.is_whitespace());
+        VERIFY(!unit.is_empty());
         token.m_unit = move(unit);
 
         // 3. Return the <dimension-token>.
@@ -855,11 +866,6 @@ Token Tokenizer::consume_a_numeric_token()
     token.m_number_type = number.type;
     token.m_number_value = number.value;
     return token;
-}
-
-bool Tokenizer::would_start_a_number() const
-{
-    return would_start_a_number(peek_triplet());
 }
 
 // https://www.w3.org/TR/css-syntax-3/#starts-with-a-number
@@ -927,11 +933,6 @@ bool Tokenizer::is_valid_escape_sequence(U32Twin values)
 
     // Otherwise, return true.
     return true;
-}
-
-bool Tokenizer::would_start_an_identifier()
-{
-    return would_start_an_identifier(peek_triplet());
 }
 
 // https://www.w3.org/TR/css-syntax-3/#would-start-an-identifier
@@ -1124,7 +1125,7 @@ Token Tokenizer::consume_a_token()
 
             // 2. If the next 3 input code points would start an identifier, set the <hash-token>’s
             //    type flag to "id".
-            if (would_start_an_identifier())
+            if (would_start_an_identifier(peek_triplet()))
                 token.m_hash_type = Token::HashType::Id;
 
             // 3. Consume a name, and set the <hash-token>’s value to the returned string.
@@ -1165,7 +1166,7 @@ Token Tokenizer::consume_a_token()
         dbgln_if(CSS_TOKENIZER_DEBUG, "is plus sign");
         // If the input stream starts with a number, reconsume the current input code point,
         // consume a numeric token and return it.
-        if (would_start_a_number()) {
+        if (would_start_a_number(start_of_input_stream_triplet())) {
             reconsume_current_input_code_point();
             return consume_a_numeric_token();
         }
@@ -1186,7 +1187,7 @@ Token Tokenizer::consume_a_token()
         dbgln_if(CSS_TOKENIZER_DEBUG, "is hyphen minus");
         // If the input stream starts with a number, reconsume the current input code point,
         // consume a numeric token, and return it.
-        if (would_start_a_number()) {
+        if (would_start_a_number(start_of_input_stream_triplet())) {
             reconsume_current_input_code_point();
             return consume_a_numeric_token();
         }
@@ -1203,7 +1204,7 @@ Token Tokenizer::consume_a_token()
 
         // Otherwise, if the input stream starts with an identifier, reconsume the current
         // input code point, consume an ident-like token, and return it.
-        if (would_start_an_identifier()) {
+        if (would_start_an_identifier(start_of_input_stream_triplet())) {
             reconsume_current_input_code_point();
             return consume_an_ident_like_token();
         }
@@ -1217,7 +1218,7 @@ Token Tokenizer::consume_a_token()
         dbgln_if(CSS_TOKENIZER_DEBUG, "is full stop");
         // If the input stream starts with a number, reconsume the current input code point,
         // consume a numeric token, and return it.
-        if (would_start_a_number()) {
+        if (would_start_a_number(start_of_input_stream_triplet())) {
             reconsume_current_input_code_point();
             return consume_a_numeric_token();
         }
@@ -1263,7 +1264,7 @@ Token Tokenizer::consume_a_token()
         dbgln_if(CSS_TOKENIZER_DEBUG, "is at");
         // If the next 3 input code points would start an identifier, consume a name, create
         // an <at-keyword-token> with its value set to the returned value, and return it.
-        if (would_start_an_identifier()) {
+        if (would_start_an_identifier(peek_triplet())) {
             auto name = consume_a_name();
             return create_value_token(Token::Type::AtKeyword, name);
         }
@@ -1284,7 +1285,7 @@ Token Tokenizer::consume_a_token()
         dbgln_if(CSS_TOKENIZER_DEBUG, "is reverse solidus");
         // If the input stream starts with a valid escape, reconsume the current input code point,
         // consume an ident-like token, and return it.
-        if (is_valid_escape_sequence({ input, peek_code_point() })) {
+        if (is_valid_escape_sequence(start_of_input_stream_twin())) {
             reconsume_current_input_code_point();
             return consume_an_ident_like_token();
         }

@@ -32,7 +32,7 @@ public:
     void initialize_js_console(Badge<PageHost>);
 
 private:
-    explicit ClientConnection(NonnullRefPtr<Core::LocalSocket>);
+    explicit ClientConnection(NonnullOwnPtr<Core::Stream::LocalSocket>);
 
     Web::Page& page();
     const Web::Page& page() const;
@@ -47,7 +47,7 @@ private:
     virtual void mouse_down(Gfx::IntPoint const&, unsigned, unsigned, unsigned) override;
     virtual void mouse_move(Gfx::IntPoint const&, unsigned, unsigned, unsigned) override;
     virtual void mouse_up(Gfx::IntPoint const&, unsigned, unsigned, unsigned) override;
-    virtual void mouse_wheel(Gfx::IntPoint const&, unsigned, unsigned, unsigned, i32) override;
+    virtual void mouse_wheel(Gfx::IntPoint const&, unsigned, unsigned, unsigned, i32, i32) override;
     virtual void key_down(i32, unsigned, u32) override;
     virtual void key_up(i32, unsigned, u32) override;
     virtual void add_backing_store(i32, Gfx::ShareableBitmap const&) override;
@@ -60,6 +60,7 @@ private:
     virtual Messages::WebContentServer::DumpLayoutTreeResponse dump_layout_tree() override;
     virtual void set_content_filters(Vector<String> const&) override;
     virtual void set_preferred_color_scheme(Web::CSS::PreferredColorScheme const&) override;
+    virtual void set_has_focus(bool) override;
 
     virtual void js_console_input(String const&) override;
     virtual void run_javascript(String const&) override;

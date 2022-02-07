@@ -38,9 +38,9 @@ public:
 
     // ^BlockDevice
     virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
-    virtual bool can_read(const OpenFileDescription&, size_t) const override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
     virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
-    virtual bool can_write(const OpenFileDescription&, size_t) const override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override;
     virtual void prepare_for_unplug() { m_partitions.clear(); }
 
     // FIXME: Remove this method after figuring out another scheme for naming.
@@ -48,13 +48,15 @@ public:
 
     NonnullRefPtrVector<DiskPartition> const& partitions() const { return m_partitions; }
 
+    void add_partition(NonnullRefPtr<DiskPartition> disk_partition) { MUST(m_partitions.try_append(disk_partition)); }
+
     virtual CommandSet command_set() const = 0;
 
     // ^File
     virtual ErrorOr<void> ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg) final;
 
 protected:
-    StorageDevice(int, int, size_t, u64, NonnullOwnPtr<KString>);
+    StorageDevice(MajorNumber, MinorNumber, size_t, u64, NonnullOwnPtr<KString>);
     // ^DiskDevice
     virtual StringView class_name() const override;
 
@@ -64,7 +66,8 @@ private:
 
     // FIXME: Remove this method after figuring out another scheme for naming.
     NonnullOwnPtr<KString> m_early_storage_device_name;
-    u64 m_max_addressable_block;
+    u64 m_max_addressable_block { 0 };
+    size_t m_blocks_per_page { 0 };
 };
 
 }

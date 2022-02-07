@@ -142,14 +142,17 @@ void SoundPlayerWidgetAdvancedView::keydown_event(GUI::KeyEvent& event)
     if (event.key() == Key_Space)
         m_play_button->click();
 
+    if (event.key() == Key_M)
+        toggle_mute();
+
     if (event.key() == Key_S)
         m_stop_button->click();
 
     if (event.key() == Key_Up)
-        m_volume_slider->set_value(m_volume_slider->value() + m_volume_slider->page_step());
+        m_volume_slider->increase_slider_by_page_steps(1);
 
     if (event.key() == Key_Down)
-        m_volume_slider->set_value(m_volume_slider->value() - m_volume_slider->page_step());
+        m_volume_slider->decrease_slider_by_page_steps(1);
 
     GUI::Widget::keydown_event(event);
 }
@@ -178,6 +181,11 @@ void SoundPlayerWidgetAdvancedView::play_state_changed(Player::PlayState state)
 
 void SoundPlayerWidgetAdvancedView::loop_mode_changed(Player::LoopMode)
 {
+}
+
+void SoundPlayerWidgetAdvancedView::mute_changed(bool)
+{
+    // FIXME: Update the volume slider when player is muted
 }
 
 void SoundPlayerWidgetAdvancedView::sync_previous_next_buttons()

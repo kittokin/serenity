@@ -17,11 +17,11 @@
 public:                                                                                                                           \
     [[nodiscard]] void* operator new(size_t)                                                                                      \
     {                                                                                                                             \
-        void* ptr = kmalloc_aligned<alignment>(sizeof(type));                                                                     \
+        void* ptr = kmalloc_aligned(sizeof(type), alignment);                                                                     \
         VERIFY(ptr);                                                                                                              \
         return ptr;                                                                                                               \
     }                                                                                                                             \
-    [[nodiscard]] void* operator new(size_t, const std::nothrow_t&) noexcept { return kmalloc_aligned<alignment>(sizeof(type)); } \
+    [[nodiscard]] void* operator new(size_t, const std::nothrow_t&) noexcept { return kmalloc_aligned(sizeof(type), alignment); } \
     void operator delete(void* ptr) noexcept { kfree_aligned(ptr); }                                                              \
                                                                                                                                   \
 private:
@@ -39,16 +39,12 @@ enum class align_val_t : size_t {};
 };
 
 void kmalloc_init();
-[[gnu::malloc, gnu::returns_nonnull, gnu::alloc_size(1)]] void* kmalloc_impl(size_t);
-[[gnu::malloc, gnu::returns_nonnull, gnu::alloc_size(1)]] void* kmalloc_eternal(size_t);
 
-void kfree(void*);
 void kfree_sized(void*, size_t);
 
 struct kmalloc_stats {
     size_t bytes_allocated;
     size_t bytes_free;
-    size_t bytes_eternal;
     size_t kmalloc_call_count;
     size_t kfree_call_count;
 };
@@ -77,25 +73,13 @@ void operator delete[](void* ptr, size_t) noexcept;
 
 [[gnu::malloc, gnu::alloc_size(1)]] void* kmalloc(size_t);
 
-template<size_t ALIGNMENT>
-[[gnu::malloc, gnu::alloc_size(1)]] inline void* kmalloc_aligned(size_t size)
-{
-    static_assert(ALIGNMENT > sizeof(ptrdiff_t));
-    static_assert(ALIGNMENT <= 4096);
-    void* ptr = kmalloc(size + ALIGNMENT + sizeof(ptrdiff_t));
-    if (ptr == nullptr)
-        return ptr;
-    size_t max_addr = (size_t)ptr + ALIGNMENT;
-    void* aligned_ptr = (void*)(max_addr - (max_addr % ALIGNMENT));
-    ((ptrdiff_t*)aligned_ptr)[-1] = (ptrdiff_t)((u8*)aligned_ptr - (u8*)ptr);
-    return aligned_ptr;
-}
+[[gnu::malloc, gnu::alloc_size(1), gnu::alloc_align(2)]] void* kmalloc_aligned(size_t size, size_t alignment);
 
 inline void kfree_aligned(void* ptr)
 {
     if (ptr == nullptr)
         return;
-    kfree((u8*)ptr - ((const ptrdiff_t*)ptr)[-1]);
+    kfree_sized((u8*)ptr - ((ptrdiff_t const*)ptr)[-1], ((size_t const*)ptr)[-2]);
 }
 
 size_t kmalloc_good_size(size_t);

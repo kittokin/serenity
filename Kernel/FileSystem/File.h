@@ -71,18 +71,18 @@ public:
 //   - Should create a Region in the Process and return it if successful.
 
 class File
-    : public RefCountedBase
+    : public RefCounted<File>
     , public Weakable<File> {
 public:
-    virtual bool unref() const;
-    virtual void before_removing() { }
+    virtual bool unref() const { return RefCounted<File>::unref(); }
+    virtual void will_be_destroyed() { }
     virtual ~File();
 
     virtual ErrorOr<NonnullRefPtr<OpenFileDescription>> open(int options);
     virtual ErrorOr<void> close();
 
-    virtual bool can_read(const OpenFileDescription&, size_t) const = 0;
-    virtual bool can_write(const OpenFileDescription&, size_t) const = 0;
+    virtual bool can_read(const OpenFileDescription&, u64) const = 0;
+    virtual bool can_write(const OpenFileDescription&, u64) const = 0;
 
     virtual ErrorOr<void> attach(OpenFileDescription&);
     virtual void detach(OpenFileDescription&);
@@ -91,7 +91,7 @@ public:
     virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) = 0;
     virtual ErrorOr<void> ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg);
     virtual ErrorOr<Memory::Region*> mmap(Process&, OpenFileDescription&, Memory::VirtualRange const&, u64 offset, int prot, bool shared);
-    virtual ErrorOr<void> stat(::stat&) const { return EBADF; }
+    virtual ErrorOr<struct stat> stat() const { return EBADF; }
 
     // Although this might be better described "name" or "description", these terms already have other meanings.
     virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const = 0;

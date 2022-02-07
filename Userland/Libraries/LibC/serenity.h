@@ -34,7 +34,7 @@ static ALWAYS_INLINE int futex_wait(uint32_t* userspace_address, uint32_t value,
     } else {
         op = FUTEX_WAIT;
     }
-    return futex(userspace_address, op, value, abstime, nullptr, FUTEX_BITSET_MATCH_ANY);
+    return futex(userspace_address, op, value, abstime, NULL, FUTEX_BITSET_MATCH_ANY);
 }
 
 static ALWAYS_INLINE int futex_wake(uint32_t* userspace_address, uint32_t count)
@@ -59,5 +59,7 @@ int setkeymap(const char* name, const uint32_t* map, uint32_t* const shift_map, 
 uint16_t internet_checksum(const void* ptr, size_t count);
 
 int emuctl(uintptr_t command, uintptr_t arg0, uintptr_t arg1);
+
+int serenity_open(char const* path, size_t path_length, int options, ...);
 
 __END_DECLS

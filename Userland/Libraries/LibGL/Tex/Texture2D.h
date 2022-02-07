@@ -27,15 +27,9 @@ public:
     static constexpr u8 LOG2_MAX_TEXTURE_SIZE = 11;
 
 public:
-    Texture2D()
-        : m_sampler(*this)
-    {
-    }
-    ~Texture2D() { }
-
     virtual bool is_texture_2d() const override { return true; }
 
-    void upload_texture_data(GLuint lod, GLint internal_format, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid* pixels, GLsizei pixels_per_row, u8 byte_alignment);
+    void upload_texture_data(GLuint lod, GLint internal_format, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* pixels, GLsizei pixels_per_row, u8 byte_alignment);
     void replace_sub_texture_data(GLuint lod, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* pixels, GLsizei pixels_per_row, u8 byte_alignment);
 
     MipMap const& mipmap(unsigned lod) const
@@ -50,16 +44,8 @@ public:
     Sampler2D const& sampler() const { return m_sampler; }
     Sampler2D& sampler() { return m_sampler; }
 
-    int width_at_lod(unsigned level) const { return (level >= m_mipmaps.size()) ? 0 : max(1, m_mipmaps.at(level).width() >> level); }
-    int height_at_lod(unsigned level) const { return (level >= m_mipmaps.size()) ? 0 : max(1, m_mipmaps.at(level).height() >> level); }
-
-private:
-    template<typename TCallback>
-    void swizzle(Vector<u32>& pixels, TCallback&& callback)
-    {
-        for (auto& pixel : pixels)
-            pixel = callback(pixel);
-    }
+    int width_at_lod(unsigned level) const { return (level >= m_mipmaps.size()) ? 0 : m_mipmaps.at(level).width(); }
+    int height_at_lod(unsigned level) const { return (level >= m_mipmaps.size()) ? 0 : m_mipmaps.at(level).height(); }
 
 private:
     // FIXME: Mipmaps are currently unused, but we have the plumbing for it at least

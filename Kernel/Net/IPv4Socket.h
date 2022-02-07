@@ -37,8 +37,8 @@ public:
     virtual ErrorOr<void> listen(size_t) override;
     virtual void get_local_address(sockaddr*, socklen_t*) override;
     virtual void get_peer_address(sockaddr*, socklen_t*) override;
-    virtual bool can_read(const OpenFileDescription&, size_t) const override;
-    virtual bool can_write(const OpenFileDescription&, size_t) const override;
+    virtual bool can_read(const OpenFileDescription&, u64) const override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override;
     virtual ErrorOr<size_t> sendto(OpenFileDescription&, const UserOrKernelBuffer&, size_t, int, Userspace<const sockaddr*>, socklen_t) override;
     virtual ErrorOr<size_t> recvfrom(OpenFileDescription&, UserOrKernelBuffer&, size_t, int flags, Userspace<sockaddr*>, Userspace<socklen_t*>, Time&) override;
     virtual ErrorOr<void> setsockopt(int level, int option, Userspace<const void*>, socklen_t) override;
@@ -84,6 +84,7 @@ protected:
     virtual ErrorOr<size_t> protocol_send(const UserOrKernelBuffer&, size_t) { return ENOTIMPL; }
     virtual ErrorOr<void> protocol_connect(OpenFileDescription&, ShouldBlock) { return {}; }
     virtual ErrorOr<u16> protocol_allocate_local_port() { return ENOPROTOOPT; }
+    virtual ErrorOr<size_t> protocol_size(ReadonlyBytes /* raw_ipv4_packet */) { return ENOTIMPL; }
     virtual bool protocol_is_disconnected() const { return false; }
 
     virtual void shut_down_for_reading() override;

@@ -10,20 +10,19 @@
 #include <AK/Vector.h>
 #include <Kernel/FileSystem/Custody.h>
 #include <Kernel/FileSystem/Inode.h>
-#include <Kernel/Locking/MutexProtected.h>
 
 namespace Kernel {
 
-static Singleton<MutexProtected<Custody::AllCustodiesList>> s_all_custodies;
+static Singleton<MutexProtected<Custody::AllCustodiesList>> s_all_instances;
 
-static MutexProtected<Custody::AllCustodiesList>& all_custodies()
+MutexProtected<Custody::AllCustodiesList>& Custody::all_instances()
 {
-    return s_all_custodies;
+    return s_all_instances;
 }
 
 ErrorOr<NonnullRefPtr<Custody>> Custody::try_create(Custody* parent, StringView name, Inode& inode, int mount_flags)
 {
-    return all_custodies().with_exclusive([&](auto& all_custodies) -> ErrorOr<NonnullRefPtr<Custody>> {
+    return all_instances().with_exclusive([&](auto& all_custodies) -> ErrorOr<NonnullRefPtr<Custody>> {
         for (Custody& custody : all_custodies) {
             if (custody.parent() == parent
                 && custody.name() == name
@@ -38,20 +37,6 @@ ErrorOr<NonnullRefPtr<Custody>> Custody::try_create(Custody* parent, StringView 
         all_custodies.prepend(*custody);
         return custody;
     });
-}
-
-bool Custody::unref() const
-{
-    bool should_destroy = all_custodies().with_exclusive([&](auto&) {
-        if (deref_base())
-            return false;
-        m_all_custodies_list_node.remove();
-        return true;
-    });
-
-    if (should_destroy)
-        delete this;
-    return should_destroy;
 }
 
 Custody::Custody(Custody* parent, NonnullOwnPtr<KString> name, Inode& inode, int mount_flags)
@@ -73,8 +58,8 @@ ErrorOr<NonnullOwnPtr<KString>> Custody::try_serialize_absolute_path() const
 
     Vector<Custody const*, 32> custody_chain;
     size_t path_length = 0;
-    for (auto* custody = this; custody; custody = custody->parent()) {
-        custody_chain.append(custody);
+    for (auto const* custody = this; custody; custody = custody->parent()) {
+        TRY(custody_chain.try_append(custody));
         path_length += custody->m_name->length() + 1;
     }
     VERIFY(path_length > 0);
@@ -85,28 +70,13 @@ ErrorOr<NonnullOwnPtr<KString>> Custody::try_serialize_absolute_path() const
     for (size_t custody_index = custody_chain.size() - 1; custody_index > 0; --custody_index) {
         buffer[string_index] = '/';
         ++string_index;
-        auto& custody_name = *custody_chain[custody_index - 1]->m_name;
+        auto const& custody_name = *custody_chain[custody_index - 1]->m_name;
         __builtin_memcpy(buffer + string_index, custody_name.characters(), custody_name.length());
         string_index += custody_name.length();
     }
     VERIFY(string->length() == string_index);
     buffer[string_index] = 0;
     return string;
-}
-
-String Custody::absolute_path() const
-{
-    if (!parent())
-        return "/";
-    Vector<Custody const*, 32> custody_chain;
-    for (auto* custody = this; custody; custody = custody->parent())
-        custody_chain.append(custody);
-    StringBuilder builder;
-    for (int i = custody_chain.size() - 2; i >= 0; --i) {
-        builder.append('/');
-        builder.append(custody_chain[i]->name());
-    }
-    return builder.to_string();
 }
 
 bool Custody::is_readonly() const

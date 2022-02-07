@@ -9,7 +9,7 @@
 #include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Arch/x86/Interrupts.h>
 #include <Kernel/CommandLine.h>
-#include <Kernel/Firmware/ACPI/MultiProcessorParser.h>
+#include <Kernel/Firmware/MultiProcessor/Parser.h>
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/Interrupts/IOAPIC.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
@@ -40,7 +40,9 @@ UNMAP_AFTER_INIT void InterruptManagement::initialize()
 {
     VERIFY(!InterruptManagement::initialized());
     s_interrupt_management = new InterruptManagement();
-
+    if (!kernel_command_line().is_smp_enabled_without_ioapic_enabled()) {
+        dbgln("Can't enable SMP mode without IOAPIC mode being enabled");
+    }
     if (!kernel_command_line().is_ioapic_enabled() && !kernel_command_line().is_smp_enabled())
         InterruptManagement::the().switch_to_pic_mode();
     else
@@ -94,6 +96,15 @@ u8 InterruptManagement::get_irq_vector(u8 mapped_interrupt_vector)
 {
     // FIXME: For SMP configuration (with IOAPICs) use a better routing scheme to make redirections more efficient.
     return mapped_interrupt_vector;
+}
+
+RefPtr<IRQController> InterruptManagement::get_responsible_irq_controller(IRQControllerType controller_type, u8 interrupt_vector)
+{
+    for (auto& irq_controller : m_interrupt_controllers) {
+        if (irq_controller->gsi_base() <= interrupt_vector && irq_controller->type() == controller_type)
+            return irq_controller;
+    }
+    VERIFY_NOT_REACHED();
 }
 
 RefPtr<IRQController> InterruptManagement::get_responsible_irq_controller(u8 interrupt_vector)
@@ -171,6 +182,8 @@ UNMAP_AFTER_INIT void InterruptManagement::switch_to_ioapic_mode()
         if (irq_controller->type() == IRQControllerType::i8259) {
             irq_controller->hard_disable();
             dbgln("Interrupts: Detected {} - Disabled", irq_controller->model());
+            SpuriousInterruptHandler::initialize_for_disabled_master_pic();
+            SpuriousInterruptHandler::initialize_for_disabled_slave_pic();
         } else {
             dbgln("Interrupts: Detected {}", irq_controller->model());
         }
@@ -180,13 +193,14 @@ UNMAP_AFTER_INIT void InterruptManagement::switch_to_ioapic_mode()
         m_pci_interrupt_overrides = mp_parser->get_pci_interrupt_redirections();
     }
 
+    APIC::initialize();
     APIC::the().init_bsp();
 }
 
 UNMAP_AFTER_INIT void InterruptManagement::locate_apic_data()
 {
     VERIFY(!m_madt.is_null());
-    auto madt = Memory::map_typed<ACPI::Structures::MADT>(m_madt);
+    auto madt = Memory::map_typed<ACPI::Structures::MADT>(m_madt).release_value_but_fixme_should_propagate_errors();
 
     int irq_controller_count = 0;
     if (madt->flags & PCAT_COMPAT_FLAG) {
@@ -211,11 +225,11 @@ UNMAP_AFTER_INIT void InterruptManagement::locate_apic_data()
             ByteReader::load<u32>(reinterpret_cast<u8 const*>(&interrupt_override_entry->global_system_interrupt), global_system_interrupt);
             u16 flags = 0;
             ByteReader::load<u16>(reinterpret_cast<u8 const*>(&interrupt_override_entry->flags), flags);
-            m_isa_interrupt_overrides.empend(
+            MUST(m_isa_interrupt_overrides.try_empend(
                 interrupt_override_entry->bus,
                 interrupt_override_entry->source,
                 global_system_interrupt,
-                flags);
+                flags));
 
             dbgln("Interrupts: Overriding INT {:#x} with GSI {}, for bus {:#x}",
                 interrupt_override_entry->source,

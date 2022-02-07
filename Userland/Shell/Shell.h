@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,11 +8,13 @@
 
 #include "Job.h"
 #include "Parser.h"
+#include <AK/Array.h>
 #include <AK/CircularQueue.h>
 #include <AK/HashMap.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
+#include <AK/StringView.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
 #include <LibCore/Notifier.h>
@@ -48,7 +50,8 @@
     __ENUMERATE_SHELL_BUILTIN(bg)      \
     __ENUMERATE_SHELL_BUILTIN(wait)    \
     __ENUMERATE_SHELL_BUILTIN(dump)    \
-    __ENUMERATE_SHELL_BUILTIN(kill)
+    __ENUMERATE_SHELL_BUILTIN(kill)    \
+    __ENUMERATE_SHELL_BUILTIN(noop)
 
 #define ENUMERATE_SHELL_OPTIONS()                                                                                    \
     __ENUMERATE_SHELL_OPTION(inline_exec_keep_empty_segments, false, "Keep empty segments in inline execute $(...)") \
@@ -87,7 +90,7 @@ public:
 
     int run_command(StringView, Optional<SourcePosition> = {});
     bool is_runnable(StringView);
-    RefPtr<Job> run_command(const AST::Command&);
+    ErrorOr<RefPtr<Job>> run_command(const AST::Command&);
     NonnullRefPtrVector<Job> run_commands(Vector<AST::Command>&);
     bool run_file(const String&, bool explicitly_invoked = true);
     bool run_builtin(const AST::Command&, const NonnullRefPtrVector<AST::Rewiring>&, int& retval);
@@ -98,25 +101,25 @@ public:
     void block_on_pipeline(RefPtr<AST::Pipeline>);
     String prompt() const;
 
-    static String expand_tilde(const String&);
+    static String expand_tilde(StringView expression);
     static Vector<String> expand_globs(StringView path, StringView base);
     static Vector<String> expand_globs(Vector<StringView> path_segments, StringView base);
     Vector<AST::Command> expand_aliases(Vector<AST::Command>);
     String resolve_path(String) const;
-    String resolve_alias(const String&) const;
+    String resolve_alias(StringView) const;
 
     static String find_in_path(StringView program_name);
 
     static bool has_history_event(StringView);
 
     RefPtr<AST::Value> get_argument(size_t) const;
-    RefPtr<AST::Value> lookup_local_variable(const String&) const;
-    String local_variable_or(const String&, const String&) const;
+    RefPtr<AST::Value> lookup_local_variable(StringView) const;
+    String local_variable_or(StringView, const String&) const;
     void set_local_variable(const String&, RefPtr<AST::Value>, bool only_in_current_frame = false);
-    void unset_local_variable(const String&, bool only_in_current_frame = false);
+    void unset_local_variable(StringView, bool only_in_current_frame = false);
 
     void define_function(String name, Vector<String> argnames, RefPtr<AST::Node> body);
-    bool has_function(const String&);
+    bool has_function(StringView);
     bool invoke_function(const AST::Command&, int& retval);
 
     String format(StringView, ssize_t& cursor) const;
@@ -153,10 +156,10 @@ public:
     [[nodiscard]] Frame push_frame(String name);
     void pop_frame();
 
-    static String escape_token_for_double_quotes(const String& token);
-    static String escape_token_for_single_quotes(const String& token);
-    static String escape_token(const String& token);
-    static String unescape_token(const String& token);
+    static String escape_token_for_double_quotes(StringView token);
+    static String escape_token_for_single_quotes(StringView token);
+    static String escape_token(StringView token);
+    static String unescape_token(StringView token);
     enum class SpecialCharacterEscapeMode {
         Untouched,
         Escaped,
@@ -175,12 +178,12 @@ public:
 
     void highlight(Line::Editor&) const;
     Vector<Line::CompletionSuggestion> complete();
-    Vector<Line::CompletionSuggestion> complete_path(const String& base, const String&, size_t offset, ExecutableOnly executable_only);
-    Vector<Line::CompletionSuggestion> complete_program_name(const String&, size_t offset);
-    Vector<Line::CompletionSuggestion> complete_variable(const String&, size_t offset);
-    Vector<Line::CompletionSuggestion> complete_user(const String&, size_t offset);
-    Vector<Line::CompletionSuggestion> complete_option(const String&, const String&, size_t offset);
-    Vector<Line::CompletionSuggestion> complete_immediate_function_name(const String&, size_t offset);
+    Vector<Line::CompletionSuggestion> complete_path(StringView base, StringView, size_t offset, ExecutableOnly executable_only);
+    Vector<Line::CompletionSuggestion> complete_program_name(StringView, size_t offset);
+    Vector<Line::CompletionSuggestion> complete_variable(StringView, size_t offset);
+    Vector<Line::CompletionSuggestion> complete_user(StringView, size_t offset);
+    Vector<Line::CompletionSuggestion> complete_option(StringView, StringView, size_t offset);
+    Vector<Line::CompletionSuggestion> complete_immediate_function_name(StringView, size_t offset);
 
     void restore_ios();
 
@@ -190,7 +193,7 @@ public:
     void kill_job(const Job*, int sig);
 
     String get_history_path();
-    void print_path(const String& path);
+    void print_path(StringView path);
 
     bool read_single_line();
 
@@ -212,7 +215,7 @@ public:
     char hostname[HostNameSize];
 
     uid_t uid;
-    int last_return_code { 0 };
+    Optional<int> last_return_code;
     Vector<String> directory_stack;
     CircularQueue<String, 8> cd_history; // FIXME: have a configurable cd history length
     HashMap<u64, NonnullRefPtr<Job>> jobs;
@@ -228,12 +231,15 @@ public:
         None,
         InternalControlFlowBreak,
         InternalControlFlowContinue,
+        InternalControlFlowInterrupted,
+        InternalControlFlowKilled,
         EvaluatedSyntaxError,
         NonExhaustiveMatchRules,
         InvalidGlobError,
         InvalidSliceContentsError,
         OpenFailure,
         OutOfMemory,
+        LaunchError,
     };
 
     void raise_error(ShellError kind, String description, Optional<AST::Position> position = {})
@@ -259,6 +265,8 @@ public:
         switch (error) {
         case ShellError::InternalControlFlowBreak:
         case ShellError::InternalControlFlowContinue:
+        case ShellError::InternalControlFlowInterrupted:
+        case ShellError::InternalControlFlowKilled:
             return true;
         default:
             return false;
@@ -287,14 +295,14 @@ private:
     void save_to(JsonObject&);
     void bring_cursor_to_beginning_of_a_line() const;
 
-    Optional<int> resolve_job_spec(const String&);
+    Optional<int> resolve_job_spec(StringView);
     void cache_path();
     void add_entry_to_cache(const String&);
-    void remove_entry_from_cache(const String&);
+    void remove_entry_from_cache(StringView);
     void stop_all_jobs();
     const Job* m_current_job { nullptr };
-    LocalFrame* find_frame_containing_local_variable(const String& name);
-    const LocalFrame* find_frame_containing_local_variable(const String& name) const
+    LocalFrame* find_frame_containing_local_variable(StringView name);
+    const LocalFrame* find_frame_containing_local_variable(StringView name) const
     {
         return const_cast<Shell*>(this)->find_frame_containing_local_variable(name);
     }
@@ -322,12 +330,14 @@ private:
 
 #undef __ENUMERATE_SHELL_BUILTIN
 
-    constexpr static const char* builtin_names[] = {
-#define __ENUMERATE_SHELL_BUILTIN(builtin) #builtin,
+    static constexpr Array builtin_names = {
+#define __ENUMERATE_SHELL_BUILTIN(builtin) #builtin##sv,
 
         ENUMERATE_SHELL_BUILTINS()
 
 #undef __ENUMERATE_SHELL_BUILTIN
+
+            ":"sv, // POSIX-y name for "noop".
     };
 
     bool m_should_ignore_jobs_on_next_exit { false };
@@ -368,7 +378,7 @@ private:
     return c == '_' || (c <= 'Z' && c >= 'A') || (c <= 'z' && c >= 'a') || (c <= '9' && c >= '0');
 }
 
-inline size_t find_offset_into_node(const String& unescaped_text, size_t escaped_offset)
+inline size_t find_offset_into_node(StringView unescaped_text, size_t escaped_offset)
 {
     size_t unescaped_offset = 0;
     size_t offset = 0;

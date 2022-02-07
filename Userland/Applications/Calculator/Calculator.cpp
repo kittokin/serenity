@@ -38,7 +38,7 @@ KeypadValue Calculator::begin_operation(Operation operation, KeypadValue argumen
             m_has_error = true;
             return argument;
         }
-        res = KeypadValue { AK::sqrt((double)argument) };
+        res = argument.sqrt();
         clear_operation();
         break;
     case Operation::Inverse:
@@ -46,7 +46,7 @@ KeypadValue Calculator::begin_operation(Operation operation, KeypadValue argumen
             m_has_error = true;
             return argument;
         }
-        res = KeypadValue { 1.0 / (double)argument };
+        res = argument.invert();
         clear_operation();
         break;
     case Operation::Percent:
@@ -68,10 +68,13 @@ KeypadValue Calculator::begin_operation(Operation operation, KeypadValue argumen
         res = argument;
         break;
     case Operation::MemAdd:
-        m_mem = m_mem + argument; //avoids the need for operator+=()
+        m_mem = m_mem + argument; // avoids the need for operator+=()
         res = m_mem;
         break;
     }
+
+    if (should_be_rounded(res))
+        round(res);
 
     return res;
 }
@@ -98,7 +101,7 @@ KeypadValue Calculator::finish_operation(KeypadValue argument)
             m_has_error = true;
             return argument;
         }
-        res = KeypadValue { (double)m_saved_argument / (double)argument };
+        res = m_saved_argument / argument;
         break;
 
     case Operation::Sqrt:
@@ -112,6 +115,9 @@ KeypadValue Calculator::finish_operation(KeypadValue argument)
         VERIFY_NOT_REACHED();
     }
 
+    if (should_be_rounded(res))
+        round(res);
+
     clear_operation();
     return res;
 }
@@ -121,4 +127,30 @@ void Calculator::clear_operation()
     m_operation_in_progress = Operation::None;
     m_saved_argument = 0;
     clear_error();
+}
+
+bool Calculator::should_be_rounded(KeypadValue value)
+{
+    // We check if pow(10, value.m_decimal_places) overflow.
+    // If it does, the value can't be displayed (and provoke a division by zero), see Keypad::set_value()
+    // For u64, the threshold is 19
+    return value.m_decimal_places > rounding_threshold;
+}
+
+void Calculator::round(KeypadValue& value)
+{
+    while (value.m_decimal_places > rounding_threshold) {
+        bool const need_increment = value.m_value % 10 > 4;
+
+        value.m_value /= 10;
+        if (need_increment)
+            value.m_value++;
+
+        value.m_decimal_places--;
+
+        if (value.m_value == 0) {
+            value = 0;
+            return;
+        }
+    }
 }

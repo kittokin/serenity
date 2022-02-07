@@ -10,7 +10,6 @@
 #include <AK/Assertions.h>
 #include <AK/ByteBuffer.h>
 #include <AK/Types.h>
-#include <Kernel/Locking/Lockable.h>
 #include <Kernel/Locking/Mutex.h>
 #include <Kernel/StdLib.h>
 #include <LibCrypto/Cipher/AES.h>
@@ -30,9 +29,9 @@ public:
     using HashType = HashT;
     using DigestType = typename HashT::DigestType;
 
-    // FIXME: Do something other than VERIFY()'ing inside Optional in case of OOM.
+    // FIXME: Do something other than VERIFY()'ing in case of OOM.
     FortunaPRNG()
-        : m_counter(ByteBuffer::create_zeroed(BlockType::block_size()).release_value())
+        : m_counter(ByteBuffer::create_zeroed(BlockType::block_size()).release_value_but_fixme_should_propagate_errors())
     {
     }
 
@@ -102,7 +101,7 @@ private:
         } else {
             auto buffer_result = ByteBuffer::copy(digest.immutable_data(), digest.data_length());
             // If there's no memory left to copy this into, bail out.
-            if (!buffer_result.has_value())
+            if (buffer_result.is_error())
                 return;
 
             m_key = buffer_result.release_value();
@@ -120,8 +119,7 @@ private:
     Spinlock m_lock;
 };
 
-class KernelRng : public Lockable<FortunaPRNG<Crypto::Cipher::AESCipher, Crypto::Hash::SHA256, 256>> {
-    AK_MAKE_ETERNAL;
+class KernelRng : public FortunaPRNG<Crypto::Cipher::AESCipher, Crypto::Hash::SHA256, 256> {
 
 public:
     KernelRng();
@@ -130,8 +128,6 @@ public:
     void wait_for_entropy();
 
     void wake_if_ready();
-
-    Spinlock& get_lock() { return resource().get_lock(); }
 
 private:
     WaitQueue m_seed_queue;
@@ -168,7 +164,7 @@ public:
         SpinlockLocker lock(kernel_rng.get_lock());
         // We don't lock this because on the off chance a pool is corrupted, entropy isn't lost.
         Event<T> event = { read_tsc(), m_source, event_data };
-        kernel_rng.resource().add_random_event(event, m_pool);
+        kernel_rng.add_random_event(event, m_pool);
         m_pool++;
         kernel_rng.wake_if_ready();
     }

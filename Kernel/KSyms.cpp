@@ -6,6 +6,7 @@
 
 #include <AK/TemporaryChange.h>
 #include <Kernel/Arch/SmapDisabler.h>
+#include <Kernel/Arch/x86/SafeMem.h>
 #include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/KSyms.h>
 #include <Kernel/Process.h>
@@ -25,7 +26,7 @@ __attribute__((section(".kernel_symbols"))) char kernel_symbols[5 * MiB] {};
 static KernelSymbol* s_symbols;
 static size_t s_symbol_count = 0;
 
-static u8 parse_hex_digit(char nibble)
+UNMAP_AFTER_INIT static u8 parse_hex_digit(char nibble)
 {
     if (nibble >= '0' && nibble <= '9')
         return nibble - '0';
@@ -54,18 +55,18 @@ const KernelSymbol* symbolicate_kernel_address(FlatPtr address)
     return nullptr;
 }
 
-UNMAP_AFTER_INIT static void load_kernel_symbols_from_data(ReadonlyBytes buffer)
+UNMAP_AFTER_INIT static void load_kernel_symbols_from_data(Bytes buffer)
 {
     g_lowest_kernel_symbol_address = 0xffffffff;
     g_highest_kernel_symbol_address = 0;
 
-    auto* bufptr = (const char*)buffer.data();
+    auto* bufptr = (char*)buffer.data();
     auto* start_of_name = bufptr;
     FlatPtr address = 0;
 
     for (size_t i = 0; i < 8; ++i)
         s_symbol_count = (s_symbol_count << 4) | parse_hex_digit(*(bufptr++));
-    s_symbols = static_cast<KernelSymbol*>(kmalloc_eternal(sizeof(KernelSymbol) * s_symbol_count));
+    s_symbols = static_cast<KernelSymbol*>(kmalloc(sizeof(KernelSymbol) * s_symbol_count));
     ++bufptr; // skip newline
 
     dmesgln("Loading kernel symbol table...");
@@ -84,10 +85,9 @@ UNMAP_AFTER_INIT static void load_kernel_symbols_from_data(ReadonlyBytes buffer)
         }
         auto& ksym = s_symbols[current_symbol_index];
         ksym.address = kernel_load_base + address;
-        char* name = static_cast<char*>(kmalloc_eternal((bufptr - start_of_name) + 1));
-        memcpy(name, start_of_name, bufptr - start_of_name);
-        name[bufptr - start_of_name] = '\0';
-        ksym.name = name;
+        ksym.name = start_of_name;
+
+        *bufptr = '\0';
 
         if (ksym.address < g_lowest_kernel_symbol_address)
             g_lowest_kernel_symbol_address = ksym.address;

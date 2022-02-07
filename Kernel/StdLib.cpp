@@ -8,7 +8,7 @@
 #include <AK/MemMem.h>
 #include <AK/Types.h>
 #include <Kernel/Arch/SmapDisabler.h>
-#include <Kernel/Heap/kmalloc.h>
+#include <Kernel/Arch/x86/SafeMem.h>
 #include <Kernel/Memory/MemoryManager.h>
 #include <Kernel/StdLib.h>
 
@@ -244,8 +244,8 @@ int strcmp(const char* s1, const char* s2)
 
 int memcmp(const void* v1, const void* v2, size_t n)
 {
-    auto* s1 = (const u8*)v1;
-    auto* s2 = (const u8*)v2;
+    auto const* s1 = (const u8*)v1;
+    auto const* s2 = (const u8*)v2;
     while (n-- > 0) {
         if (*s1++ != *s2++)
             return s1[-1] < s2[-1] ? -1 : 1;

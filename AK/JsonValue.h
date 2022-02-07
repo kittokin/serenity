@@ -54,6 +54,7 @@ public:
     JsonValue(bool);
     JsonValue(const char*);
     JsonValue(const String&);
+    JsonValue(StringView);
     JsonValue(const JsonArray&);
     JsonValue(const JsonObject&);
 
@@ -131,7 +132,7 @@ public:
         return m_value.as_u64;
     }
 
-    int as_bool() const
+    bool as_bool() const
     {
         VERIFY(is_bool());
         return m_value.as_bool;

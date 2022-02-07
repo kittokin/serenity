@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
+ * Copyright (c) 2021, Mahmoud Mandour <ma.mandourr@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -46,6 +47,8 @@ NonnullRefPtr<Statement> Parser::parse_statement()
         return parse_alter_table_statement();
     case TokenType::Drop:
         return parse_drop_table_statement();
+    case TokenType::Describe:
+        return parse_describe_table_statement();
     case TokenType::Insert:
         return parse_insert_statement({});
     case TokenType::Update:
@@ -179,6 +182,16 @@ NonnullRefPtr<DropTable> Parser::parse_drop_table_statement()
     parse_schema_and_table_name(schema_name, table_name);
 
     return create_ast_node<DropTable>(move(schema_name), move(table_name), is_error_if_table_does_not_exist);
+}
+
+NonnullRefPtr<DescribeTable> Parser::parse_describe_table_statement()
+{
+    consume(TokenType::Describe);
+    consume(TokenType::Table);
+
+    auto table_name = parse_qualified_table_name();
+
+    return create_ast_node<DescribeTable>(move(table_name));
 }
 
 NonnullRefPtr<Insert> Parser::parse_insert_statement(RefPtr<CommonTableExpressionList> common_table_expression_list)
@@ -739,22 +752,35 @@ RefPtr<Expression> Parser::parse_match_expression(NonnullRefPtr<Expression> lhs,
 {
     auto parse_escape = [this]() {
         RefPtr<Expression> escape;
-        if (consume_if(TokenType::Escape))
+        if (consume_if(TokenType::Escape)) {
             escape = parse_expression();
+        }
         return escape;
     };
 
-    if (consume_if(TokenType::Like))
-        return create_ast_node<MatchExpression>(MatchOperator::Like, move(lhs), parse_expression(), parse_escape(), invert_expression);
+    if (consume_if(TokenType::Like)) {
+        NonnullRefPtr<Expression> rhs = parse_expression();
+        RefPtr<Expression> escape = parse_escape();
+        return create_ast_node<MatchExpression>(MatchOperator::Like, move(lhs), move(rhs), move(escape), invert_expression);
+    }
 
-    if (consume_if(TokenType::Glob))
-        return create_ast_node<MatchExpression>(MatchOperator::Glob, move(lhs), parse_expression(), parse_escape(), invert_expression);
+    if (consume_if(TokenType::Glob)) {
+        NonnullRefPtr<Expression> rhs = parse_expression();
+        RefPtr<Expression> escape = parse_escape();
+        return create_ast_node<MatchExpression>(MatchOperator::Glob, move(lhs), move(rhs), move(escape), invert_expression);
+    }
 
-    if (consume_if(TokenType::Match))
-        return create_ast_node<MatchExpression>(MatchOperator::Match, move(lhs), parse_expression(), parse_escape(), invert_expression);
+    if (consume_if(TokenType::Match)) {
+        NonnullRefPtr<Expression> rhs = parse_expression();
+        RefPtr<Expression> escape = parse_escape();
+        return create_ast_node<MatchExpression>(MatchOperator::Match, move(lhs), move(rhs), move(escape), invert_expression);
+    }
 
-    if (consume_if(TokenType::Regexp))
-        return create_ast_node<MatchExpression>(MatchOperator::Regexp, move(lhs), parse_expression(), parse_escape(), invert_expression);
+    if (consume_if(TokenType::Regexp)) {
+        NonnullRefPtr<Expression> rhs = parse_expression();
+        RefPtr<Expression> escape = parse_escape();
+        return create_ast_node<MatchExpression>(MatchOperator::Regexp, move(lhs), move(rhs), move(escape), invert_expression);
+    }
 
     return {};
 }

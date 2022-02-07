@@ -19,15 +19,7 @@
 
 namespace Kernel {
 
-class BochsGraphicsAdapter;
-class IntelNativeGraphicsAdapter;
-class VGACompatibleAdapter;
 class GraphicsManagement {
-    friend class BochsGraphicsAdapter;
-    friend class IntelNativeGraphicsAdapter;
-    friend class VGACompatibleAdapter;
-    friend class Graphics::VirtIOGPU::GraphicsAdapter;
-    AK_MAKE_ETERNAL
 
 public:
     static GraphicsManagement& the();
@@ -37,11 +29,13 @@ public:
     unsigned allocate_minor_device_number() { return m_current_minor_number++; };
     GraphicsManagement();
 
-    bool framebuffer_devices_allowed() const;
+    bool framebuffer_devices_console_only() const;
+    bool framebuffer_devices_use_bootloader_framebuffer() const;
     bool framebuffer_devices_exist() const;
 
     Spinlock& main_vga_lock() { return m_main_vga_lock; }
     RefPtr<Graphics::Console> console() const { return m_console; }
+    void set_console(Graphics::Console&);
 
     void deactivate_graphical_mode();
     void activate_graphical_mode();

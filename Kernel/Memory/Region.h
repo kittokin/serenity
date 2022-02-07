@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2022, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -8,9 +9,9 @@
 
 #include <AK/EnumBits.h>
 #include <AK/IntrusiveList.h>
+#include <AK/IntrusiveRedBlackTree.h>
 #include <AK/Weakable.h>
 #include <Kernel/Forward.h>
-#include <Kernel/Heap/SlabAllocator.h>
 #include <Kernel/KString.h>
 #include <Kernel/Memory/PageFaultResponse.h>
 #include <Kernel/Memory/VirtualRangeAllocator.h>
@@ -32,7 +33,6 @@ class Region final
     : public Weakable<Region> {
     friend class MemoryManager;
 
-    MAKE_SLAB_ALLOCATED(Region)
 public:
     enum Access : u8 {
         None = 0,
@@ -88,8 +88,11 @@ public:
     [[nodiscard]] bool is_mmap() const { return m_mmap; }
     void set_mmap(bool mmap) { m_mmap = mmap; }
 
+    [[nodiscard]] bool is_write_combine() const { return m_write_combine; }
+    ErrorOr<void> set_write_combine(bool);
+
     [[nodiscard]] bool is_user() const { return !is_kernel(); }
-    [[nodiscard]] bool is_kernel() const { return vaddr().get() < 0x00800000 || vaddr().get() >= kernel_mapping_base; }
+    [[nodiscard]] bool is_kernel() const { return vaddr().get() < USER_RANGE_BASE || vaddr().get() >= kernel_mapping_base; }
 
     PageFaultResponse handle_fault(PageFault const&);
 
@@ -180,7 +183,8 @@ public:
         No,
         Yes,
     };
-    void unmap(ShouldDeallocateVirtualRange = ShouldDeallocateVirtualRange::Yes);
+    void unmap(ShouldDeallocateVirtualRange, ShouldFlushTLB = ShouldFlushTLB::Yes);
+    void unmap_with_locks_held(ShouldDeallocateVirtualRange, ShouldFlushTLB, SpinlockLocker<RecursiveSpinlock>& pd_locker, SpinlockLocker<RecursiveSpinlock>& mm_locker);
 
     void remap();
 
@@ -220,17 +224,18 @@ private:
     bool m_stack : 1 { false };
     bool m_mmap : 1 { false };
     bool m_syscall_region : 1 { false };
-    IntrusiveListNode<Region> m_memory_manager_list_node;
+    bool m_write_combine : 1 { false };
+
+    IntrusiveRedBlackTreeNode<FlatPtr, Region, RawPtr<Region>> m_tree_node;
     IntrusiveListNode<Region> m_vmobject_list_node;
 
 public:
-    using ListInMemoryManager = IntrusiveList<&Region::m_memory_manager_list_node>;
     using ListInVMObject = IntrusiveList<&Region::m_vmobject_list_node>;
 };
 
 AK_ENUM_BITWISE_OPERATORS(Region::Access)
 
-inline constexpr Region::Access prot_to_region_access_flags(int prot)
+constexpr Region::Access prot_to_region_access_flags(int prot)
 {
     Region::Access access = Region::Access::None;
     if ((prot & PROT_READ) == PROT_READ)
@@ -242,7 +247,7 @@ inline constexpr Region::Access prot_to_region_access_flags(int prot)
     return access;
 }
 
-inline constexpr int region_access_flags_to_prot(Region::Access access)
+constexpr int region_access_flags_to_prot(Region::Access access)
 {
     int prot = 0;
     if ((access & Region::Access::Read) == Region::Access::Read)

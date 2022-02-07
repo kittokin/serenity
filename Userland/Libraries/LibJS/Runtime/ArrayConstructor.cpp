@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2020, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2020-2022, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -114,10 +114,10 @@ JS_DEFINE_NATIVE_FUNCTION(ArrayConstructor::from)
         while (true) {
             if (k >= MAX_ARRAY_LIKE_INDEX) {
                 auto error = vm.throw_completion<TypeError>(global_object, ErrorType::ArrayMaxSize);
-                return TRY(iterator_close(*iterator, move(error)));
+                return TRY(iterator_close(global_object, iterator, move(error)));
             }
 
-            auto* next = TRY(iterator_step(global_object, *iterator));
+            auto* next = TRY(iterator_step(global_object, iterator));
             if (!next) {
                 TRY(array->set(vm.names.length, Value(k), Object::ShouldThrowExceptions::Yes));
                 return array;
@@ -127,9 +127,9 @@ JS_DEFINE_NATIVE_FUNCTION(ArrayConstructor::from)
 
             Value mapped_value;
             if (map_fn) {
-                auto mapped_value_or_error = vm.call(*map_fn, this_arg, next_value, Value(k));
+                auto mapped_value_or_error = JS::call(global_object, *map_fn, this_arg, next_value, Value(k));
                 if (mapped_value_or_error.is_error())
-                    return TRY(iterator_close(*iterator, mapped_value_or_error.release_error()));
+                    return TRY(iterator_close(global_object, iterator, mapped_value_or_error.release_error()));
                 mapped_value = mapped_value_or_error.release_value();
             } else {
                 mapped_value = next_value;
@@ -137,7 +137,7 @@ JS_DEFINE_NATIVE_FUNCTION(ArrayConstructor::from)
 
             auto result_or_error = array->create_data_property_or_throw(k, mapped_value);
             if (result_or_error.is_error())
-                return TRY(iterator_close(*iterator, result_or_error.release_error()));
+                return TRY(iterator_close(global_object, iterator, result_or_error.release_error()));
 
             ++k;
         }
@@ -148,19 +148,16 @@ JS_DEFINE_NATIVE_FUNCTION(ArrayConstructor::from)
     auto length = TRY(length_of_array_like(global_object, *array_like));
 
     Object* array;
-    if (constructor.is_constructor()) {
-        MarkedValueList arguments(vm.heap());
-        arguments.empend(length);
-        array = TRY(JS::construct(global_object, constructor.as_function(), move(arguments)));
-    } else {
+    if (constructor.is_constructor())
+        array = TRY(JS::construct(global_object, constructor.as_function(), Value(length)));
+    else
         array = TRY(Array::create(global_object, length));
-    }
 
     for (size_t k = 0; k < length; ++k) {
         auto k_value = TRY(array_like->get(k));
         Value mapped_value;
         if (map_fn)
-            mapped_value = TRY(vm.call(*map_fn, this_arg, k_value, Value(k)));
+            mapped_value = TRY(JS::call(global_object, *map_fn, this_arg, k_value, Value(k)));
         else
             mapped_value = k_value;
         TRY(array->create_data_property_or_throw(k, mapped_value));
@@ -183,13 +180,10 @@ JS_DEFINE_NATIVE_FUNCTION(ArrayConstructor::of)
 {
     auto this_value = vm.this_value(global_object);
     Object* array;
-    if (this_value.is_constructor()) {
-        MarkedValueList arguments(vm.heap());
-        arguments.empend(vm.argument_count());
-        array = TRY(JS::construct(global_object, this_value.as_function(), move(arguments)));
-    } else {
+    if (this_value.is_constructor())
+        array = TRY(JS::construct(global_object, this_value.as_function(), Value(vm.argument_count())));
+    else
         array = TRY(Array::create(global_object, vm.argument_count()));
-    }
     for (size_t k = 0; k < vm.argument_count(); ++k)
         TRY(array->create_data_property_or_throw(k, vm.argument(k)));
     TRY(array->set(vm.names.length, Value(vm.argument_count()), Object::ShouldThrowExceptions::Yes));

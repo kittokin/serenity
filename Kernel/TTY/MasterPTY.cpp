@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <Kernel/API/POSIX/errno.h>
 #include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Process.h>
 #include <Kernel/TTY/MasterPTY.h>
 #include <Kernel/TTY/PTYMultiplexer.h>
 #include <Kernel/TTY/SlavePTY.h>
-#include <LibC/errno_numbers.h>
 #include <LibC/signal_numbers.h>
 #include <LibC/sys/ioctl_numbers.h>
 
@@ -18,8 +18,7 @@ namespace Kernel {
 
 ErrorOr<NonnullRefPtr<MasterPTY>> MasterPTY::try_create(unsigned int index)
 {
-    // FIXME: Don't make a temporary String here
-    auto pts_name = TRY(KString::try_create(String::formatted("/dev/pts/{}", index)));
+    auto pts_name = TRY(KString::formatted("/dev/pts/{}", index));
     auto tty_name = TRY(pts_name->try_clone());
 
     auto buffer = TRY(DoubleBuffer::try_create());
@@ -73,14 +72,14 @@ ErrorOr<size_t> MasterPTY::write(OpenFileDescription&, u64, const UserOrKernelBu
     return size;
 }
 
-bool MasterPTY::can_read(const OpenFileDescription&, size_t) const
+bool MasterPTY::can_read(const OpenFileDescription&, u64) const
 {
     if (!m_slave)
         return true;
     return !m_buffer->is_empty();
 }
 
-bool MasterPTY::can_write(const OpenFileDescription&, size_t) const
+bool MasterPTY::can_write(const OpenFileDescription&, u64) const
 {
     return true;
 }
@@ -123,7 +122,7 @@ ErrorOr<void> MasterPTY::close()
 
 ErrorOr<void> MasterPTY::ioctl(OpenFileDescription& description, unsigned request, Userspace<void*> arg)
 {
-    REQUIRE_PROMISE(tty);
+    TRY(Process::current().require_promise(Pledge::tty));
     if (!m_slave)
         return EIO;
     if (request == TIOCSWINSZ || request == TIOCGPGRP)
@@ -133,8 +132,7 @@ ErrorOr<void> MasterPTY::ioctl(OpenFileDescription& description, unsigned reques
 
 ErrorOr<NonnullOwnPtr<KString>> MasterPTY::pseudo_path(const OpenFileDescription&) const
 {
-    // FIXME: Replace this and others of this pattern by KString::formatted()
-    return KString::try_create(String::formatted("ptm:{}", m_pts_name));
+    return KString::formatted("ptm:{}", m_pts_name);
 }
 
 }

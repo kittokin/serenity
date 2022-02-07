@@ -24,16 +24,8 @@ public:
     void send_messages(i32 start_index);
 
 private:
-    virtual JS::Value log() override;
-    virtual JS::Value info() override;
-    virtual JS::Value debug() override;
-    virtual JS::Value warn() override;
-    virtual JS::Value error() override;
-    virtual JS::Value clear() override;
-    virtual JS::Value trace() override;
-    virtual JS::Value count() override;
-    virtual JS::Value count_reset() override;
-    virtual JS::Value assert_() override;
+    virtual void clear() override;
+    virtual JS::ThrowCompletionOr<JS::Value> printer(JS::Console::LogLevel log_level, PrinterArguments) override;
 
     ClientConnection& m_client;
     WeakPtr<JS::Interpreter> m_interpreter;
@@ -41,14 +33,19 @@ private:
 
     void clear_output();
     void print_html(String const& line);
+    void begin_group(String const& label, bool start_expanded);
+    virtual void end_group() override;
 
     struct ConsoleOutput {
         enum class Type {
             HTML,
-            Clear
+            Clear,
+            BeginGroup,
+            BeginGroupCollapsed,
+            EndGroup,
         };
         Type type;
-        String html;
+        String data;
     };
     Vector<ConsoleOutput> m_message_log;
 };

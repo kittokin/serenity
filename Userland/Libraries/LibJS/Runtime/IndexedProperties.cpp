@@ -177,8 +177,10 @@ IndexedPropertyIterator::IndexedPropertyIterator(const IndexedProperties& indexe
     , m_index(staring_index)
     , m_skip_empty(skip_empty)
 {
-    if (m_skip_empty)
+    if (m_skip_empty) {
+        m_cached_indices = m_indexed_properties.indices();
         skip_empty_indices();
+    }
 }
 
 IndexedPropertyIterator& IndexedPropertyIterator::operator++()
@@ -203,8 +205,7 @@ bool IndexedPropertyIterator::operator!=(const IndexedPropertyIterator& other) c
 
 void IndexedPropertyIterator::skip_empty_indices()
 {
-    auto indices = m_indexed_properties.indices();
-    for (auto i : indices) {
+    for (auto i : m_cached_indices) {
         if (i < m_index)
             continue;
         m_index = i;
@@ -231,22 +232,6 @@ void IndexedProperties::remove(u32 index)
 {
     VERIFY(m_storage->has_index(index));
     m_storage->remove(index);
-}
-
-ValueAndAttributes IndexedProperties::take_first(Object* this_object)
-{
-    auto first = m_storage->take_first();
-    if (first.value.is_accessor())
-        return { first.value.as_accessor().call_getter(this_object), first.attributes };
-    return first;
-}
-
-ValueAndAttributes IndexedProperties::take_last(Object* this_object)
-{
-    auto last = m_storage->take_last();
-    if (last.value.is_accessor())
-        return { last.value.as_accessor().call_getter(this_object), last.attributes };
-    return last;
 }
 
 bool IndexedProperties::set_array_like_size(size_t new_size)

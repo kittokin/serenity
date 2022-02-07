@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/Concepts.h>
 #include <AK/Error.h>
 #include <AK/Forward.h>
 #include <AK/HashFunctions.h>
@@ -204,7 +205,19 @@ public:
         rehash(capacity * 2);
     }
 
+    ErrorOr<void> try_ensure_capacity(size_t capacity)
+    {
+        VERIFY(capacity >= size());
+        return try_rehash(capacity * 2);
+    }
+
     [[nodiscard]] bool contains(T const& value) const
+    {
+        return find(value) != end();
+    }
+
+    template<Concepts::HashCompatible<T> K>
+    requires(IsSame<TraitsForT, Traits<T>>) [[nodiscard]] bool contains(K const& value) const
     {
         return find(value) != end();
     }
@@ -329,6 +342,31 @@ public:
     {
         return find(TraitsForT::hash(value), [&](auto& other) { return TraitsForT::equals(value, other); });
     }
+    // FIXME: Support for predicates, while guaranteeing that the predicate call
+    //        does not call a non trivial constructor each time invoked
+    template<Concepts::HashCompatible<T> K>
+    requires(IsSame<TraitsForT, Traits<T>>) [[nodiscard]] Iterator find(K const& value)
+    {
+        return find(Traits<K>::hash(value), [&](auto& other) { return Traits<T>::equals(other, value); });
+    }
+
+    template<Concepts::HashCompatible<T> K, typename TUnaryPredicate>
+    requires(IsSame<TraitsForT, Traits<T>>) [[nodiscard]] Iterator find(K const& value, TUnaryPredicate predicate)
+    {
+        return find(Traits<K>::hash(value), move(predicate));
+    }
+
+    template<Concepts::HashCompatible<T> K>
+    requires(IsSame<TraitsForT, Traits<T>>) [[nodiscard]] ConstIterator find(K const& value) const
+    {
+        return find(Traits<K>::hash(value), [&](auto& other) { return Traits<T>::equals(other, value); });
+    }
+
+    template<Concepts::HashCompatible<T> K, typename TUnaryPredicate>
+    requires(IsSame<TraitsForT, Traits<T>>) [[nodiscard]] ConstIterator find(K const& value, TUnaryPredicate predicate) const
+    {
+        return find(Traits<K>::hash(value), move(predicate));
+    }
 
     bool remove(const T& value)
     {
@@ -340,7 +378,18 @@ public:
         return false;
     }
 
-    void remove(Iterator iterator)
+    template<Concepts::HashCompatible<T> K>
+    requires(IsSame<TraitsForT, Traits<T>>) bool remove(K const& value)
+    {
+        auto it = find(value);
+        if (it != end()) {
+            remove(it);
+            return true;
+        }
+        return false;
+    }
+
+    Iterator remove(Iterator iterator)
     {
         VERIFY(iterator.m_bucket);
         auto& bucket = *iterator.m_bucket;
@@ -349,6 +398,9 @@ public:
 
         if constexpr (!IsOrdered)
             VERIFY(!bucket.end);
+
+        auto next_iterator = iterator;
+        ++next_iterator;
 
         bucket.slot()->~T();
         bucket.used = false;
@@ -367,6 +419,23 @@ public:
             else
                 m_collection_data.tail = bucket.previous;
         }
+
+        return next_iterator;
+    }
+
+    template<typename TUnaryPredicate>
+    bool remove_all_matching(TUnaryPredicate predicate)
+    {
+        bool something_was_removed = false;
+        for (auto it = begin(); it != end();) {
+            if (predicate(*it)) {
+                it = remove(it);
+                something_was_removed = true;
+            } else {
+                ++it;
+            }
+        }
+        return something_was_removed;
     }
 
 private:

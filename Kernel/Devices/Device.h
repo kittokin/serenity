@@ -20,9 +20,9 @@
 #include <AK/HashMap.h>
 #include <AK/RefPtr.h>
 #include <Kernel/Devices/AsyncDeviceRequest.h>
+#include <Kernel/FileSystem/DeviceFileTypes.h>
 #include <Kernel/FileSystem/File.h>
 #include <Kernel/FileSystem/SysFS.h>
-#include <Kernel/Locking/Mutex.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
@@ -37,8 +37,8 @@ protected:
 public:
     virtual ~Device() override;
 
-    unsigned major() const { return m_major; }
-    unsigned minor() const { return m_minor; }
+    MajorNumber major() const { return m_major; }
+    MinorNumber minor() const { return m_minor; }
 
     virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override;
 
@@ -46,7 +46,7 @@ public:
     GroupID gid() const { return m_gid; }
 
     virtual bool is_device() const override { return true; }
-    virtual void before_removing() override;
+    virtual void will_be_destroyed() override;
     virtual void after_inserting();
     void process_next_queued_request(Badge<AsyncDeviceRequest>, const AsyncDeviceRequest&);
 
@@ -63,13 +63,13 @@ public:
     }
 
 protected:
-    Device(unsigned major, unsigned minor);
+    Device(MajorNumber major, MinorNumber minor);
     void set_uid(UserID uid) { m_uid = uid; }
     void set_gid(GroupID gid) { m_gid = gid; }
 
 private:
-    unsigned m_major { 0 };
-    unsigned m_minor { 0 };
+    MajorNumber m_major { 0 };
+    MinorNumber m_minor { 0 };
     UserID m_uid { 0 };
     GroupID m_gid { 0 };
 

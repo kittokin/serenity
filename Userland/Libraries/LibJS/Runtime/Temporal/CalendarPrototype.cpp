@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021-2022, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -66,10 +66,11 @@ void CalendarPrototype::initialize(GlobalObject& global_object)
 JS_DEFINE_NATIVE_FUNCTION(CalendarPrototype::id_getter)
 {
     // 1. Let calendar be the this value.
-    auto calendar = vm.this_value(global_object);
+    // 2. Perform ? RequireInternalSlot(calendar, [[InitializedTemporalCalendar]]).
+    auto* calendar = TRY(typed_this_object(global_object));
 
-    // 2. Return ? ToString(calendar).
-    return { js_string(vm, TRY(calendar.to_string(global_object))) };
+    // 3. Return ? ToString(calendar).
+    return { js_string(vm, TRY(Value(calendar).to_string(global_object))) };
 }
 
 // 12.4.4 Temporal.Calendar.prototype.dateFromFields ( fields [ , options ] ), https://tc39.es/proposal-temporal/#sec-temporal.calendar.prototype.datefromfields
@@ -485,7 +486,7 @@ JS_DEFINE_NATIVE_FUNCTION(CalendarPrototype::fields)
     VERIFY(calendar->identifier() == "iso8601"sv);
 
     // 4. Let iteratorRecord be ? Getiterator(fields, sync).
-    auto* iterator_record = TRY(get_iterator(global_object, fields, IteratorHint::Sync));
+    auto iterator_record = TRY(get_iterator(global_object, fields, IteratorHint::Sync));
 
     // 5. Let fieldNames be a new empty List.
     auto field_names = MarkedValueList { vm.heap() };
@@ -494,7 +495,7 @@ JS_DEFINE_NATIVE_FUNCTION(CalendarPrototype::fields)
     // 7. Repeat, while next is not false,
     while (true) {
         // a. Set next to ? IteratorStep(iteratorRecord).
-        auto* next = TRY(iterator_step(global_object, *iterator_record));
+        auto* next = TRY(iterator_step(global_object, iterator_record));
 
         // b. If next is not false, then
         if (!next)
@@ -509,7 +510,7 @@ JS_DEFINE_NATIVE_FUNCTION(CalendarPrototype::fields)
             auto completion = vm.throw_completion<TypeError>(global_object, ErrorType::TemporalInvalidCalendarFieldValue, next_value.to_string_without_side_effects());
 
             // 2. Return ? IteratorClose(iteratorRecord, completion).
-            return TRY(iterator_close(*iterator_record, move(completion)));
+            return TRY(iterator_close(global_object, iterator_record, move(completion)));
         }
 
         // iii. If fieldNames contains nextValue, then
@@ -518,7 +519,7 @@ JS_DEFINE_NATIVE_FUNCTION(CalendarPrototype::fields)
             auto completion = vm.throw_completion<RangeError>(global_object, ErrorType::TemporalDuplicateCalendarField, next_value.as_string().string());
 
             // 2. Return ? IteratorClose(iteratorRecord, completion).
-            return TRY(iterator_close(*iterator_record, move(completion)));
+            return TRY(iterator_close(global_object, iterator_record, move(completion)));
         }
 
         // iv. If nextValue is not one of "year", "month", "monthCode", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond", then
@@ -527,7 +528,7 @@ JS_DEFINE_NATIVE_FUNCTION(CalendarPrototype::fields)
             auto completion = vm.throw_completion<RangeError>(global_object, ErrorType::TemporalInvalidCalendarFieldName, next_value.as_string().string());
 
             // 2. Return ? IteratorClose(iteratorRecord, completion).
-            return TRY(iterator_close(*iterator_record, move(completion)));
+            return TRY(iterator_close(global_object, iterator_record, move(completion)));
         }
 
         // v. Append nextValue to the end of the List fieldNames.
@@ -574,10 +575,11 @@ JS_DEFINE_NATIVE_FUNCTION(CalendarPrototype::to_string)
 JS_DEFINE_NATIVE_FUNCTION(CalendarPrototype::to_json)
 {
     // 1. Let calendar be the this value.
-    auto calendar = vm.this_value(global_object);
+    // 2. Perform ? RequireInternalSlot(calendar, [[InitializedTemporalCalendar]]).
+    auto* calendar = TRY(typed_this_object(global_object));
 
-    // 2. Return ? ToString(calendar).
-    return js_string(vm, TRY(calendar.to_string(global_object)));
+    // 3. Return ? ToString(calendar).
+    return js_string(vm, TRY(Value(calendar).to_string(global_object)));
 }
 
 // 15.6.2.6 Temporal.Calendar.prototype.era ( temporalDateLike ), https://tc39.es/proposal-temporal/#sec-temporal.calendar.prototype.era

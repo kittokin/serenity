@@ -22,6 +22,8 @@
 #include <LibWeb/Bindings/CSSStyleRulePrototype.h>
 #include <LibWeb/Bindings/CSSStyleSheetConstructor.h>
 #include <LibWeb/Bindings/CSSStyleSheetPrototype.h>
+#include <LibWeb/Bindings/CanvasGradientConstructor.h>
+#include <LibWeb/Bindings/CanvasGradientPrototype.h>
 #include <LibWeb/Bindings/CanvasRenderingContext2DConstructor.h>
 #include <LibWeb/Bindings/CanvasRenderingContext2DPrototype.h>
 #include <LibWeb/Bindings/CharacterDataConstructor.h>
@@ -58,6 +60,8 @@
 #include <LibWeb/Bindings/EventPrototype.h>
 #include <LibWeb/Bindings/EventTargetConstructor.h>
 #include <LibWeb/Bindings/EventTargetPrototype.h>
+#include <LibWeb/Bindings/FocusEventConstructor.h>
+#include <LibWeb/Bindings/FocusEventPrototype.h>
 #include <LibWeb/Bindings/HTMLAnchorElementConstructor.h>
 #include <LibWeb/Bindings/HTMLAnchorElementPrototype.h>
 #include <LibWeb/Bindings/HTMLAreaElementConstructor.h>
@@ -209,6 +213,8 @@
 #include <LibWeb/Bindings/ImageDataPrototype.h>
 #include <LibWeb/Bindings/IntersectionObserverConstructor.h>
 #include <LibWeb/Bindings/IntersectionObserverPrototype.h>
+#include <LibWeb/Bindings/KeyboardEventConstructor.h>
+#include <LibWeb/Bindings/KeyboardEventPrototype.h>
 #include <LibWeb/Bindings/MediaQueryListConstructor.h>
 #include <LibWeb/Bindings/MediaQueryListEventConstructor.h>
 #include <LibWeb/Bindings/MediaQueryListEventPrototype.h>
@@ -266,6 +272,8 @@
 #include <LibWeb/Bindings/TextConstructor.h>
 #include <LibWeb/Bindings/TextEncoderConstructor.h>
 #include <LibWeb/Bindings/TextEncoderPrototype.h>
+#include <LibWeb/Bindings/TextMetricsConstructor.h>
+#include <LibWeb/Bindings/TextMetricsPrototype.h>
 #include <LibWeb/Bindings/TextPrototype.h>
 #include <LibWeb/Bindings/UIEventConstructor.h>
 #include <LibWeb/Bindings/UIEventPrototype.h>
@@ -301,6 +309,7 @@
     ADD_WINDOW_OBJECT_INTERFACE(CSSStyleDeclaration)       \
     ADD_WINDOW_OBJECT_INTERFACE(CSSStyleRule)              \
     ADD_WINDOW_OBJECT_INTERFACE(CSSStyleSheet)             \
+    ADD_WINDOW_OBJECT_INTERFACE(CanvasGradient)            \
     ADD_WINDOW_OBJECT_INTERFACE(CanvasRenderingContext2D)  \
     ADD_WINDOW_OBJECT_INTERFACE(CharacterData)             \
     ADD_WINDOW_OBJECT_INTERFACE(CloseEvent)                \
@@ -393,6 +402,7 @@
     ADD_WINDOW_OBJECT_INTERFACE(HTMLVideoElement)          \
     ADD_WINDOW_OBJECT_INTERFACE(ImageData)                 \
     ADD_WINDOW_OBJECT_INTERFACE(IntersectionObserver)      \
+    ADD_WINDOW_OBJECT_INTERFACE(KeyboardEvent)             \
     ADD_WINDOW_OBJECT_INTERFACE(MediaQueryList)            \
     ADD_WINDOW_OBJECT_INTERFACE(MediaQueryListEvent)       \
     ADD_WINDOW_OBJECT_INTERFACE(MessageChannel)            \
@@ -422,6 +432,7 @@
     ADD_WINDOW_OBJECT_INTERFACE(SVGSVGElement)             \
     ADD_WINDOW_OBJECT_INTERFACE(Text)                      \
     ADD_WINDOW_OBJECT_INTERFACE(TextEncoder)               \
+    ADD_WINDOW_OBJECT_INTERFACE(TextMetrics)               \
     ADD_WINDOW_OBJECT_INTERFACE(UIEvent)                   \
     ADD_WINDOW_OBJECT_INTERFACE(URLSearchParams)           \
     ADD_WINDOW_OBJECT_INTERFACE(URL)                       \

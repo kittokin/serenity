@@ -11,10 +11,11 @@ set(SOURCES
     EventLoop.cpp
     FileWatcher.cpp
     File.cpp
+    FilePermissionsMask.cpp
     GetPassword.cpp
+    Group.cpp
     IODevice.cpp
     LocalServer.cpp
-    LocalSocket.cpp
     LockFile.cpp
     MappedFile.cpp
     MimeData.cpp
@@ -27,10 +28,12 @@ set(SOURCES
     Property.cpp
     SecretString.cpp
     Socket.cpp
+    Stream.cpp
     StandardPaths.cpp
     System.cpp
+    SystemServerTakeover.cpp
     TCPServer.cpp
-    TCPSocket.cpp
+    TempFile.cpp
     Timer.cpp
     UDPServer.cpp
     UDPSocket.cpp

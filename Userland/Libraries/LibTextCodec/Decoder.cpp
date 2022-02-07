@@ -11,70 +11,15 @@
 namespace TextCodec {
 
 namespace {
-Latin1Decoder& latin1_decoder()
-{
-    static Latin1Decoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new Latin1Decoder;
-    return *decoder;
-}
-
-UTF8Decoder& utf8_decoder()
-{
-    static UTF8Decoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new UTF8Decoder;
-    return *decoder;
-}
-
-UTF16BEDecoder& utf16be_decoder()
-{
-    static UTF16BEDecoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new UTF16BEDecoder;
-    return *decoder;
-}
-
-Latin2Decoder& latin2_decoder()
-{
-    static Latin2Decoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new Latin2Decoder;
-    return *decoder;
-}
-
-HebrewDecoder& hebrew_decoder()
-{
-    static HebrewDecoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new HebrewDecoder;
-    return *decoder;
-}
-
-CyrillicDecoder& cyrillic_decoder()
-{
-    static CyrillicDecoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new CyrillicDecoder;
-    return *decoder;
-}
-
-Latin9Decoder& latin9_decoder()
-{
-    static Latin9Decoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new Latin9Decoder;
-    return *decoder;
-}
-
-TurkishDecoder& turkish_decoder()
-{
-    static TurkishDecoder* decoder = nullptr;
-    if (!decoder)
-        decoder = new TurkishDecoder;
-    return *decoder;
-}
-
+Latin1Decoder s_latin1_decoder;
+UTF8Decoder s_utf8_decoder;
+UTF16BEDecoder s_utf16be_decoder;
+Latin2Decoder s_latin2_decoder;
+HebrewDecoder s_hebrew_decoder;
+CyrillicDecoder s_cyrillic_decoder;
+Koi8RDecoder s_koi8r_decoder;
+Latin9Decoder s_latin9_decoder;
+TurkishDecoder s_turkish_decoder;
 }
 
 Decoder* decoder_for(const String& a_encoding)
@@ -82,21 +27,23 @@ Decoder* decoder_for(const String& a_encoding)
     auto encoding = get_standardized_encoding(a_encoding);
     if (encoding.has_value()) {
         if (encoding.value().equals_ignoring_case("windows-1252"))
-            return &latin1_decoder();
+            return &s_latin1_decoder;
         if (encoding.value().equals_ignoring_case("utf-8"))
-            return &utf8_decoder();
+            return &s_utf8_decoder;
         if (encoding.value().equals_ignoring_case("utf-16be"))
-            return &utf16be_decoder();
+            return &s_utf16be_decoder;
         if (encoding.value().equals_ignoring_case("iso-8859-2"))
-            return &latin2_decoder();
+            return &s_latin2_decoder;
         if (encoding.value().equals_ignoring_case("windows-1255"))
-            return &hebrew_decoder();
+            return &s_hebrew_decoder;
         if (encoding.value().equals_ignoring_case("windows-1251"))
-            return &cyrillic_decoder();
+            return &s_cyrillic_decoder;
+        if (encoding.value().equals_ignoring_case("koi8-r"))
+            return &s_koi8r_decoder;
         if (encoding.value().equals_ignoring_case("iso-8859-15"))
-            return &latin9_decoder();
+            return &s_latin9_decoder;
         if (encoding.value().equals_ignoring_case("windows-1254"))
-            return &turkish_decoder();
+            return &s_turkish_decoder;
     }
     dbgln("TextCodec: No decoder implemented for encoding '{}'", a_encoding);
     return nullptr;
@@ -165,6 +112,8 @@ Optional<String> get_standardized_encoding(const String& encoding)
         return "windows-1258";
     if (trimmed_lowercase_encoding.is_one_of("x-mac-cyrillic", "x-mac-ukrainian"))
         return "x-mac-cyrillic";
+    if (trimmed_lowercase_encoding.is_one_of("koi8-r", "koi8r"))
+        return "koi8-r";
     if (trimmed_lowercase_encoding.is_one_of("chinese", "csgb2312", "csiso58gb231280", "gb2312", "gb_2312", "gb_2312-80", "gbk", "iso-ir-58", "x-gbk"))
         return "GBK";
     if (trimmed_lowercase_encoding == "gb18030")
@@ -367,6 +316,30 @@ void CyrillicDecoder::process(StringView input, Function<void(u32)> on_code_poin
         0x430, 0x431, 0x432, 0x433, 0x434, 0x435, 0x436, 0x437, 0x438, 0x439, 0x43A, 0x43B, 0x43C, 0x43D, 0x43E, 0x43F,
         0x440, 0x441, 0x442, 0x443, 0x444, 0x445, 0x446, 0x447, 0x448, 0x449, 0x44A, 0x44B, 0x44C, 0x44D, 0x44E, 0x44F
     };
+    for (unsigned char ch : input) {
+        if (ch < 0x80) { // Superset of ASCII
+            on_code_point(ch);
+        } else {
+            on_code_point(translation_table[ch - 0x80]);
+        }
+    }
+}
+
+void Koi8RDecoder::process(StringView input, Function<void(u32)> on_code_point)
+{
+    // clang-format off
+    static constexpr Array<u32, 128> translation_table = {
+        0x2500,0x2502,0x250c,0x2510,0x2514,0x2518,0x251c,0x2524,0x252c,0x2534,0x253c,0x2580,0x2584,0x2588,0x258c,0x2590,
+        0x2591,0x2592,0x2593,0x2320,0x25a0,0x2219,0x221a,0x2248,0x2264,0x2265,0xA0,0x2321,0xb0,0xb2,0xb7,0xf7,
+        0x2550,0x2551,0x2552,0xd191,0x2553,0x2554,0x2555,0x2556,0x2557,0x2558,0x2559,0x255a,0x255b,0x255c,0x255d,0x255e,
+        0x255f,0x2560,0x2561,0xd081,0x2562,0x2563,0x2564,0x2565,0x2566,0x2567,0x2568,0x2569,0x256a,0x256b,0x256c,0xa9,
+        0x44e,0x430,0x431,0x446,0x434,0x435,0x444,0x433,0x445,0x438,0x439,0x43a,0x43b,0x43c,0x43d,0x43e,
+        0x43f,0x44f,0x440,0x441,0x442,0x443,0x436,0x432,0x44c,0x44b,0x437,0x448,0x44d,0x449,0x447,0x44a,
+        0x42e,0x410,0x441,0x426,0x414,0x415,0x424,0x413,0x425,0x418,0x419,0x41a,0x41b,0x41c,0x41d,0x41e,
+        0x41f,0x42f,0x420,0x421,0x422,0x423,0x416,0x412,0x42c,0x42b,0x417,0x428,0x42d,0x429,0x427,0x42a,
+    };
+    // clang-format on
+
     for (unsigned char ch : input) {
         if (ch < 0x80) { // Superset of ASCII
             on_code_point(ch);

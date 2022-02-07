@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
+ * Copyright (c) 2021, Antonio Di Stefano <tonio9681@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -20,6 +21,7 @@
 #include <LibGUI/TextEditor.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/WindowTheme.h>
+#include <WindowServer/Compositor.h>
 
 namespace ThemeEditor {
 
@@ -140,16 +142,22 @@ void PreviewWidget::set_preview_palette(const Gfx::Palette& palette)
     update();
 }
 
-void PreviewWidget::set_theme_from_file(String const& path, int fd)
+void PreviewWidget::set_theme_from_file(Core::File& file)
 {
-    auto file = Core::ConfigFile::open(path, fd);
-    auto theme = Gfx::load_system_theme(file);
+    auto config_file = Core::ConfigFile::open(file.filename(), file.leak_fd());
+    auto theme = Gfx::load_system_theme(config_file);
     VERIFY(theme.is_valid());
 
     m_preview_palette = Gfx::Palette(Gfx::PaletteImpl::create_with_anonymous_buffer(theme));
     set_preview_palette(m_preview_palette);
     if (on_theme_load_from_file)
-        on_theme_load_from_file(path);
+        on_theme_load_from_file(file.filename());
+}
+
+void PreviewWidget::set_color_filter(OwnPtr<Gfx::ColorBlindnessFilter> color_filter)
+{
+    m_color_filter = move(color_filter);
+    repaint();
 }
 
 void PreviewWidget::paint_event(GUI::PaintEvent& event)
@@ -219,6 +227,24 @@ void PreviewWidget::paint_event(GUI::PaintEvent& event)
     paint_window("Active window", active_rect, Gfx::WindowTheme::WindowState::Active, *m_inactive_window_icon);
 }
 
+void PreviewWidget::second_paint_event(GUI::PaintEvent&)
+{
+    if (!m_color_filter)
+        return;
+
+    GUI::Painter painter(*this);
+
+    auto target = painter.target();
+    auto bitmap_clone_or_error = target->clone();
+    if (bitmap_clone_or_error.is_error())
+        return;
+
+    auto clone = bitmap_clone_or_error.release_value();
+    auto rect = target->rect();
+
+    m_color_filter->apply(*target, rect, *clone, rect);
+}
+
 void PreviewWidget::resize_event(GUI::ResizeEvent&)
 {
     m_gallery->set_relative_rect(Gfx::IntRect(0, 0, 320, 240).centered_within(rect()).translated(0, 20));
@@ -238,11 +264,10 @@ void PreviewWidget::drop_event(GUI::DropEvent& event)
             return;
         }
 
-        auto result = FileSystemAccessClient::Client::the().request_file(window()->window_id(), urls.first().path(), Core::OpenMode::ReadOnly);
-        if (result.error != 0)
+        auto response = FileSystemAccessClient::Client::the().try_request_file(window(), urls.first().path(), Core::OpenMode::ReadOnly);
+        if (response.is_error())
             return;
-
-        set_theme_from_file(urls.first().path(), *result.fd);
+        set_theme_from_file(*response.value());
     }
 }
 

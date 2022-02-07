@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BuiltinWrappers.h>
 #include <Kernel/Debug.h>
 #include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Net/Socket.h>
@@ -38,7 +39,10 @@ bool Thread::Blocker::add_to_blocker_set(Thread::BlockerSet& blocker_set, void* 
 
 Thread::Blocker::~Blocker()
 {
-    VERIFY(!m_lock.is_locked());
+}
+
+void Thread::Blocker::finalize()
+{
     if (m_blocker_set)
         m_blocker_set->remove_blocker(*this);
 }
@@ -269,9 +273,9 @@ Thread::WriteBlocker::WriteBlocker(OpenFileDescription& description, BlockFlags&
 
 auto Thread::WriteBlocker::override_timeout(const BlockTimeout& timeout) -> const BlockTimeout&
 {
-    auto& description = blocked_description();
+    auto const& description = blocked_description();
     if (description.is_socket()) {
-        auto& socket = *description.socket();
+        auto const& socket = *description.socket();
         if (socket.has_send_timeout()) {
             Time send_timeout = socket.send_timeout();
             m_timeout = BlockTimeout(false, &send_timeout, timeout.start_time(), timeout.clock_id());
@@ -289,9 +293,9 @@ Thread::ReadBlocker::ReadBlocker(OpenFileDescription& description, BlockFlags& u
 
 auto Thread::ReadBlocker::override_timeout(const BlockTimeout& timeout) -> const BlockTimeout&
 {
-    auto& description = blocked_description();
+    auto const& description = blocked_description();
     if (description.is_socket()) {
-        auto& socket = *description.socket();
+        auto const& socket = *description.socket();
         if (socket.has_receive_timeout()) {
             Time receive_timeout = socket.receive_timeout();
             m_timeout = BlockTimeout(false, &receive_timeout, timeout.start_time(), timeout.clock_id());
@@ -370,6 +374,11 @@ bool Thread::SelectBlocker::setup_blocker()
 
 Thread::SelectBlocker::~SelectBlocker()
 {
+}
+
+void Thread::SelectBlocker::finalize()
+{
+    Thread::FileBlocker::finalize();
     for (auto& fd_entry : m_fds)
         fd_entry.description->blocker_set().remove_blocker(*this);
 }
@@ -473,7 +482,7 @@ bool Thread::SignalBlocker::check_pending_signals(bool from_add_blocker)
         if (m_did_unblock)
             return false;
 
-        auto matching_pending_signal = __builtin_ffsl(thread().pending_signals() & m_pending_set);
+        auto matching_pending_signal = bit_scan_forward(thread().pending_signals() & m_pending_set);
         if (matching_pending_signal == 0)
             return false;
 

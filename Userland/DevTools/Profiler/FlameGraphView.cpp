@@ -9,6 +9,7 @@
 #include "LibGfx/Forward.h"
 #include <AK/Function.h>
 #include <LibGUI/Painter.h>
+#include <LibGUI/Widget.h>
 #include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
 
@@ -49,7 +50,7 @@ FlameGraphView::FlameGraphView(GUI::Model& model, int text_column, int width_col
     layout_bars();
 }
 
-GUI::ModelIndex const FlameGraphView::hovered_index() const
+GUI::ModelIndex FlameGraphView::hovered_index() const
 {
     if (!m_hovered_bar)
         return GUI::ModelIndex();
@@ -83,6 +84,13 @@ void FlameGraphView::mousemove_event(GUI::MouseEvent& event)
     if (on_hover_change)
         on_hover_change();
 
+    String label = "";
+    if (m_hovered_bar != nullptr && m_hovered_bar->index.is_valid()) {
+        label = bar_label(*m_hovered_bar);
+    }
+    set_tooltip(label);
+    show_or_hide_tooltip();
+
     update();
 }
 
@@ -115,12 +123,8 @@ void FlameGraphView::paint_event(GUI::PaintEvent& event)
     GUI::Painter painter(*this);
     painter.add_clip_rect(event.rect());
 
-    for (const auto& bar : m_bars) {
-        auto label_index = bar.index.sibling_at_column(m_text_column);
-        String label = "All";
-        if (label_index.is_valid()) {
-            label = m_model.data(label_index).to_string();
-        }
+    for (auto const& bar : m_bars) {
+        auto label = bar_label(bar);
 
         auto color = m_colors[label.hash() % m_colors.size()];
 
@@ -148,6 +152,16 @@ void FlameGraphView::paint_event(GUI::PaintEvent& event)
     }
 }
 
+String FlameGraphView::bar_label(StackBar const& bar) const
+{
+    auto label_index = bar.index.sibling_at_column(m_text_column);
+    String label = "All";
+    if (label_index.is_valid()) {
+        label = m_model.data(label_index).to_string();
+    }
+    return label;
+}
+
 void FlameGraphView::layout_bars()
 {
     m_bars.clear();
@@ -172,12 +186,12 @@ void FlameGraphView::layout_children(GUI::ModelIndex& index, int depth, int left
     if (!index.is_valid()) {
         // We're at the root, so calculate the event count across all roots
         for (auto i = 0; i < m_model.row_count(index); ++i) {
-            auto& root = *static_cast<ProfileNode*>(m_model.index(i).internal_data());
+            auto const& root = *static_cast<ProfileNode const*>(m_model.index(i).internal_data());
             node_event_count += root.event_count();
         }
         m_bars.append({ {}, { left, y, available_width, bar_height }, false });
     } else {
-        auto node = static_cast<ProfileNode*>(index.internal_data());
+        auto const* node = static_cast<ProfileNode const*>(index.internal_data());
 
         bool selected = !selected_nodes.is_empty();
         if (selected) {
@@ -206,7 +220,7 @@ void FlameGraphView::layout_children(GUI::ModelIndex& index, int depth, int left
             return;
         }
 
-        auto child = static_cast<ProfileNode*>(child_index.internal_data());
+        auto const* child = static_cast<ProfileNode const*>(child_index.internal_data());
         float child_width = width_per_sample * child->event_count();
         layout_children(child_index, depth + 1, static_cast<int>(new_left), static_cast<int>(new_left + child_width), selected_nodes);
         new_left += child_width;

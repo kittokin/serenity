@@ -67,6 +67,7 @@ public:
         WM_SuperKeyPressed,
         WM_SuperSpaceKeyPressed,
         WM_WorkspaceChanged,
+        WM_KeymapChanged,
         __End_WM_Events,
     };
 
@@ -228,6 +229,20 @@ private:
     const unsigned m_current_column;
 };
 
+class WMKeymapChangedEvent : public WMEvent {
+public:
+    explicit WMKeymapChangedEvent(int client_id, String const& keymap)
+        : WMEvent(Event::Type::WM_KeymapChanged, client_id, 0)
+        , m_keymap(keymap)
+    {
+    }
+
+    String const& keymap() const { return m_keymap; }
+
+private:
+    const String m_keymap;
+};
+
 class MultiPaintEvent final : public Event {
 public:
     explicit MultiPaintEvent(Vector<Gfx::IntRect, 32> rects, Gfx::IntSize const& window_size)
@@ -332,6 +347,7 @@ public:
     KeyCode key() const { return m_key; }
     bool ctrl() const { return m_modifiers & Mod_Ctrl; }
     bool alt() const { return m_modifiers & Mod_Alt; }
+    bool altgr() const { return m_modifiers & Mod_AltGr; }
     bool shift() const { return m_modifiers & Mod_Shift; }
     bool super() const { return m_modifiers & Mod_Super; }
     u8 modifiers() const { return m_modifiers; }
@@ -369,13 +385,14 @@ private:
 
 class MouseEvent final : public Event {
 public:
-    MouseEvent(Type type, const Gfx::IntPoint& position, unsigned buttons, MouseButton button, unsigned modifiers, int wheel_delta)
+    MouseEvent(Type type, const Gfx::IntPoint& position, unsigned buttons, MouseButton button, unsigned modifiers, int wheel_delta_x, int wheel_delta_y)
         : Event(type)
         , m_position(position)
         , m_buttons(buttons)
         , m_button(button)
         , m_modifiers(modifiers)
-        , m_wheel_delta(wheel_delta)
+        , m_wheel_delta_x(wheel_delta_x)
+        , m_wheel_delta_y(wheel_delta_y)
     {
     }
 
@@ -389,14 +406,16 @@ public:
     bool shift() const { return m_modifiers & Mod_Shift; }
     bool super() const { return m_modifiers & Mod_Super; }
     unsigned modifiers() const { return m_modifiers; }
-    int wheel_delta() const { return m_wheel_delta; }
+    int wheel_delta_x() const { return m_wheel_delta_x; }
+    int wheel_delta_y() const { return m_wheel_delta_y; }
 
 private:
     Gfx::IntPoint m_position;
     unsigned m_buttons { 0 };
     MouseButton m_button { MouseButton::None };
     unsigned m_modifiers { 0 };
-    int m_wheel_delta { 0 };
+    int m_wheel_delta_x { 0 };
+    int m_wheel_delta_y { 0 };
 };
 
 class DragEvent final : public Event {

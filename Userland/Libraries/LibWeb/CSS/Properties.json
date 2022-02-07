@@ -590,6 +590,9 @@
     "initial": "black",
     "valid-types": [
       "color"
+    ],
+    "valid-identifiers": [
+      "none"
     ]
   },
   "flex": {
@@ -955,6 +958,7 @@
       "percentage"
     ],
     "valid-identifiers": [
+      "auto",
       "none"
     ],
     "quirks": [
@@ -969,6 +973,7 @@
       "percentage"
     ],
     "valid-identifiers": [
+      "auto",
       "none"
     ],
     "quirks": [
@@ -1166,9 +1171,12 @@
   },
   "stroke": {
     "inherited": true,
-    "initial": "transparent",
+    "initial": "none",
     "valid-types": [
       "color"
+    ],
+    "valid-identifiers": [
+      "none"
     ]
   },
   "stroke-width": {

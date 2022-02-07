@@ -5,9 +5,9 @@
  */
 
 #include <Kernel/Coredump.h>
-#include <Kernel/FileSystem/VirtualFileSystem.h>
 #include <Kernel/PerformanceManager.h>
 #include <Kernel/Process.h>
+#include <Kernel/Scheduler.h>
 #include <Kernel/Time/TimeManagement.h>
 
 namespace Kernel {
@@ -19,17 +19,22 @@ u64 g_profiling_event_mask;
 ErrorOr<FlatPtr> Process::sys$profiling_enable(pid_t pid, u64 event_mask)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_NO_PROMISES;
+    TRY(require_no_promises());
 
     if (pid == -1) {
         if (!is_superuser())
             return EPERM;
         ScopedCritical critical;
         g_profiling_event_mask = PERF_EVENT_PROCESS_CREATE | PERF_EVENT_THREAD_CREATE | PERF_EVENT_MMAP;
-        if (g_global_perf_events)
+        if (g_global_perf_events) {
             g_global_perf_events->clear();
-        else
+        } else {
             g_global_perf_events = PerformanceEventBuffer::try_create_with_size(32 * MiB).leak_ptr();
+            if (!g_global_perf_events) {
+                g_profiling_event_mask = 0;
+                return ENOMEM;
+            }
+        }
 
         SpinlockLocker lock(g_profiling_lock);
         if (!TimeManagement::the().enable_profile_timer())
@@ -69,7 +74,7 @@ ErrorOr<FlatPtr> Process::sys$profiling_enable(pid_t pid, u64 event_mask)
 ErrorOr<FlatPtr> Process::sys$profiling_disable(pid_t pid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_NO_PROMISES;
+    TRY(require_no_promises());
 
     if (pid == -1) {
         if (!is_superuser())
@@ -99,7 +104,7 @@ ErrorOr<FlatPtr> Process::sys$profiling_disable(pid_t pid)
 ErrorOr<FlatPtr> Process::sys$profiling_free_buffer(pid_t pid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_NO_PROMISES;
+    TRY(require_no_promises());
 
     if (pid == -1) {
         if (!is_superuser())

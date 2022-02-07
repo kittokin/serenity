@@ -22,10 +22,6 @@ die() {
     exit 1
 }
 
-if [ "$(id -u)" != 0 ]; then
-    die "this script needs to run as root"
-fi
-
 [ -z "$SERENITY_SOURCE_DIR" ] && die "SERENITY_SOURCE_DIR is not set"
 [ -d "$SERENITY_SOURCE_DIR/Base" ] || die "$SERENITY_SOURCE_DIR/Base doesn't exist"
 
@@ -104,6 +100,10 @@ fi
 if [ -f mnt/bin/utmpupdate ]; then
     chown 0:$utmp_gid mnt/bin/utmpupdate
     chmod 2755 mnt/bin/utmpupdate
+fi
+if [ -f mnt/bin/timezone ]; then
+    chown 0:$phys_gid mnt/bin/timezone
+    chmod 4750 mnt/bin/timezone
 fi
 if [ -f mnt/usr/Tests/Kernel/TestMemoryDeviceMmap ]; then
     chown 0:0 mnt/usr/Tests/Kernel/TestMemoryDeviceMmap

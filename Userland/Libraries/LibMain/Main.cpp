@@ -9,9 +9,12 @@
 #include <AK/Vector.h>
 #include <LibMain/Main.h>
 #include <string.h>
+#include <time.h>
 
 int main(int argc, char** argv)
 {
+    tzset();
+
     Vector<StringView> arguments;
     arguments.ensure_capacity(argc);
     for (int i = 0; i < argc; ++i)
@@ -24,12 +27,10 @@ int main(int argc, char** argv)
     });
     if (result.is_error()) {
         auto error = result.release_error();
-        if (error.is_syscall())
-            warnln("Runtime error: {}: {} (errno={})", error.string_literal(), strerror(error.code()), error.code());
-        else if (error.is_errno())
-            warnln("Runtime error: {} (errno={})", strerror(error.code()), error.code());
-        else
-            warnln("Runtime error: {}", error.string_literal());
+        warnln("\033[31;1mRuntime error\033[0m: {}", error);
+#ifdef __serenity__
+        dbgln("\033[31;1mExiting with runtime error\033[0m: {}", error);
+#endif
         return 1;
     }
     return result.value();

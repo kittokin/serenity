@@ -181,12 +181,10 @@ ErrorOr<void> Heap::flush()
     }
     quick_sort(blocks);
     for (auto& block : blocks) {
-        auto buffer_or_empty = m_write_ahead_log.get(block);
-        if (buffer_or_empty->is_empty()) {
-            VERIFY_NOT_REACHED();
-        }
+        auto buffer_it = m_write_ahead_log.find(block);
+        VERIFY(buffer_it != m_write_ahead_log.end());
         dbgln_if(SQL_DEBUG, "Flushing block {} to {}", block, name());
-        TRY(write_block(block, buffer_or_empty.value()));
+        TRY(write_block(block, buffer_it->value));
     }
     m_write_ahead_log.clear();
     dbgln_if(SQL_DEBUG, "WAL flushed. Heap size = {}", size());
@@ -245,7 +243,7 @@ void Heap::update_zero_block()
     }
 
     // FIXME: Handle an OOM failure here.
-    auto buffer = ByteBuffer::create_zeroed(BLOCKSIZE).release_value();
+    auto buffer = ByteBuffer::create_zeroed(BLOCKSIZE).release_value_but_fixme_should_propagate_errors();
     buffer.overwrite(0, FILE_ID.characters_without_null_termination(), FILE_ID.length());
     buffer.overwrite(VERSION_OFFSET, &m_version, sizeof(u32));
     buffer.overwrite(SCHEMAS_ROOT_OFFSET, &m_schemas_root, sizeof(u32));

@@ -44,18 +44,19 @@ void VirtualRangeAllocator::dump() const
     }
 }
 
-void VirtualRangeAllocator::carve_from_region(VirtualRange const& from, VirtualRange const& range)
+ErrorOr<void> VirtualRangeAllocator::carve_from_region(VirtualRange const& from, VirtualRange const& range)
 {
     VERIFY(m_lock.is_locked());
     auto remaining_parts = from.carve(range);
     VERIFY(remaining_parts.size() >= 1);
     VERIFY(m_total_range.contains(remaining_parts[0]));
     m_available_ranges.remove(from.base().get());
-    m_available_ranges.insert(remaining_parts[0].base().get(), remaining_parts[0]);
+    TRY(m_available_ranges.try_insert(remaining_parts[0].base().get(), remaining_parts[0]));
     if (remaining_parts.size() == 2) {
         VERIFY(m_total_range.contains(remaining_parts[1]));
-        m_available_ranges.insert(remaining_parts[1].base().get(), remaining_parts[1]);
+        TRY(m_available_ranges.try_insert(remaining_parts[1].base().get(), remaining_parts[1]));
     }
+    return {};
 }
 
 ErrorOr<VirtualRange> VirtualRangeAllocator::try_allocate_randomized(size_t size, size_t alignment)
@@ -124,7 +125,7 @@ ErrorOr<VirtualRange> VirtualRangeAllocator::try_allocate_anywhere(size_t size, 
             m_available_ranges.remove(it.key());
             return allocated_range;
         }
-        carve_from_region(*it, allocated_range);
+        TRY(carve_from_region(*it, allocated_range));
         return allocated_range;
     }
     dmesgln("VirtualRangeAllocator: Failed to allocate anywhere: size={}, alignment={}", size, alignment);
@@ -146,14 +147,14 @@ ErrorOr<VirtualRange> VirtualRangeAllocator::try_allocate_specific(VirtualAddres
     SpinlockLocker lock(m_lock);
     auto available_range = m_available_ranges.find_largest_not_above(base.get());
     if (!available_range)
-        return ENOMEM;
+        return EEXIST;
     if (!available_range->contains(allocated_range))
-        return ENOMEM;
+        return EEXIST;
     if (*available_range == allocated_range) {
         m_available_ranges.remove(available_range->base().get());
         return allocated_range;
     }
-    carve_from_region(*available_range, allocated_range);
+    TRY(carve_from_region(*available_range, allocated_range));
     return allocated_range;
 }
 

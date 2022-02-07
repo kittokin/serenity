@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, Mustafa Quraish <mustafa@serenityos.org>
+ * Copyright (c) 2021-2022, Mustafa Quraish <mustafa@serenityos.org>
  * Copyright (c) 2021, Tobias Christiansen <tobyase@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -14,7 +14,6 @@
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
 #include <AK/Result.h>
-#include <AK/Vector.h>
 #include <LibCore/File.h>
 #include <LibGUI/Command.h>
 #include <LibGUI/Forward.h>
@@ -38,7 +37,6 @@ public:
     virtual void image_did_change(Gfx::IntRect const&) { }
     virtual void image_did_change_rect(Gfx::IntRect const&) { }
     virtual void image_select_layer(Layer*) { }
-    virtual void image_did_change_title(String const&) { }
 
 protected:
     virtual ~ImageClient() = default;
@@ -71,8 +69,8 @@ public:
 
     void serialize_as_json(JsonObjectSerializer<StringBuilder>& json) const;
     ErrorOr<void> write_to_file(String const& file_path) const;
-    ErrorOr<void> export_bmp_to_fd_and_close(int fd, bool preserve_alpha_channel);
-    ErrorOr<void> export_png_to_fd_and_close(int fd, bool preserve_alpha_channel);
+    ErrorOr<void> export_bmp_to_file(Core::File&, bool preserve_alpha_channel);
+    ErrorOr<void> export_png_to_file(Core::File&, bool preserve_alpha_channel);
 
     void move_layer_to_front(Layer&);
     void move_layer_to_back(Layer&);
@@ -93,12 +91,6 @@ public:
 
     size_t index_of(Layer const&) const;
 
-    String const& path() const { return m_path; }
-    void set_path(String);
-
-    String const& title() const { return m_title; }
-    void set_title(String);
-
     void flip(Gfx::Orientation orientation);
     void rotate(Gfx::RotationDirection direction);
     void crop(Gfx::IntRect const& rect);
@@ -111,9 +103,6 @@ private:
     void did_change(Gfx::IntRect const& modified_rect = {});
     void did_change_rect(Gfx::IntRect const& modified_rect = {});
     void did_modify_layer_stack();
-
-    String m_path;
-    String m_title;
 
     Gfx::IntSize m_size;
     NonnullRefPtrVector<Layer> m_layers;

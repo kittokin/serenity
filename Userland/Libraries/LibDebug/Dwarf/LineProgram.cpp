@@ -42,13 +42,13 @@ void LineProgram::parse_path_entries(Function<void(PathEntry& entry)> callback, 
         Vector<PathEntryFormat> format_descriptions;
 
         for (u8 i = 0; i < path_entry_format_count; i++) {
-            size_t content_type = 0;
+            UnderlyingType<ContentType> content_type;
             m_stream.read_LEB128_unsigned(content_type);
 
-            size_t data_form = 0;
+            UnderlyingType<AttributeDataForm> data_form;
             m_stream.read_LEB128_unsigned(data_form);
 
-            format_descriptions.empend((ContentType)content_type, (AttributeDataForm)data_form);
+            format_descriptions.empend(static_cast<ContentType>(content_type), static_cast<AttributeDataForm>(data_form));
         }
 
         size_t paths_count = 0;
@@ -66,7 +66,7 @@ void LineProgram::parse_path_entries(Function<void(PathEntry& entry)> callback, 
                     entry.directory_index = value.as_unsigned();
                     break;
                 default:
-                    dbgln_if(DWARF_DEBUG, "Unhandled path list attribute: {}", (int)format_description.type);
+                    dbgln_if(DWARF_DEBUG, "Unhandled path list attribute: {}", to_underlying(format_description.type));
                 }
             }
             callback(entry);
@@ -170,7 +170,8 @@ void LineProgram::handle_extended_opcode()
     }
     case ExtendedOpcodes::SetDiscriminator: {
         dbgln_if(DWARF_DEBUG, "SetDiscriminator");
-        m_stream.discard_or_error(1);
+        size_t discriminator;
+        m_stream.read_LEB128_unsigned(discriminator);
         break;
     }
     default:
@@ -246,7 +247,7 @@ void LineProgram::handle_standard_opcode(u8 opcode)
         m_basic_block = true;
         break;
     }
-    case StandardOpcodes::SetProlougeEnd: {
+    case StandardOpcodes::SetPrologueEnd: {
         m_prologue_end = true;
         break;
     }
@@ -279,7 +280,7 @@ void LineProgram::run_program()
 {
     reset_registers();
 
-    while ((size_t)m_stream.offset() < m_unit_offset + sizeof(u32) + m_unit_header.length()) {
+    while (m_stream.offset() < m_unit_offset + sizeof(u32) + m_unit_header.length()) {
         u8 opcode = 0;
         m_stream >> opcode;
 

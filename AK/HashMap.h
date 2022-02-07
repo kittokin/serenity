@@ -50,8 +50,10 @@ public:
 
     HashSetResult set(const K& key, const V& value) { return m_table.set({ key, value }); }
     HashSetResult set(const K& key, V&& value) { return m_table.set({ key, move(value) }); }
+    HashSetResult set(K&& key, V&& value) { return m_table.set({ move(key), move(value) }); }
     ErrorOr<HashSetResult> try_set(const K& key, const V& value) { return m_table.try_set({ key, value }); }
     ErrorOr<HashSetResult> try_set(const K& key, V&& value) { return m_table.try_set({ key, move(value) }); }
+    ErrorOr<HashSetResult> try_set(K&& key, V&& value) { return m_table.try_set({ move(key), move(value) }); }
 
     bool remove(const K& key)
     {
@@ -61,6 +63,32 @@ public:
             return true;
         }
         return false;
+    }
+
+    template<Concepts::HashCompatible<K> Key>
+    requires(IsSame<KeyTraits, Traits<K>>) bool remove(Key const& key)
+    {
+        auto it = find(key);
+        if (it != end()) {
+            m_table.remove(it);
+            return true;
+        }
+        return false;
+    }
+
+    template<typename TUnaryPredicate>
+    bool remove_all_matching(TUnaryPredicate predicate)
+    {
+        bool something_was_removed = false;
+        for (auto it = begin(); it != end();) {
+            if (predicate(it->key, it->value)) {
+                it = remove(it);
+                something_was_removed = true;
+            } else {
+                ++it;
+            }
+        }
+        return something_was_removed;
     }
 
     using HashTableType = HashTable<Entry, EntryTraits, IsOrdered>;
@@ -91,6 +119,18 @@ public:
         return m_table.find(hash, predicate);
     }
 
+    template<Concepts::HashCompatible<K> Key>
+    requires(IsSame<KeyTraits, Traits<K>>) [[nodiscard]] IteratorType find(Key const& key)
+    {
+        return m_table.find(Traits<Key>::hash(key), [&](auto& entry) { return Traits<K>::equals(key, entry.key); });
+    }
+
+    template<Concepts::HashCompatible<K> Key>
+    requires(IsSame<KeyTraits, Traits<K>>) [[nodiscard]] ConstIteratorType find(Key const& key) const
+    {
+        return m_table.find(Traits<Key>::hash(key), [&](auto& entry) { return Traits<K>::equals(key, entry.key); });
+    }
+
     void ensure_capacity(size_t capacity) { m_table.ensure_capacity(capacity); }
     ErrorOr<void> try_ensure_capacity(size_t capacity) { return m_table.try_ensure_capacity(capacity); }
 
@@ -118,14 +158,47 @@ public:
         return (*it).value;
     }
 
+    template<Concepts::HashCompatible<K> Key>
+    requires(IsSame<KeyTraits, Traits<K>>) Optional<typename Traits<V>::PeekType> get(const Key& key) const requires(!IsPointer<typename Traits<V>::PeekType>)
+    {
+        auto it = find(key);
+        if (it == end())
+            return {};
+        return (*it).value;
+    }
+
+    template<Concepts::HashCompatible<K> Key>
+    requires(IsSame<KeyTraits, Traits<K>>) Optional<typename Traits<V>::ConstPeekType> get(const Key& key) const requires(IsPointer<typename Traits<V>::PeekType>)
+    {
+        auto it = find(key);
+        if (it == end())
+            return {};
+        return (*it).value;
+    }
+
+    template<Concepts::HashCompatible<K> Key>
+    requires(IsSame<KeyTraits, Traits<K>>) Optional<typename Traits<V>::PeekType> get(const Key& key) requires(!IsConst<typename Traits<V>::PeekType>)
+    {
+        auto it = find(key);
+        if (it == end())
+            return {};
+        return (*it).value;
+    }
+
     [[nodiscard]] bool contains(const K& key) const
     {
         return find(key) != end();
     }
 
-    void remove(IteratorType it)
+    template<Concepts::HashCompatible<K> Key>
+    requires(IsSame<KeyTraits, Traits<K>>) [[nodiscard]] bool contains(Key const& value)
     {
-        m_table.remove(it);
+        return find(value) != end();
+    }
+
+    IteratorType remove(IteratorType it)
+    {
+        return m_table.remove(it);
     }
 
     V& ensure(const K& key)

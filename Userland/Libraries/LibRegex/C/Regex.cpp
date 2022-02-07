@@ -52,7 +52,7 @@ int regcomp(regex_t* reg, const char* pattern, int cflags)
     // This could've been prevented if libc provided a reginit() or similar, but it does not.
     reg->__data = new internal_regex_t { 0, 0, {}, 0, ReError::REG_NOERR, {} };
 
-    auto preg = impl_from(reg);
+    auto* preg = impl_from(reg);
     bool is_extended = cflags & REG_EXTENDED;
 
     preg->cflags = cflags;
@@ -82,7 +82,7 @@ int regcomp(regex_t* reg, const char* pattern, int cflags)
 
 int regexec(const regex_t* reg, const char* string, size_t nmatch, regmatch_t pmatch[], int eflags)
 {
-    auto preg = impl_from(reg);
+    auto const* preg = impl_from(reg);
 
     if (!preg->re.has_value() || preg->re_pat_err) {
         if (preg->re_pat_err)
@@ -142,12 +142,12 @@ int regexec(const regex_t* reg, const char* string, size_t nmatch, regmatch_t pm
             }
         }
         return REG_NOERR;
-    } else {
-        if (nmatch && pmatch) {
-            pmatch[0].rm_so = -1;
-            pmatch[0].rm_eo = -1;
-            pmatch[0].rm_cnt = 0;
-        }
+    }
+
+    if (nmatch && pmatch) {
+        pmatch[0].rm_so = -1;
+        pmatch[0].rm_eo = -1;
+        pmatch[0].rm_cnt = 0;
     }
 
     return REG_NOMATCH;
@@ -213,7 +213,7 @@ inline static String get_error(ReError errcode)
 size_t regerror(int errcode, const regex_t* reg, char* errbuf, size_t errbuf_size)
 {
     String error;
-    auto preg = impl_from(reg);
+    auto const* preg = impl_from(reg);
 
     if (!preg)
         error = get_error((ReError)errcode);
@@ -231,7 +231,7 @@ size_t regerror(int errcode, const regex_t* reg, char* errbuf, size_t errbuf_siz
 
 void regfree(regex_t* reg)
 {
-    auto preg = impl_from(reg);
+    auto* preg = impl_from(reg);
     if (preg) {
         delete preg;
         reg->__data = nullptr;

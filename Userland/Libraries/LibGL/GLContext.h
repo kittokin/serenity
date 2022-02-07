@@ -8,21 +8,12 @@
 #pragma once
 
 #include "GL/gl.h"
+#include "GL/glext.h"
 #include <AK/OwnPtr.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Matrix4x4.h>
 
 namespace GL {
-
-#define VERIFY_CURRENT_CONTEXT() \
-    if (!g_gl_context) {         \
-        return;                  \
-    }
-
-#define VERIFY_CURRENT_CONTEXT_OR_VALUE(value) \
-    if (!g_gl_context) {                       \
-        return value;                          \
-    }
 
 class GLContext {
 public:
@@ -78,12 +69,15 @@ public:
     virtual void gl_tex_sub_image_2d(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid* data) = 0;
     virtual void gl_tex_parameter(GLenum target, GLenum pname, GLfloat param) = 0;
     virtual void gl_tex_coord(GLfloat s, GLfloat t, GLfloat r, GLfloat q) = 0;
+    virtual void gl_multi_tex_coord(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q) = 0;
     virtual void gl_tex_env(GLenum target, GLenum pname, GLfloat param) = 0;
     virtual void gl_bind_texture(GLenum target, GLuint texture) = 0;
+    virtual GLboolean gl_is_texture(GLuint texture) = 0;
     virtual void gl_active_texture(GLenum texture) = 0;
     virtual void gl_depth_mask(GLboolean flag) = 0;
     virtual void gl_enable_client_state(GLenum cap) = 0;
     virtual void gl_disable_client_state(GLenum cap) = 0;
+    virtual void gl_client_active_texture(GLenum target) = 0;
     virtual void gl_vertex_pointer(GLint size, GLenum type, GLsizei stride, const void* pointer) = 0;
     virtual void gl_color_pointer(GLint size, GLenum type, GLsizei stride, const void* pointer) = 0;
     virtual void gl_tex_coord_pointer(GLint size, GLenum type, GLsizei stride, const void* pointer) = 0;
@@ -105,21 +99,34 @@ public:
     virtual void gl_pixel_storei(GLenum pname, GLint param) = 0;
     virtual void gl_scissor(GLint x, GLint y, GLsizei width, GLsizei height) = 0;
     virtual void gl_stencil_func_separate(GLenum face, GLenum func, GLint ref, GLuint mask) = 0;
+    virtual void gl_stencil_mask_separate(GLenum face, GLuint mask) = 0;
     virtual void gl_stencil_op_separate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) = 0;
     virtual void gl_normal(GLfloat nx, GLfloat ny, GLfloat nz) = 0;
+    virtual void gl_normal_pointer(GLenum type, GLsizei stride, void const* pointer) = 0;
     virtual void gl_raster_pos(GLfloat x, GLfloat y, GLfloat z, GLfloat w) = 0;
-    virtual void gl_materialv(GLenum face, GLenum pname, GLfloat const* params) = 0;
     virtual void gl_line_width(GLfloat width) = 0;
     virtual void gl_push_attrib(GLbitfield mask) = 0;
     virtual void gl_pop_attrib() = 0;
     virtual void gl_light_model(GLenum pname, GLfloat x, GLfloat y, GLfloat z, GLfloat w) = 0;
     virtual void gl_bitmap(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, GLubyte const* bitmap) = 0;
     virtual void gl_copy_tex_image_2d(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) = 0;
-
+    virtual void gl_get_tex_parameter_integerv(GLenum target, GLint level, GLenum pname, GLint* params) = 0;
+    virtual void gl_rect(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2) = 0;
+    virtual void gl_tex_gen(GLenum coord, GLenum pname, GLint param) = 0;
+    virtual void gl_tex_gen_floatv(GLenum coord, GLenum pname, GLfloat const* params) = 0;
+    virtual void gl_lightf(GLenum light, GLenum pname, GLfloat param) = 0;
+    virtual void gl_lightfv(GLenum light, GLenum pname, GLfloat const* params) = 0;
+    virtual void gl_lightiv(GLenum light, GLenum pname, GLint const* params) = 0;
+    virtual void gl_materialf(GLenum face, GLenum pname, GLfloat param) = 0;
+    virtual void gl_materialfv(GLenum face, GLenum pname, GLfloat const* params) = 0;
+    virtual void gl_materialiv(GLenum face, GLenum pname, GLint const* params) = 0;
+    virtual void gl_color_material(GLenum face, GLenum mode) = 0;
+    virtual void gl_get_light(GLenum light, GLenum pname, void* params, GLenum type) = 0;
+    virtual void gl_get_material(GLenum face, GLenum pname, void* params, GLenum type) = 0;
     virtual void present() = 0;
 };
 
-OwnPtr<GLContext> create_context(Gfx::Bitmap&);
+NonnullOwnPtr<GLContext> create_context(Gfx::Bitmap&);
 void make_context_current(GLContext*);
 void present_context(GLContext*);
 

@@ -26,15 +26,15 @@ public:
         No,
     };
 
-    static PropertyKey from_value(GlobalObject& global_object, Value value)
+    static ThrowCompletionOr<PropertyKey> from_value(GlobalObject& global_object, Value value)
     {
         if (value.is_empty())
-            return {};
+            return PropertyKey {};
         if (value.is_symbol())
-            return value.as_symbol();
+            return PropertyKey { value.as_symbol() };
         if (value.is_integral_number() && value.as_double() >= 0 && value.as_double() < NumericLimits<u32>::max())
             return value.as_u32();
-        return TRY_OR_DISCARD(value.to_string(global_object));
+        return TRY(value.to_string(global_object));
     }
 
     PropertyKey() { }
@@ -225,13 +225,13 @@ struct Traits<JS::PropertyKey> : public GenericTraits<JS::PropertyKey> {
 
 template<>
 struct Formatter<JS::PropertyKey> : Formatter<StringView> {
-    ErrorOr<void> format(FormatBuilder& builder, JS::PropertyKey const& property_name)
+    ErrorOr<void> format(FormatBuilder& builder, JS::PropertyKey const& property_key)
     {
-        if (!property_name.is_valid())
+        if (!property_key.is_valid())
             return Formatter<StringView>::format(builder, "<invalid PropertyKey>");
-        if (property_name.is_number())
-            return Formatter<StringView>::format(builder, String::number(property_name.as_number()));
-        return Formatter<StringView>::format(builder, property_name.to_string_or_symbol().to_display_string());
+        if (property_key.is_number())
+            return Formatter<StringView>::format(builder, String::number(property_key.as_number()));
+        return Formatter<StringView>::format(builder, property_key.to_string_or_symbol().to_display_string());
     }
 };
 

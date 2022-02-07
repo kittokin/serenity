@@ -10,8 +10,8 @@
 
 namespace Protocol {
 
-RequestClient::RequestClient()
-    : IPC::ServerConnection<RequestClientEndpoint, RequestServerEndpoint>(*this, "/tmp/portal/request")
+RequestClient::RequestClient(NonnullOwnPtr<Core::Stream::LocalSocket> socket)
+    : IPC::ServerConnection<RequestClientEndpoint, RequestServerEndpoint>(*this, move(socket))
 {
 }
 
@@ -28,7 +28,7 @@ RefPtr<Request> RequestClient::start_request(String const& method, URL const& ur
         header_dictionary.add(it.key, it.value);
 
     auto body_result = ByteBuffer::copy(request_body);
-    if (!body_result.has_value())
+    if (body_result.is_error())
         return nullptr;
 
     auto response = IPCProxy::start_request(method, url, header_dictionary, body_result.release_value());

@@ -37,7 +37,7 @@ ThrowCompletionOr<Object*> promise_resolve(GlobalObject& global_object, Object& 
     auto promise_capability = TRY(new_promise_capability(global_object, &constructor));
 
     // 3. Perform ? Call(promiseCapability.[[Resolve]], undefined, « x »).
-    (void)TRY(vm.call(*promise_capability.resolve, js_undefined(), value));
+    (void)TRY(call(global_object, *promise_capability.resolve, js_undefined(), value));
 
     // 4. Return promiseCapability.[[Promise]].
     return promise_capability.promise;
@@ -115,8 +115,7 @@ Promise::ResolvingFunctions Promise::create_resolving_functions()
             // a. Return RejectPromise(promise, then.[[Value]]).
             dbgln_if(PROMISE_DEBUG, "[Promise @ {} / PromiseResolvingFunction]: Exception while getting 'then' property, rejecting with error", &promise);
             vm.clear_exception();
-            vm.stop_unwind();
-            return promise.reject(then.throw_completion().value());
+            return promise.reject(*then.throw_completion().value());
         }
 
         // 11. Let thenAction be then.[[Value]].

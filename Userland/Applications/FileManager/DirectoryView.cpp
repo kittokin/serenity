@@ -132,7 +132,7 @@ void DirectoryView::handle_activation(GUI::ModelIndex const& index)
 DirectoryView::DirectoryView(Mode mode)
     : m_mode(mode)
     , m_model(GUI::FileSystemModel::create({}))
-    , m_sorting_model(GUI::SortingProxyModel::create(m_model))
+    , m_sorting_model(MUST(GUI::SortingProxyModel::create(m_model)))
 {
     set_active_widget(nullptr);
     set_grabbable_margins(2);
@@ -225,6 +225,7 @@ void DirectoryView::setup_icon_view()
         m_icon_view->set_fill_with_background_color(false);
         m_icon_view->set_draw_item_text_with_shadow(true);
         m_icon_view->set_flow_direction(GUI::IconView::FlowDirection::TopToBottom);
+        m_icon_view->set_accepts_command_palette(false);
     }
 
     m_icon_view->set_model(m_sorting_model);
@@ -519,14 +520,18 @@ void DirectoryView::do_delete(bool should_confirm)
     delete_paths(paths, should_confirm, window());
 }
 
+bool DirectoryView::can_modify_current_selection()
+{
+    return !current_view().selection().is_empty() && access(path().characters(), W_OK) == 0;
+}
+
 void DirectoryView::handle_selection_change()
 {
     update_statusbar();
 
-    bool can_modify = !current_view().selection().is_empty() && access(path().characters(), W_OK) == 0;
+    bool can_modify = can_modify_current_selection();
     m_delete_action->set_enabled(can_modify);
     m_force_delete_action->set_enabled(can_modify);
-    m_rename_action->set_enabled(can_modify);
 
     if (on_selection_change)
         on_selection_change(current_view());
@@ -578,7 +583,8 @@ void DirectoryView::setup_actions()
 
     m_delete_action = GUI::CommonActions::make_delete_action([this](auto&) { do_delete(true); }, window());
     m_rename_action = GUI::CommonActions::make_rename_action([this](auto&) {
-        current_view().begin_editing(current_view().cursor_index());
+        if (can_modify_current_selection())
+            current_view().begin_editing(current_view().cursor_index());
     },
         window());
 
@@ -607,6 +613,12 @@ void DirectoryView::setup_actions()
             Config::write_string("FileManager", "DirectoryView", "ViewMode", "Columns");
         },
         window());
+
+    if (m_mode == Mode::Desktop) {
+        m_view_as_icons_action->set_enabled(false);
+        m_view_as_table_action->set_enabled(false);
+        m_view_as_columns_action->set_enabled(false);
+    }
 }
 
 void DirectoryView::handle_drop(GUI::ModelIndex const& index, GUI::DropEvent const& event)

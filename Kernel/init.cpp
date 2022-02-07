@@ -15,6 +15,7 @@
 #include <Kernel/CommandLine.h>
 #include <Kernel/Devices/Audio/AC97.h>
 #include <Kernel/Devices/Audio/SB16.h>
+#include <Kernel/Devices/DeviceControlDevice.h>
 #include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/FullDevice.h>
 #include <Kernel/Devices/HID/HIDManagement.h>
@@ -30,11 +31,10 @@
 #include <Kernel/FileSystem/SysFS.h>
 #include <Kernel/FileSystem/VirtualFileSystem.h>
 #include <Kernel/Firmware/ACPI/Initialize.h>
-#include <Kernel/Firmware/ACPI/MultiProcessorParser.h>
 #include <Kernel/Firmware/ACPI/Parser.h>
 #include <Kernel/Firmware/SysFSFirmware.h>
+#include <Kernel/Graphics/Console/BootFramebufferConsole.h>
 #include <Kernel/Graphics/GraphicsManagement.h>
-#include <Kernel/Heap/SlabAllocator.h>
 #include <Kernel/Heap/kmalloc.h>
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/Interrupts/InterruptManagement.h>
@@ -136,6 +136,8 @@ READONLY_AFTER_INIT u8 multiboot_framebuffer_bpp;
 READONLY_AFTER_INIT u8 multiboot_framebuffer_type;
 }
 
+Atomic<Graphics::BootFramebufferConsole*> boot_framebuffer_console;
+
 extern "C" [[noreturn]] UNMAP_AFTER_INIT void init(BootInfo const& boot_info)
 {
     g_in_early_boot = true;
@@ -180,18 +182,27 @@ extern "C" [[noreturn]] UNMAP_AFTER_INIT void init(BootInfo const& boot_info)
     for (ctor_func_t* ctor = start_heap_ctors; ctor < end_heap_ctors; ctor++)
         (*ctor)();
     kmalloc_init();
-    slab_alloc_init();
 
     load_kernel_symbol_table();
+
+    s_bsp_processor.initialize(0);
+
+    CommandLine::initialize();
+    Memory::MemoryManager::initialize(0);
+
+    if (!multiboot_framebuffer_addr.is_null()) {
+        // NOTE: If the bootloader provided a framebuffer, then set up an initial console so we can see the output on the screen as soon as possible!
+        boot_framebuffer_console = &try_make_ref_counted<Graphics::BootFramebufferConsole>(multiboot_framebuffer_addr, multiboot_framebuffer_width, multiboot_framebuffer_height, multiboot_framebuffer_pitch).value().leak_ref();
+    }
+    dmesgln("Starting SerenityOS...");
 
     DeviceManagement::initialize();
     SysFSComponentRegistry::initialize();
     DeviceManagement::the().attach_null_device(*NullDevice::must_initialize());
     DeviceManagement::the().attach_console_device(*ConsoleDevice::must_create());
-    s_bsp_processor.initialize(0);
+    DeviceManagement::the().attach_device_control_device(*DeviceControlDevice::must_create());
 
-    CommandLine::initialize();
-    Memory::MemoryManager::initialize(0);
+    MM.unmap_prekernel();
 
     // Ensure that the safemem sections are not empty. This could happen if the linker accidentally discards the sections.
     VERIFY(+start_of_safemem_text != +end_of_safemem_text);
@@ -202,7 +213,6 @@ extern "C" [[noreturn]] UNMAP_AFTER_INIT void init(BootInfo const& boot_info)
     for (ctor_func_t* ctor = start_ctors; ctor < end_ctors; ctor++)
         (*ctor)();
 
-    APIC::initialize();
     InterruptManagement::initialize();
     ACPI::initialize();
 
@@ -216,7 +226,12 @@ extern "C" [[noreturn]] UNMAP_AFTER_INIT void init(BootInfo const& boot_info)
 
     Scheduler::initialize();
 
-    dmesgln("Starting SerenityOS...");
+    if (APIC::initialized() && APIC::the().enabled_processor_count() > 1) {
+        // We must set up the AP boot environment before switching to a kernel process,
+        // as pages below address USER_RANGE_BASE are only accesible through the kernel
+        // page directory.
+        APIC::the().setup_ap_boot_environment();
+    }
 
     {
         RefPtr<Thread> init_stage2_thread;
@@ -322,7 +337,7 @@ void init_stage2(void*)
     (void)SB16::try_detect_and_create();
     AC97::detect();
 
-    StorageManagement::the().initialize(kernel_command_line().root_device(), kernel_command_line().is_force_pio());
+    StorageManagement::the().initialize(kernel_command_line().root_device(), kernel_command_line().is_force_pio(), kernel_command_line().is_nvme_polling_enabled());
     if (VirtualFileSystem::the().mount_root(StorageManagement::the().root_filesystem()).is_error()) {
         PANIC("VirtualFileSystem::mount_root failed");
     }
@@ -333,11 +348,11 @@ void init_stage2(void*)
     // NOTE: Everything marked READONLY_AFTER_INIT becomes non-writable after this point.
     MM.protect_readonly_after_init_memory();
 
+    // NOTE: Everything in the .ksyms section becomes read-only after this point.
+    MM.protect_ksyms_after_init();
+
     // NOTE: Everything marked UNMAP_AFTER_INIT becomes inaccessible after this point.
     MM.unmap_text_after_init();
-
-    // NOTE: Everything in the .ksyms section becomes inaccessible after this point.
-    MM.unmap_ksyms_after_init();
 
     // FIXME: It would be nicer to set the mode from userspace.
     // FIXME: It would be smarter to not hardcode that the first tty is the only graphical one

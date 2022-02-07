@@ -28,14 +28,15 @@
 
 namespace WebServer {
 
-Client::Client(NonnullRefPtr<Core::TCPSocket> socket, Core::Object* parent)
+Client::Client(NonnullOwnPtr<Core::Stream::BufferedTCPSocket> socket, Core::Object* parent)
     : Core::Object(parent)
-    , m_socket(socket)
+    , m_socket(move(socket))
 {
 }
 
 void Client::die()
 {
+    m_socket->close();
     deferred_invoke([this] { remove_from_parent(); });
 }
 
@@ -43,26 +44,59 @@ void Client::start()
 {
     m_socket->on_ready_to_read = [this] {
         StringBuilder builder;
+
+        auto maybe_buffer = ByteBuffer::create_uninitialized(m_socket->buffer_size());
+        if (maybe_buffer.is_error()) {
+            warnln("Could not create buffer for client: {}", maybe_buffer.error());
+            die();
+            return;
+        }
+
+        auto buffer = maybe_buffer.release_value();
         for (;;) {
-            auto line = m_socket->read_line();
-            if (line.is_empty())
+            auto maybe_can_read = m_socket->can_read_without_blocking();
+            if (maybe_can_read.is_error()) {
+                warnln("Failed to get the blocking status for the socket: {}", maybe_can_read.error());
+                die();
+                return;
+            }
+
+            if (!maybe_can_read.value())
                 break;
-            builder.append(line);
+
+            auto maybe_nread = m_socket->read_until_any_of(buffer, Array { "\r"sv, "\n"sv, "\r\n"sv });
+            if (maybe_nread.is_error()) {
+                warnln("Failed to read a line from the request: {}", maybe_nread.error());
+                die();
+                return;
+            }
+
+            if (m_socket->is_eof()) {
+                die();
+                break;
+            }
+
+            builder.append(StringView { buffer.data(), maybe_nread.value() });
             builder.append("\r\n");
         }
 
         auto request = builder.to_byte_buffer();
         dbgln_if(WEBSERVER_DEBUG, "Got raw request: '{}'", String::copy(request));
-        handle_request(request);
+
+        auto maybe_did_handle = handle_request(request);
+        if (maybe_did_handle.is_error()) {
+            warnln("Failed to handle the request: {}", maybe_did_handle.error());
+        }
+
         die();
     };
 }
 
-void Client::handle_request(ReadonlyBytes raw_request)
+ErrorOr<bool> Client::handle_request(ReadonlyBytes raw_request)
 {
     auto request_or_error = HTTP::HttpRequest::from_raw_request(raw_request);
     if (!request_or_error.has_value())
-        return;
+        return false;
     auto& request = request_or_error.value();
 
     if constexpr (WEBSERVER_DEBUG) {
@@ -73,16 +107,16 @@ void Client::handle_request(ReadonlyBytes raw_request)
     }
 
     if (request.method() != HTTP::HttpRequest::Method::GET) {
-        send_error_response(501, request);
-        return;
+        TRY(send_error_response(501, request));
+        return false;
     }
 
     // Check for credentials if they are required
     if (Configuration::the().credentials().has_value()) {
         bool has_authenticated = verify_credentials(request.headers());
         if (!has_authenticated) {
-            send_error_response(401, request, { "WWW-Authenticate: Basic realm=\"WebServer\", charset=\"UTF-8\"" });
-            return;
+            TRY(send_error_response(401, request, { "WWW-Authenticate: Basic realm=\"WebServer\", charset=\"UTF-8\"" }));
+            return false;
         }
     }
 
@@ -102,8 +136,8 @@ void Client::handle_request(ReadonlyBytes raw_request)
             red.append(requested_path);
             red.append("/");
 
-            send_redirect(red.to_string(), request);
-            return;
+            TRY(send_redirect(red.to_string(), request));
+            return true;
         }
 
         StringBuilder index_html_path_builder;
@@ -111,29 +145,30 @@ void Client::handle_request(ReadonlyBytes raw_request)
         index_html_path_builder.append("/index.html");
         auto index_html_path = index_html_path_builder.to_string();
         if (!Core::File::exists(index_html_path)) {
-            handle_directory_listing(requested_path, real_path, request);
-            return;
+            TRY(handle_directory_listing(requested_path, real_path, request));
+            return true;
         }
         real_path = index_html_path;
     }
 
     auto file = Core::File::construct(real_path);
     if (!file->open(Core::OpenMode::ReadOnly)) {
-        send_error_response(404, request);
-        return;
+        TRY(send_error_response(404, request));
+        return false;
     }
 
     if (file->is_device()) {
-        send_error_response(403, request);
-        return;
+        TRY(send_error_response(403, request));
+        return false;
     }
 
     Core::InputFileStream stream { file };
 
-    send_response(stream, request, Core::guess_mime_type_based_on_filename(real_path));
+    TRY(send_response(stream, request, Core::guess_mime_type_based_on_filename(real_path)));
+    return true;
 }
 
-void Client::send_response(InputStream& response, HTTP::HttpRequest const& request, String const& content_type)
+ErrorOr<void> Client::send_response(InputStream& response, HTTP::HttpRequest const& request, String const& content_type)
 {
     StringBuilder builder;
     builder.append("HTTP/1.0 200 OK\r\n");
@@ -146,7 +181,8 @@ void Client::send_response(InputStream& response, HTTP::HttpRequest const& reque
     builder.append("\r\n");
     builder.append("\r\n");
 
-    m_socket->write(builder.to_string());
+    auto builder_contents = builder.to_byte_buffer();
+    TRY(m_socket->write(builder_contents));
     log_response(200, request);
 
     char buffer[PAGE_SIZE];
@@ -155,11 +191,22 @@ void Client::send_response(InputStream& response, HTTP::HttpRequest const& reque
         if (response.unreliable_eof() && size == 0)
             break;
 
-        m_socket->write({ buffer, size });
+        ReadonlyBytes write_buffer { buffer, size };
+        while (!write_buffer.is_empty()) {
+            auto nwritten = TRY(m_socket->write(write_buffer));
+
+            if (nwritten == 0) {
+                dbgln("EEEEEE got 0 bytes written!");
+            }
+
+            write_buffer = write_buffer.slice(nwritten);
+        }
     } while (true);
+
+    return {};
 }
 
-void Client::send_redirect(StringView redirect_path, HTTP::HttpRequest const& request)
+ErrorOr<void> Client::send_redirect(StringView redirect_path, HTTP::HttpRequest const& request)
 {
     StringBuilder builder;
     builder.append("HTTP/1.0 301 Moved Permanently\r\n");
@@ -168,18 +215,19 @@ void Client::send_redirect(StringView redirect_path, HTTP::HttpRequest const& re
     builder.append("\r\n");
     builder.append("\r\n");
 
-    m_socket->write(builder.to_string());
+    auto builder_contents = builder.to_byte_buffer();
+    TRY(m_socket->write(builder_contents));
 
     log_response(301, request);
+    return {};
 }
 
 static String folder_image_data()
 {
     static String cache;
     if (cache.is_empty()) {
-        auto file_or_error = Core::MappedFile::map("/res/icons/16x16/filetype-folder.png");
-        VERIFY(!file_or_error.is_error());
-        cache = encode_base64(file_or_error.value()->bytes());
+        auto file = Core::MappedFile::map("/res/icons/16x16/filetype-folder.png").release_value_but_fixme_should_propagate_errors();
+        cache = encode_base64(file->bytes());
     }
     return cache;
 }
@@ -188,20 +236,20 @@ static String file_image_data()
 {
     static String cache;
     if (cache.is_empty()) {
-        auto file_or_error = Core::MappedFile::map("/res/icons/16x16/filetype-unknown.png");
-        VERIFY(!file_or_error.is_error());
-        cache = encode_base64(file_or_error.value()->bytes());
+        auto file = Core::MappedFile::map("/res/icons/16x16/filetype-unknown.png").release_value_but_fixme_should_propagate_errors();
+        cache = encode_base64(file->bytes());
     }
     return cache;
 }
 
-void Client::handle_directory_listing(String const& requested_path, String const& real_path, HTTP::HttpRequest const& request)
+ErrorOr<void> Client::handle_directory_listing(String const& requested_path, String const& real_path, HTTP::HttpRequest const& request)
 {
     StringBuilder builder;
 
     builder.append("<!DOCTYPE html>\n");
     builder.append("<html>\n");
-    builder.append("<head><title>Index of ");
+    builder.append("<head><meta charset=\"utf-8\">\n");
+    builder.append("<title>Index of ");
     builder.append(escape_html_entities(requested_path));
     builder.append("</title><style>\n");
     builder.append(".folder { width: 16px; height: 16px; background-image: url('data:image/png;base64,");
@@ -270,10 +318,10 @@ void Client::handle_directory_listing(String const& requested_path, String const
 
     auto response = builder.to_string();
     InputMemoryStream stream { response.bytes() };
-    send_response(stream, request, "text/html");
+    return send_response(stream, request, "text/html");
 }
 
-void Client::send_error_response(unsigned code, HTTP::HttpRequest const& request, Vector<String> const& headers)
+ErrorOr<void> Client::send_error_response(unsigned code, HTTP::HttpRequest const& request, Vector<String> const& headers)
 {
     auto reason_phrase = HTTP::HttpResponse::reason_phrase_for_code(code);
     StringBuilder builder;
@@ -292,9 +340,12 @@ void Client::send_error_response(unsigned code, HTTP::HttpRequest const& request
     builder.appendff("{} ", code);
     builder.append(reason_phrase);
     builder.append("</h1></body></html>");
-    m_socket->write(builder.to_string());
+
+    auto builder_contents = builder.to_byte_buffer();
+    TRY(m_socket->write(builder_contents));
 
     log_response(code, request);
+    return {};
 }
 
 void Client::log_response(unsigned code, HTTP::HttpRequest const& request)

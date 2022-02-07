@@ -21,14 +21,21 @@ namespace Web {
 
 ResourceLoader& ResourceLoader::the()
 {
-    static ResourceLoader* s_the;
+    static RefPtr<ResourceLoader> s_the;
     if (!s_the)
-        s_the = &ResourceLoader::construct().leak_ref();
+        s_the = ResourceLoader::try_create().release_value_but_fixme_should_propagate_errors();
     return *s_the;
 }
 
-ResourceLoader::ResourceLoader()
-    : m_protocol_client(Protocol::RequestClient::construct())
+ErrorOr<NonnullRefPtr<ResourceLoader>> ResourceLoader::try_create()
+{
+
+    auto protocol_client = TRY(Protocol::RequestClient::try_create());
+    return adopt_nonnull_ref_or_enomem(new (nothrow) ResourceLoader(move(protocol_client)));
+}
+
+ResourceLoader::ResourceLoader(NonnullRefPtr<Protocol::RequestClient> protocol_client)
+    : m_protocol_client(move(protocol_client))
     , m_user_agent(default_user_agent)
 {
 }
@@ -122,7 +129,7 @@ void ResourceLoader::load(LoadRequest& request, Function<void(ReadonlyBytes, con
     const auto log_failure = [](const auto& request, const auto error_message) {
         auto& url = request.url();
         auto load_time_ms = request.load_time().to_milliseconds();
-        dbgln("ResourceLoader: Failed load of: \"{}\", \033[32;1mError: {}\033[0m, Duration: {}ms", sanitized_url_for_logging(url), error_message, load_time_ms);
+        dbgln("ResourceLoader: Failed load of: \"{}\", \033[31;1mError: {}\033[0m, Duration: {}ms", sanitized_url_for_logging(url), error_message, load_time_ms);
     };
 
     if (is_port_blocked(url.port_or_default())) {
@@ -155,8 +162,8 @@ void ResourceLoader::load(LoadRequest& request, Function<void(ReadonlyBytes, con
         ByteBuffer data;
         if (url.data_payload_is_base64()) {
             auto data_maybe = decode_base64(url.data_payload());
-            if (!data_maybe.has_value()) {
-                auto error_message = "Base64 data contains an invalid character"sv;
+            if (data_maybe.is_error()) {
+                auto error_message = data_maybe.error().string_literal();
                 log_failure(request, error_message);
                 error_callback(error_message, {});
                 return;

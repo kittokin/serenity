@@ -79,6 +79,9 @@ private:
     [[nodiscard]] U32Twin peek_twin() const;
     [[nodiscard]] U32Triplet peek_triplet() const;
 
+    [[nodiscard]] U32Twin start_of_input_stream_twin();
+    [[nodiscard]] U32Triplet start_of_input_stream_triplet();
+
     [[nodiscard]] static Token create_new_token(Token::Type);
     [[nodiscard]] static Token create_value_token(Token::Type, String value);
     [[nodiscard]] static Token create_value_token(Token::Type, u32 value);
@@ -96,9 +99,7 @@ private:
     void consume_as_much_whitespace_as_possible();
     void reconsume_current_input_code_point();
     [[nodiscard]] static bool is_valid_escape_sequence(U32Twin);
-    [[nodiscard]] bool would_start_an_identifier();
-    [[nodiscard]] bool would_start_an_identifier(U32Triplet);
-    [[nodiscard]] bool would_start_a_number() const;
+    [[nodiscard]] static bool would_start_an_identifier(U32Triplet);
     [[nodiscard]] static bool would_start_a_number(U32Triplet);
 
     String m_decoded_input;

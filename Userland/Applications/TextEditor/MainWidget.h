@@ -24,7 +24,7 @@ class MainWidget final : public GUI::Widget {
 
 public:
     virtual ~MainWidget() override;
-    bool read_file_and_close(int fd, String const& path);
+    bool read_file(Core::File&);
     void open_nonexistent_file(String const& path);
     bool request_close();
 
@@ -119,6 +119,7 @@ private:
     RefPtr<GUI::Action> m_css_highlight;
     RefPtr<GUI::Action> m_js_highlight;
     RefPtr<GUI::Action> m_html_highlight;
+    RefPtr<GUI::Action> m_git_highlight;
     RefPtr<GUI::Action> m_gml_highlight;
     RefPtr<GUI::Action> m_ini_highlight;
     RefPtr<GUI::Action> m_shell_highlight;

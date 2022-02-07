@@ -44,7 +44,7 @@ UNMAP_AFTER_INIT NonnullRefPtr<PageDirectory> PageDirectory::must_create_kernel_
 
 ErrorOr<NonnullRefPtr<PageDirectory>> PageDirectory::try_create_for_userspace(VirtualRangeAllocator const* parent_range_allocator)
 {
-    constexpr FlatPtr userspace_range_base = 0x00800000;
+    constexpr FlatPtr userspace_range_base = USER_RANGE_BASE;
     FlatPtr const userspace_range_ceiling = USER_RANGE_CEILING;
 
     auto directory = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) PageDirectory));
@@ -61,19 +61,13 @@ ErrorOr<NonnullRefPtr<PageDirectory>> PageDirectory::try_create_for_userspace(Vi
     SpinlockLocker lock(s_mm_lock);
 
 #if ARCH(X86_64)
-    directory->m_pml4t = MM.allocate_user_physical_page();
-    if (!directory->m_pml4t)
-        return ENOMEM;
+    directory->m_pml4t = TRY(MM.allocate_user_physical_page());
 #endif
 
-    directory->m_directory_table = MM.allocate_user_physical_page();
-    if (!directory->m_directory_table)
-        return ENOMEM;
+    directory->m_directory_table = TRY(MM.allocate_user_physical_page());
     auto kernel_pd_index = (kernel_mapping_base >> 30) & 0x1ffu;
     for (size_t i = 0; i < kernel_pd_index; i++) {
-        directory->m_directory_pages[i] = MM.allocate_user_physical_page();
-        if (!directory->m_directory_pages[i])
-            return ENOMEM;
+        directory->m_directory_pages[i] = TRY(MM.allocate_user_physical_page());
     }
 
     // Share the top 1 GiB of kernel-only mappings (>=kernel_mapping_base)
@@ -125,13 +119,6 @@ ErrorOr<NonnullRefPtr<PageDirectory>> PageDirectory::try_create_for_userspace(Vi
         MM.unquickmap_page();
     }
 
-    // Clone bottom 2 MiB of mappings from kernel_page_directory
-    PageDirectoryEntry buffer;
-    auto* kernel_pd = MM.quickmap_pd(MM.kernel_page_directory(), 0);
-    memcpy(&buffer, kernel_pd, sizeof(PageDirectoryEntry));
-    auto* new_pd = MM.quickmap_pd(*directory, 0);
-    memcpy(new_pd, &buffer, sizeof(PageDirectoryEntry));
-
     cr3_map().insert(directory->cr3(), directory);
     return directory;
 }
@@ -157,9 +144,10 @@ UNMAP_AFTER_INIT void PageDirectory::allocate_kernel_directory()
 
 PageDirectory::~PageDirectory()
 {
-    SpinlockLocker lock(s_mm_lock);
-    if (m_space)
+    if (is_cr3_initialized()) {
+        SpinlockLocker lock(s_mm_lock);
         cr3_map().remove(cr3());
+    }
 }
 
 }

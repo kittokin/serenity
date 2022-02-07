@@ -25,6 +25,7 @@ public:
         : m_sign(sign)
         , m_unsigned_data(move(unsigned_data))
     {
+        ensure_sign_is_valid();
     }
 
     explicit SignedBigInteger(UnsignedBigInteger unsigned_data)
@@ -72,9 +73,18 @@ public:
     const Vector<u32, STARTING_WORD_SIZE> words() const { return m_unsigned_data.words(); }
     bool is_negative() const { return m_sign; }
 
-    void negate() { m_sign = !m_sign; }
+    void negate()
+    {
+        if (!m_unsigned_data.is_zero())
+            m_sign = !m_sign;
+    }
 
-    void set_to_0() { m_unsigned_data.set_to_0(); }
+    void set_to_0()
+    {
+        m_unsigned_data.set_to_0();
+        m_sign = false;
+    }
+
     void set_to(i32 other)
     {
         m_unsigned_data.set_to((u32)other);
@@ -109,9 +119,6 @@ public:
 
     SignedBigInteger plus(const UnsignedBigInteger& other) const;
     SignedBigInteger minus(const UnsignedBigInteger& other) const;
-    SignedBigInteger bitwise_or(const UnsignedBigInteger& other) const;
-    SignedBigInteger bitwise_and(const UnsignedBigInteger& other) const;
-    SignedBigInteger bitwise_xor(const UnsignedBigInteger& other) const;
     SignedBigInteger multiplied_by(const UnsignedBigInteger& other) const;
     SignedDivisionResult divided_by(const UnsignedBigInteger& divisor) const;
 
@@ -132,6 +139,12 @@ public:
     bool operator>(const UnsignedBigInteger& other) const;
 
 private:
+    void ensure_sign_is_valid()
+    {
+        if (m_sign && m_unsigned_data.is_zero())
+            m_sign = false;
+    }
+
     bool m_sign { false };
     UnsignedBigInteger m_unsigned_data;
 };
@@ -142,6 +155,11 @@ struct SignedDivisionResult {
 };
 
 }
+
+template<>
+struct AK::Formatter<Crypto::SignedBigInteger> : AK::Formatter<Crypto::UnsignedBigInteger> {
+    ErrorOr<void> format(FormatBuilder&, Crypto::SignedBigInteger const&);
+};
 
 inline Crypto::SignedBigInteger
 operator""_sbigint(const char* string, size_t length)

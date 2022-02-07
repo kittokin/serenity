@@ -6,12 +6,12 @@
  */
 
 #include <AK/ScopeGuard.h>
-#include <Kernel/Memory/MemoryManager.h>
 #include <Kernel/Memory/PrivateInodeVMObject.h>
 #include <Kernel/Memory/Region.h>
 #include <Kernel/Memory/ScopedAddressSpaceSwitcher.h>
 #include <Kernel/Memory/SharedInodeVMObject.h>
 #include <Kernel/Process.h>
+#include <Kernel/Scheduler.h>
 #include <Kernel/ThreadTracer.h>
 
 namespace Kernel {
@@ -159,7 +159,7 @@ static ErrorOr<FlatPtr> handle_ptrace(const Kernel::Syscall::SC_ptrace_params& p
 ErrorOr<FlatPtr> Process::sys$ptrace(Userspace<const Syscall::SC_ptrace_params*> user_params)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(ptrace);
+    TRY(require_promise(Pledge::ptrace));
     auto params = TRY(copy_typed_from_user(user_params));
 
     return handle_ptrace(params, *this);
@@ -170,7 +170,7 @@ ErrorOr<FlatPtr> Process::sys$ptrace(Userspace<const Syscall::SC_ptrace_params*>
  */
 bool Process::has_tracee_thread(ProcessID tracer_pid)
 {
-    if (auto tracer = this->tracer())
+    if (auto const* tracer = this->tracer())
         return tracer->tracer_pid() == tracer_pid;
     return false;
 }
@@ -180,9 +180,7 @@ ErrorOr<FlatPtr> Process::peek_user_data(Userspace<const FlatPtr*> address)
     // This function can be called from the context of another
     // process that called PT_PEEK
     ScopedAddressSpaceSwitcher switcher(*this);
-    FlatPtr data;
-    TRY(copy_from_user(&data, address));
-    return data;
+    return TRY(copy_typed_from_user(address));
 }
 
 ErrorOr<void> Process::peek_user_data(Span<u8> destination, Userspace<const u8*> address)

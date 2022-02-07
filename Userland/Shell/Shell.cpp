@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -22,6 +22,7 @@
 #include <LibCore/Event.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
+#include <LibCore/System.h>
 #include <LibLine/Editor.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -62,10 +63,10 @@ void Shell::setup_signals()
     }
 }
 
-void Shell::print_path(const String& path)
+void Shell::print_path(StringView path)
 {
     if (s_disable_hyperlinks || !m_is_interactive) {
-        printf("%s", path.characters());
+        out("{}", path);
         return;
     }
     auto url = URL::create_with_file_scheme(path, {}, hostname);
@@ -132,7 +133,7 @@ String Shell::prompt() const
     return build_prompt();
 }
 
-String Shell::expand_tilde(const String& expression)
+String Shell::expand_tilde(StringView expression)
 {
     VERIFY(expression.starts_with('~'));
 
@@ -336,7 +337,7 @@ String Shell::resolve_path(String path) const
     return Core::File::real_path_for(path);
 }
 
-Shell::LocalFrame* Shell::find_frame_containing_local_variable(const String& name)
+Shell::LocalFrame* Shell::find_frame_containing_local_variable(StringView name)
 {
     for (size_t i = m_local_frames.size(); i > 0; --i) {
         auto& frame = m_local_frames[i - 1];
@@ -346,7 +347,7 @@ Shell::LocalFrame* Shell::find_frame_containing_local_variable(const String& nam
     return nullptr;
 }
 
-RefPtr<AST::Value> Shell::lookup_local_variable(const String& name) const
+RefPtr<AST::Value> Shell::lookup_local_variable(StringView name) const
 {
     if (auto* frame = find_frame_containing_local_variable(name))
         return frame->local_variables.get(name).value();
@@ -381,7 +382,7 @@ RefPtr<AST::Value> Shell::get_argument(size_t index) const
     return nullptr;
 }
 
-String Shell::local_variable_or(const String& name, const String& replacement) const
+String Shell::local_variable_or(StringView name, const String& replacement) const
 {
     auto value = lookup_local_variable(name);
     if (value) {
@@ -404,7 +405,7 @@ void Shell::set_local_variable(const String& name, RefPtr<AST::Value> value, boo
     m_local_frames.last().local_variables.set(name, move(value));
 }
 
-void Shell::unset_local_variable(const String& name, bool only_in_current_frame)
+void Shell::unset_local_variable(StringView name, bool only_in_current_frame)
 {
     if (!only_in_current_frame) {
         if (auto* frame = find_frame_containing_local_variable(name))
@@ -421,7 +422,7 @@ void Shell::define_function(String name, Vector<String> argnames, RefPtr<AST::No
     m_functions.set(name, { name, move(argnames), move(body) });
 }
 
-bool Shell::has_function(const String& name)
+bool Shell::has_function(StringView name)
 {
     return m_functions.contains(name);
 }
@@ -468,7 +469,7 @@ bool Shell::invoke_function(const AST::Command& command, int& retval)
 
     (void)function.body->run(*this);
 
-    retval = last_return_code;
+    retval = last_return_code.value_or(0);
     return true;
 }
 
@@ -508,7 +509,7 @@ Shell::Frame::~Frame()
     (void)frames.take_last();
 }
 
-String Shell::resolve_alias(const String& name) const
+String Shell::resolve_alias(StringView name) const
 {
     return m_aliases.get(name).value_or({});
 }
@@ -520,11 +521,7 @@ bool Shell::is_runnable(StringView name)
     if (parts.size() > 1 && access(path.characters(), X_OK) == 0)
         return true;
 
-    return binary_search(
-        cached_path.span(),
-        path,
-        nullptr,
-        [](auto& name, auto& program) { return strcmp(name.characters(), program.characters()); });
+    return binary_search(cached_path.span(), path, nullptr);
 }
 
 int Shell::run_command(StringView cmd, Optional<SourcePosition> source_position_override)
@@ -534,6 +531,9 @@ int Shell::run_command(StringView cmd, Optional<SourcePosition> source_position_
     VERIFY(!m_default_constructed);
 
     take_error();
+
+    if (!last_return_code.has_value())
+        last_return_code = 0;
 
     ScopedValueRollback source_position_rollback { m_source_position };
     if (source_position_override.has_value())
@@ -568,11 +568,8 @@ int Shell::run_command(StringView cmd, Optional<SourcePosition> source_position_
     }
 
     tcgetattr(0, &termios);
-    tcsetattr(0, TCSANOW, &default_termios);
 
     (void)command->run(*this);
-
-    tcsetattr(0, TCSANOW, &termios);
 
     if (!has_error(ShellError::None)) {
         possibly_print_error();
@@ -580,10 +577,10 @@ int Shell::run_command(StringView cmd, Optional<SourcePosition> source_position_
         return 1;
     }
 
-    return last_return_code;
+    return last_return_code.value_or(0);
 }
 
-RefPtr<Job> Shell::run_command(const AST::Command& command)
+ErrorOr<RefPtr<Job>> Shell::run_command(const AST::Command& command)
 {
     FileDescriptionCollector fds;
 
@@ -594,19 +591,14 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
     if (command.argv.is_empty() && !command.should_immediately_execute_next) {
         m_global_redirections.extend(command.redirections);
         for (auto& next_in_chain : command.next_chain)
-            run_tail(command, next_in_chain, last_return_code);
+            run_tail(command, next_in_chain, last_return_code.value_or(0));
         return nullptr;
     }
 
     // Resolve redirections.
     NonnullRefPtrVector<AST::Rewiring> rewirings;
-    auto resolve_redirection = [&](auto& redirection) -> IterationDecision {
-        auto rewiring_result = redirection.apply();
-        if (rewiring_result.is_error()) {
-            warnln("error: {}", rewiring_result.error());
-            return IterationDecision::Break;
-        }
-        auto& rewiring = rewiring_result.value();
+    auto resolve_redirection = [&](auto& redirection) -> ErrorOr<void> {
+        auto rewiring = TRY(redirection.apply());
 
         if (rewiring->fd_action != AST::Rewiring::Close::ImmediatelyCloseNew)
             rewirings.append(*rewiring);
@@ -623,10 +615,8 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
 
             int pipe_fd[2];
             int rc = pipe(pipe_fd);
-            if (rc < 0) {
-                perror("pipe(RedirRefresh)");
-                return IterationDecision::Break;
-            }
+            if (rc < 0)
+                return Error::from_syscall("pipe"sv, rc);
             rewiring->new_fd = pipe_fd[1];
             rewiring->other_pipe_end->new_fd = pipe_fd[0]; // This fd will be added to the collection on one of the next iterations.
             fds.add(pipe_fd[1]);
@@ -635,26 +625,22 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
 
             int pipe_fd[2];
             int rc = pipe(pipe_fd);
-            if (rc < 0) {
-                perror("pipe(RedirRefresh)");
-                return IterationDecision::Break;
-            }
+            if (rc < 0)
+                return Error::from_syscall("pipe"sv, rc);
             rewiring->old_fd = pipe_fd[1];
             rewiring->other_pipe_end->old_fd = pipe_fd[0]; // This fd will be added to the collection on one of the next iterations.
             fds.add(pipe_fd[1]);
         }
-        return IterationDecision::Continue;
+        return {};
     };
 
-    auto apply_rewirings = [&] {
+    auto apply_rewirings = [&]() -> ErrorOr<void> {
         for (auto& rewiring : rewirings) {
 
             dbgln_if(SH_DEBUG, "in {}<{}>, dup2({}, {})", command.argv.is_empty() ? "(<Empty>)" : command.argv[0].characters(), getpid(), rewiring.old_fd, rewiring.new_fd);
             int rc = dup2(rewiring.old_fd, rewiring.new_fd);
-            if (rc < 0) {
-                perror("dup2(run)");
-                return IterationDecision::Break;
-            }
+            if (rc < 0)
+                return Error::from_syscall("dup2"sv, rc);
             // {new,old}_fd is closed via the `fds` collector, but rewiring.other_pipe_end->{new,old}_fd
             // isn't yet in that collector when the first child spawns.
             if (rewiring.other_pipe_end) {
@@ -667,25 +653,21 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
                 }
             }
         }
-
-        return IterationDecision::Continue;
+        return {};
     };
 
     TemporaryChange signal_handler_install { m_should_reinstall_signal_handlers, false };
 
-    for (auto& redirection : m_global_redirections) {
-        if (resolve_redirection(redirection) == IterationDecision::Break)
-            return nullptr;
-    }
+    for (auto& redirection : m_global_redirections)
+        TRY(resolve_redirection(redirection));
 
-    for (auto& redirection : command.redirections) {
-        if (resolve_redirection(redirection) == IterationDecision::Break)
-            return nullptr;
-    }
+    for (auto& redirection : command.redirections)
+        TRY(resolve_redirection(redirection));
 
-    if (command.should_wait && run_builtin(command, rewirings, last_return_code)) {
+    if (int local_return_code = 0; command.should_wait && run_builtin(command, rewirings, local_return_code)) {
+        last_return_code = local_return_code;
         for (auto& next_in_chain : command.next_chain)
-            run_tail(command, next_in_chain, last_return_code);
+            run_tail(command, next_in_chain, *last_return_code);
         return nullptr;
     }
 
@@ -693,17 +675,13 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
     if (can_be_run_in_current_process && has_function(command.argv.first())) {
         SavedFileDescriptors fds { rewirings };
 
-        for (auto& rewiring : rewirings) {
-            int rc = dup2(rewiring.old_fd, rewiring.new_fd);
-            if (rc < 0) {
-                perror("dup2(run)");
-                return nullptr;
-            }
-        }
+        for (auto& rewiring : rewirings)
+            TRY(Core::System::dup2(rewiring.old_fd, rewiring.new_fd));
 
-        if (invoke_function(command, last_return_code)) {
+        if (int local_return_code = 0; invoke_function(command, local_return_code)) {
+            last_return_code = local_return_code;
             for (auto& next_in_chain : command.next_chain)
-                run_tail(command, next_in_chain, last_return_code);
+                run_tail(command, next_in_chain, *last_return_code);
             return nullptr;
         }
     }
@@ -715,7 +693,7 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
         && command.next_chain.first().node->should_override_execution_in_current_process()) {
 
         for (auto& next_in_chain : command.next_chain)
-            run_tail(command, next_in_chain, last_return_code);
+            run_tail(command, next_in_chain, last_return_code.value_or(0));
         return nullptr;
     }
 
@@ -728,35 +706,27 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
 
     argv.append(nullptr);
 
-    int sync_pipe[2];
-    if (pipe(sync_pipe) < 0) {
-        perror("pipe");
-        return nullptr;
-    }
-
-    pid_t child = fork();
-    if (child < 0) {
-        perror("fork");
-        return nullptr;
-    }
+    auto sync_pipe = TRY(Core::System::pipe2(0));
+    auto child = TRY(Core::System::fork());
 
     if (child == 0) {
         close(sync_pipe[1]);
 
-        m_is_subshell = true;
         m_pid = getpid();
         Core::EventLoop::notify_forked(Core::EventLoop::ForkEvent::Child);
         TemporaryChange signal_handler_install { m_should_reinstall_signal_handlers, true };
 
-        if (apply_rewirings() == IterationDecision::Break)
+        if (auto result = apply_rewirings(); result.is_error()) {
+            warnln("Shell: Failed to apply rewirings in {}: {}", copy_argv[0], result.error());
             _exit(126);
+        }
 
         fds.collect();
 
         u8 c;
         while (read(sync_pipe[0], &c, 1) < 0) {
             if (errno != EINTR) {
-                perror("read");
+                warnln("Shell: Failed to sync in {}: {}", copy_argv[0], Error::from_syscall("read"sv, -errno));
                 // There's nothing interesting we can do here.
                 break;
             }
@@ -769,6 +739,8 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
         if (!m_is_subshell && command.should_wait)
             tcsetattr(0, TCSANOW, &default_termios);
 
+        m_is_subshell = true;
+
         if (command.should_immediately_execute_next) {
             VERIFY(command.argv.is_empty());
 
@@ -778,14 +750,14 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
             for (auto& next_in_chain : command.next_chain)
                 run_tail(command, next_in_chain, 0);
 
-            _exit(last_return_code);
+            _exit(last_return_code.value_or(0));
         }
 
-        if (run_builtin(command, {}, last_return_code))
-            _exit(last_return_code);
+        if (int local_return_code = 0; run_builtin(command, {}, local_return_code))
+            _exit(local_return_code);
 
-        if (invoke_function(command, last_return_code))
-            _exit(last_return_code);
+        if (int local_return_code = 0; invoke_function(command, local_return_code))
+            _exit(local_return_code);
 
         // We no longer need the jobs here.
         jobs.clear();
@@ -806,8 +778,9 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
 
     pid_t pgid = is_first ? child : (command.pipeline ? command.pipeline->pgid : child);
     if (!m_is_subshell || command.pipeline) {
-        if (setpgid(child, pgid) < 0 && m_is_interactive)
-            perror("setpgid");
+        auto result = Core::System::setpgid(child, pgid);
+        if (result.is_error() && m_is_interactive)
+            warnln("Shell: {}", result.error());
 
         if (!m_is_subshell) {
             // There's no reason to care about the errors here
@@ -821,7 +794,7 @@ RefPtr<Job> Shell::run_command(const AST::Command& command)
 
     while (write(sync_pipe[1], "x", 1) < 0) {
         if (errno != EINTR) {
-            perror("write");
+            warnln("Shell: Failed to sync with {}: {}", copy_argv[0], Error::from_syscall("write"sv, -errno));
             // There's nothing interesting we can do here.
             break;
         }
@@ -995,7 +968,13 @@ NonnullRefPtrVector<Job> Shell::run_commands(Vector<AST::Command>& commands)
                 }
             }
         }
-        auto job = run_command(command);
+        auto job_result = run_command(command);
+        if (job_result.is_error()) {
+            raise_error(ShellError::LaunchError, String::formatted("{} while running '{}'", job_result.error(), command.argv.first()), command.position);
+            break;
+        }
+
+        auto job = job_result.release_value();
         if (!job)
             continue;
 
@@ -1111,7 +1090,7 @@ String Shell::get_history_path()
     return String::formatted("{}/.history", home);
 }
 
-String Shell::escape_token_for_single_quotes(const String& token)
+String Shell::escape_token_for_single_quotes(StringView token)
 {
     // `foo bar \n '` -> `'foo bar \n '"'"`
 
@@ -1141,7 +1120,7 @@ String Shell::escape_token_for_single_quotes(const String& token)
     return builder.build();
 }
 
-String Shell::escape_token_for_double_quotes(const String& token)
+String Shell::escape_token_for_double_quotes(StringView token)
 {
     // `foo bar \n $x 'blah "hello` -> `"foo bar \\n $x 'blah \"hello"`
 
@@ -1197,7 +1176,7 @@ Shell::SpecialCharacterEscapeMode Shell::special_character_escape_mode(u32 code_
     }
 }
 
-String Shell::escape_token(const String& token)
+String Shell::escape_token(StringView token)
 {
     auto do_escape = [](auto& token) {
         StringBuilder builder;
@@ -1247,7 +1226,7 @@ String Shell::escape_token(const String& token)
     return do_escape(token);
 }
 
-String Shell::unescape_token(const String& token)
+String Shell::unescape_token(StringView token)
 {
     StringBuilder builder;
 
@@ -1349,11 +1328,7 @@ void Shell::cache_path()
 void Shell::add_entry_to_cache(const String& entry)
 {
     size_t index = 0;
-    auto match = binary_search(
-        cached_path.span(),
-        entry,
-        &index,
-        [](auto& name, auto& program) { return strcmp(name.characters(), program.characters()); });
+    auto match = binary_search(cached_path.span(), entry, &index);
 
     if (match)
         return;
@@ -1364,14 +1339,10 @@ void Shell::add_entry_to_cache(const String& entry)
     cached_path.insert(index, entry);
 }
 
-void Shell::remove_entry_from_cache(const String& entry)
+void Shell::remove_entry_from_cache(StringView entry)
 {
     size_t index { 0 };
-    auto match = binary_search(
-        cached_path.span(),
-        entry,
-        &index,
-        [](const auto& a, const auto& b) { return strcmp(a.characters(), b.characters()); });
+    auto match = binary_search(cached_path.span(), entry, &index);
 
     if (match)
         cached_path.remove(index);
@@ -1401,8 +1372,8 @@ Vector<Line::CompletionSuggestion> Shell::complete()
     return ast->complete_for_editor(*this, line.length());
 }
 
-Vector<Line::CompletionSuggestion> Shell::complete_path(const String& base,
-    const String& part, size_t offset, ExecutableOnly executable_only)
+Vector<Line::CompletionSuggestion> Shell::complete_path(StringView base,
+    StringView part, size_t offset, ExecutableOnly executable_only)
 {
     auto token = offset ? part.substring_view(0, offset) : "";
     String path;
@@ -1476,13 +1447,18 @@ Vector<Line::CompletionSuggestion> Shell::complete_path(const String& base,
     return suggestions;
 }
 
-Vector<Line::CompletionSuggestion> Shell::complete_program_name(const String& name, size_t offset)
+Vector<Line::CompletionSuggestion> Shell::complete_program_name(StringView name, size_t offset)
 {
     auto match = binary_search(
         cached_path.span(),
         name,
         nullptr,
-        [](auto& name, auto& program) { return strncmp(name.characters(), program.characters(), name.length()); });
+        [](auto& name, auto& program) {
+            return strncmp(
+                name.characters_without_null_termination(),
+                program.characters(),
+                name.length());
+        });
 
     if (!match)
         return complete_path("", name, offset, ExecutableOnly::Yes);
@@ -1513,7 +1489,7 @@ Vector<Line::CompletionSuggestion> Shell::complete_program_name(const String& na
     return suggestions;
 }
 
-Vector<Line::CompletionSuggestion> Shell::complete_variable(const String& name, size_t offset)
+Vector<Line::CompletionSuggestion> Shell::complete_variable(StringView name, size_t offset)
 {
     Vector<Line::CompletionSuggestion> suggestions;
     auto pattern = offset ? name.substring_view(0, offset) : "";
@@ -1547,7 +1523,7 @@ Vector<Line::CompletionSuggestion> Shell::complete_variable(const String& name, 
     return suggestions;
 }
 
-Vector<Line::CompletionSuggestion> Shell::complete_user(const String& name, size_t offset)
+Vector<Line::CompletionSuggestion> Shell::complete_user(StringView name, size_t offset)
 {
     Vector<Line::CompletionSuggestion> suggestions;
     auto pattern = offset ? name.substring_view(0, offset) : "";
@@ -1571,7 +1547,7 @@ Vector<Line::CompletionSuggestion> Shell::complete_user(const String& name, size
     return suggestions;
 }
 
-Vector<Line::CompletionSuggestion> Shell::complete_option(const String& program_name, const String& option, size_t offset)
+Vector<Line::CompletionSuggestion> Shell::complete_option(StringView program_name, StringView option, size_t offset)
 {
     size_t start = 0;
     while (start < option.length() && option[start] == '-' && start < 2)
@@ -1602,10 +1578,10 @@ Vector<Line::CompletionSuggestion> Shell::complete_option(const String& program_
                 builder.append(view);
                 return builder.to_string();
             };
-#define __ENUMERATE_SHELL_OPTION(name, d_, descr_)          \
-    if (StringView { #name }.starts_with(option_pattern)) { \
-        suggestions.append(maybe_negate(#name));            \
-        suggestions.last().input_offset = offset;           \
+#define __ENUMERATE_SHELL_OPTION(name, d_, descr_) \
+    if (#name##sv.starts_with(option_pattern)) {   \
+        suggestions.append(maybe_negate(#name));   \
+        suggestions.last().input_offset = offset;  \
     }
 
             ENUMERATE_SHELL_OPTIONS();
@@ -1616,14 +1592,14 @@ Vector<Line::CompletionSuggestion> Shell::complete_option(const String& program_
     return suggestions;
 }
 
-Vector<Line::CompletionSuggestion> Shell::complete_immediate_function_name(const String& name, size_t offset)
+Vector<Line::CompletionSuggestion> Shell::complete_immediate_function_name(StringView name, size_t offset)
 {
     Vector<Line::CompletionSuggestion> suggestions;
 
-#define __ENUMERATE_SHELL_IMMEDIATE_FUNCTION(fn_name)                            \
-    if (auto name_view = StringView { #fn_name }; name_view.starts_with(name)) { \
-        suggestions.append({ name_view, " " });                                  \
-        suggestions.last().input_offset = offset;                                \
+#define __ENUMERATE_SHELL_IMMEDIATE_FUNCTION(fn_name)                 \
+    if (auto name_view = #fn_name##sv; name_view.starts_with(name)) { \
+        suggestions.append({ name_view, " " });                       \
+        suggestions.last().input_offset = offset;                     \
     }
 
     ENUMERATE_SHELL_IMMEDIATE_FUNCTIONS();
@@ -1662,8 +1638,11 @@ void Shell::bring_cursor_to_beginning_of_a_line() const
 
     fputs(eol_mark.characters(), stderr);
 
-    for (auto i = eol_mark_length; i < ws.ws_col; ++i)
-        putc(' ', stderr);
+    // We write a line's worth of whitespace to the terminal. This way, we ensure that
+    // the prompt ends up on a new line even if there is dangling output on the current line.
+    size_t fill_count = ws.ws_col - eol_mark_length;
+    auto fill_buffer = String::repeated(' ', fill_count);
+    fwrite(fill_buffer.characters(), 1, fill_count, stderr);
 
     putc('\r', stderr);
 }
@@ -1690,32 +1669,41 @@ bool Shell::has_history_event(StringView source)
 
 bool Shell::read_single_line()
 {
-    restore_ios();
-    bring_cursor_to_beginning_of_a_line();
-    auto line_result = m_editor->get_line(prompt());
+    while (true) {
+        restore_ios();
+        bring_cursor_to_beginning_of_a_line();
+        auto line_result = m_editor->get_line(prompt());
 
-    if (line_result.is_error()) {
-        if (line_result.error() == Line::Editor::Error::Eof || line_result.error() == Line::Editor::Error::Empty) {
-            // Pretend the user tried to execute builtin_exit()
-            run_command("exit");
-            return read_single_line();
-        } else {
+        if (line_result.is_error()) {
+            auto is_eof = line_result.error() == Line::Editor::Error::Eof;
+            auto is_empty = line_result.error() == Line::Editor::Error::Empty;
+
+            if (is_eof || is_empty) {
+                // Pretend the user tried to execute builtin_exit()
+                auto exit_code = run_command("exit");
+                if (exit_code != 0) {
+                    // If we didn't end up actually calling exit(), and the command didn't succeed, just pretend it's all okay
+                    // unless we can't, then just quit anyway.
+                    if (!is_empty)
+                        continue;
+                }
+            }
             Core::EventLoop::current().quit(1);
             return false;
         }
-    }
 
-    auto& line = line_result.value();
+        auto& line = line_result.value();
 
-    if (line.is_empty())
+        if (line.is_empty())
+            return true;
+
+        run_command(line);
+
+        if (!has_history_event(line))
+            m_editor->add_to_history(line);
+
         return true;
-
-    run_command(line);
-
-    if (!has_history_event(line))
-        m_editor->add_to_history(line);
-
-    return true;
+    }
 }
 
 void Shell::custom_event(Core::CustomEvent& event)
@@ -1772,7 +1760,12 @@ void Shell::notify_child_event()
             }
             if (child_pid == job.pid()) {
                 if (WIFSIGNALED(wstatus) && !WIFSTOPPED(wstatus)) {
-                    job.set_signalled(WTERMSIG(wstatus));
+                    auto signal = WTERMSIG(wstatus);
+                    job.set_signalled(signal);
+                    if (signal == SIGINT)
+                        raise_error(ShellError::InternalControlFlowInterrupted, "Interrupted"sv, job.command().position);
+                    else if (signal == SIGKILL)
+                        raise_error(ShellError::InternalControlFlowKilled, "Interrupted"sv, job.command().position);
                 } else if (WIFEXITED(wstatus)) {
                     job.set_has_exit(WEXITSTATUS(wstatus));
                 } else if (WIFSTOPPED(wstatus)) {
@@ -2000,8 +1993,13 @@ void Shell::possibly_print_error() const
     case ShellError::OutOfMemory:
         warnln("Shell: Hit an OOM situation");
         break;
+    case ShellError::LaunchError:
+        warnln("Shell: {}", m_error_description);
+        break;
     case ShellError::InternalControlFlowBreak:
     case ShellError::InternalControlFlowContinue:
+    case ShellError::InternalControlFlowInterrupted:
+    case ShellError::InternalControlFlowKilled:
         return;
     case ShellError::None:
         return;
@@ -2075,7 +2073,7 @@ void Shell::possibly_print_error() const
     warnln();
 }
 
-Optional<int> Shell::resolve_job_spec(const String& str)
+Optional<int> Shell::resolve_job_spec(StringView str)
 {
     if (!str.starts_with('%'))
         return {};

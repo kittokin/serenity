@@ -7,6 +7,7 @@
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
+#include <AK/StringView.h>
 
 #ifndef KERNEL
 #    include <AK/JsonParser.h>
@@ -184,6 +185,11 @@ JsonValue::JsonValue(const String& value)
     }
 }
 
+JsonValue::JsonValue(StringView value)
+    : JsonValue(value.to_string())
+{
+}
+
 JsonValue::JsonValue(const JsonObject& value)
     : m_type(Type::Object)
 {
@@ -230,6 +236,8 @@ void JsonValue::clear()
 #ifndef KERNEL
 ErrorOr<JsonValue> JsonValue::from_string(StringView input)
 {
+    if (input.is_empty())
+        return JsonValue();
     return JsonParser(input).parse();
 }
 #endif

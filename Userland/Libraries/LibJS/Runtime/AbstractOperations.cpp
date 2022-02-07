@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2020-2022, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -43,7 +43,7 @@ ThrowCompletionOr<Value> require_object_coercible(GlobalObject& global_object, V
     return value;
 }
 
-// 7.3.13 Call ( F, V [ , argumentsList ] ), https://tc39.es/ecma262/#sec-call
+// 7.3.14 Call ( F, V [ , argumentsList ] ), https://tc39.es/ecma262/#sec-call
 ThrowCompletionOr<Value> call_impl(GlobalObject& global_object, Value function, Value this_value, Optional<MarkedValueList> arguments_list)
 {
     auto& vm = global_object.vm();
@@ -60,8 +60,21 @@ ThrowCompletionOr<Value> call_impl(GlobalObject& global_object, Value function, 
     return function.as_function().internal_call(this_value, move(*arguments_list));
 }
 
-// 7.3.14 Construct ( F [ , argumentsList [ , newTarget ] ] ), https://tc39.es/ecma262/#sec-construct
-ThrowCompletionOr<Object*> construct(GlobalObject& global_object, FunctionObject& function, Optional<MarkedValueList> arguments_list, FunctionObject* new_target)
+ThrowCompletionOr<Value> call_impl(GlobalObject& global_object, FunctionObject& function, Value this_value, Optional<MarkedValueList> arguments_list)
+{
+    // 1. If argumentsList is not present, set argumentsList to a new empty List.
+    if (!arguments_list.has_value())
+        arguments_list = MarkedValueList { global_object.heap() };
+
+    // 2. If IsCallable(F) is false, throw a TypeError exception.
+    // Note: Called with a FunctionObject ref
+
+    // 3. Return ? F.[[Call]](V, argumentsList).
+    return function.internal_call(this_value, move(*arguments_list));
+}
+
+// 7.3.15 Construct ( F [ , argumentsList [ , newTarget ] ] ), https://tc39.es/ecma262/#sec-construct
+ThrowCompletionOr<Object*> construct_impl(GlobalObject& global_object, FunctionObject& function, Optional<MarkedValueList> arguments_list, FunctionObject* new_target)
 {
     // 1. If newTarget is not present, set newTarget to F.
     if (!new_target)
@@ -75,7 +88,7 @@ ThrowCompletionOr<Object*> construct(GlobalObject& global_object, FunctionObject
     return function.internal_construct(move(*arguments_list), *new_target);
 }
 
-// 7.3.18 LengthOfArrayLike ( obj ), https://tc39.es/ecma262/#sec-lengthofarraylike
+// 7.3.19 LengthOfArrayLike ( obj ), https://tc39.es/ecma262/#sec-lengthofarraylike
 ThrowCompletionOr<size_t> length_of_array_like(GlobalObject& global_object, Object const& object)
 {
     auto& vm = global_object.vm();
@@ -83,7 +96,7 @@ ThrowCompletionOr<size_t> length_of_array_like(GlobalObject& global_object, Obje
     return result.to_length(global_object);
 }
 
-// 7.3.19 CreateListFromArrayLike ( obj [ , elementTypes ] ), https://tc39.es/ecma262/#sec-createlistfromarraylike
+// 7.3.20 CreateListFromArrayLike ( obj [ , elementTypes ] ), https://tc39.es/ecma262/#sec-createlistfromarraylike
 ThrowCompletionOr<MarkedValueList> create_list_from_array_like(GlobalObject& global_object, Value value, Function<ThrowCompletionOr<void>(Value)> check_value)
 {
     auto& vm = global_object.vm();
@@ -124,7 +137,7 @@ ThrowCompletionOr<MarkedValueList> create_list_from_array_like(GlobalObject& glo
     return ThrowCompletionOr(move(list));
 }
 
-// 7.3.22 SpeciesConstructor ( O, defaultConstructor ), https://tc39.es/ecma262/#sec-speciesconstructor
+// 7.3.23 SpeciesConstructor ( O, defaultConstructor ), https://tc39.es/ecma262/#sec-speciesconstructor
 ThrowCompletionOr<FunctionObject*> species_constructor(GlobalObject& global_object, Object const& object, FunctionObject& default_constructor)
 {
     auto& vm = global_object.vm();
@@ -155,7 +168,7 @@ ThrowCompletionOr<FunctionObject*> species_constructor(GlobalObject& global_obje
     return vm.throw_completion<TypeError>(global_object, ErrorType::NotAConstructor, species.to_string_without_side_effects());
 }
 
-// 7.3.24 GetFunctionRealm ( obj ), https://tc39.es/ecma262/#sec-getfunctionrealm
+// 7.3.25 GetFunctionRealm ( obj ), https://tc39.es/ecma262/#sec-getfunctionrealm
 ThrowCompletionOr<Realm*> get_function_realm(GlobalObject& global_object, FunctionObject const& function)
 {
     auto& vm = global_object.vm();
@@ -199,6 +212,32 @@ ThrowCompletionOr<Realm*> get_function_realm(GlobalObject& global_object, Functi
     return vm.current_realm();
 }
 
+// 8.5.2.1 InitializeBoundName ( name, value, environment ), https://tc39.es/ecma262/#sec-initializeboundname
+ThrowCompletionOr<void> initialize_bound_name(GlobalObject& global_object, FlyString const& name, Value value, Environment* environment)
+{
+    auto& vm = global_object.vm();
+
+    // 1. If environment is not undefined, then
+    if (environment) {
+        // a. Perform environment.InitializeBinding(name, value).
+        MUST(environment->initialize_binding(global_object, name, value));
+
+        // b. Return NormalCompletion(undefined).
+        return {};
+    }
+    // 2. Else,
+    else {
+        // a. Let lhs be ResolveBinding(name).
+        // NOTE: Although the spec pretends resolve_binding cannot fail it can just not in this case.
+        auto lhs = MUST(vm.resolve_binding(name));
+
+        // b. Return ? PutValue(lhs, value).
+        return TRY(lhs.put_value(global_object, value));
+    }
+
+    VERIFY_NOT_REACHED();
+}
+
 // 10.1.6.2 IsCompatiblePropertyDescriptor ( Extensible, Desc, Current ), https://tc39.es/ecma262/#sec-iscompatiblepropertydescriptor
 bool is_compatible_property_descriptor(bool extensible, PropertyDescriptor const& descriptor, Optional<PropertyDescriptor> const& current)
 {
@@ -207,11 +246,11 @@ bool is_compatible_property_descriptor(bool extensible, PropertyDescriptor const
 }
 
 // 10.1.6.3 ValidateAndApplyPropertyDescriptor ( O, P, extensible, Desc, current ), https://tc39.es/ecma262/#sec-validateandapplypropertydescriptor
-bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& property_name, bool extensible, PropertyDescriptor const& descriptor, Optional<PropertyDescriptor> const& current)
+bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& property_key, bool extensible, PropertyDescriptor const& descriptor, Optional<PropertyDescriptor> const& current)
 {
     // 1. Assert: If O is not undefined, then IsPropertyKey(P) is true.
     if (object)
-        VERIFY(property_name.is_valid());
+        VERIFY(property_key.is_valid());
 
     // 2. If current is undefined, then
     if (!current.has_value()) {
@@ -228,7 +267,7 @@ bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& p
             // to its default value.
             if (object) {
                 auto value = descriptor.value.value_or(js_undefined());
-                object->storage_set(property_name, { value, descriptor.attributes() });
+                object->storage_set(property_key, { value, descriptor.attributes() });
             }
         }
         // d. Else,
@@ -242,7 +281,7 @@ bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& p
             // to its default value.
             if (object) {
                 auto accessor = Accessor::create(object->vm(), descriptor.get.value_or(nullptr), descriptor.set.value_or(nullptr));
-                object->storage_set(property_name, { accessor, descriptor.attributes() });
+                object->storage_set(property_key, { accessor, descriptor.attributes() });
             }
         }
         // e. Return true.
@@ -281,7 +320,7 @@ bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& p
             // set the rest of the property's attributes to their default values.
             if (object) {
                 auto accessor = Accessor::create(object->vm(), nullptr, nullptr);
-                object->storage_set(property_name, { accessor, current->attributes() });
+                object->storage_set(property_key, { accessor, current->attributes() });
             }
         }
         // c. Else,
@@ -291,7 +330,7 @@ bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& p
             // set the rest of the property's attributes to their default values.
             if (object) {
                 auto value = js_undefined();
-                object->storage_set(property_name, { value, current->attributes() });
+                object->storage_set(property_key, { value, current->attributes() });
             }
         }
     }
@@ -347,7 +386,7 @@ bool validate_and_apply_property_descriptor(Object* object, PropertyKey const& p
         attributes.set_writable(descriptor.writable.value_or(current->writable.value_or(false)));
         attributes.set_enumerable(descriptor.enumerable.value_or(current->enumerable.value_or(false)));
         attributes.set_configurable(descriptor.configurable.value_or(current->configurable.value_or(false)));
-        object->storage_set(property_name, { value, attributes });
+        object->storage_set(property_key, { value, attributes });
     }
 
     // 10. Return true.
@@ -380,24 +419,23 @@ ThrowCompletionOr<Object*> get_prototype_from_constructor(GlobalObject& global_o
 // 9.1.2.2 NewDeclarativeEnvironment ( E ), https://tc39.es/ecma262/#sec-newdeclarativeenvironment
 DeclarativeEnvironment* new_declarative_environment(Environment& environment)
 {
-    auto& global_object = environment.global_object();
-    return global_object.heap().allocate<DeclarativeEnvironment>(global_object, &environment);
+    return environment.heap().allocate_without_global_object<DeclarativeEnvironment>(&environment);
 }
 
 // 9.1.2.3 NewObjectEnvironment ( O, W, E ), https://tc39.es/ecma262/#sec-newobjectenvironment
 ObjectEnvironment* new_object_environment(Object& object, bool is_with_environment, Environment* environment)
 {
-    auto& global_object = object.global_object();
-    return global_object.heap().allocate<ObjectEnvironment>(global_object, object, is_with_environment ? ObjectEnvironment::IsWithEnvironment::Yes : ObjectEnvironment::IsWithEnvironment::No, environment);
+    auto& heap = object.heap();
+    return heap.allocate_without_global_object<ObjectEnvironment>(object, is_with_environment ? ObjectEnvironment::IsWithEnvironment::Yes : ObjectEnvironment::IsWithEnvironment::No, environment);
 }
 
 // 9.1.2.4 NewFunctionEnvironment ( F, newTarget ), https://tc39.es/ecma262/#sec-newfunctionenvironment
 FunctionEnvironment* new_function_environment(ECMAScriptFunctionObject& function, Object* new_target)
 {
-    auto& global_object = function.global_object();
+    auto& heap = function.heap();
 
     // 1. Let env be a new function Environment Record containing no bindings.
-    auto* env = global_object.heap().allocate<FunctionEnvironment>(global_object, function.environment());
+    auto* env = heap.allocate_without_global_object<FunctionEnvironment>(function.environment());
 
     // 2. Set env.[[FunctionObject]] to F.
     env->set_function_object(function);
@@ -419,9 +457,12 @@ FunctionEnvironment* new_function_environment(ECMAScriptFunctionObject& function
     return env;
 }
 
+// 9.2.1.1 NewPrivateEnvironment ( outerPrivEnv ), https://tc39.es/ecma262/#sec-newprivateenvironment
 PrivateEnvironment* new_private_environment(VM& vm, PrivateEnvironment* outer)
 {
-    return vm.heap().allocate<PrivateEnvironment>(vm.current_realm()->global_object(), outer);
+    // 1. Let names be a new empty List.
+    // 2. Return the PrivateEnvironment Record { [[OuterPrivateEnvironment]]: outerPrivEnv, [[Names]]: names }.
+    return vm.heap().allocate_without_global_object<PrivateEnvironment>(outer);
 }
 
 // 9.4.3 GetThisEnvironment ( ), https://tc39.es/ecma262/#sec-getthisenvironment
@@ -535,24 +576,23 @@ ThrowCompletionOr<Value> perform_eval(Value x, GlobalObject& caller_realm, Calle
 
     TemporaryChange scope_change_strict(vm.running_execution_context().is_strict_mode, strict_eval);
 
-    Value eval_result;
+    Optional<Value> eval_result;
 
     if (auto* bytecode_interpreter = Bytecode::Interpreter::current()) {
         auto executable = JS::Bytecode::Generator::generate(program);
-        executable.name = "eval"sv;
+        executable->name = "eval"sv;
         if (JS::Bytecode::g_dump_bytecode)
-            executable.dump();
-        eval_result = TRY(bytecode_interpreter->run(executable));
+            executable->dump();
+        eval_result = TRY(bytecode_interpreter->run(*executable));
+        // Turn potentially empty JS::Value from the bytecode interpreter into an empty Optional
+        if (eval_result.has_value() && eval_result->is_empty())
+            eval_result = {};
     } else {
         auto& ast_interpreter = vm.interpreter();
-        // FIXME: We need to use evaluate_statements() here because Program::execute() calls global_declaration_instantiation() when it shouldn't
-        eval_result = program->evaluate_statements(ast_interpreter, caller_realm);
+        eval_result = TRY(program->execute(ast_interpreter, caller_realm));
     }
 
-    if (auto* exception = vm.exception())
-        return throw_completion(exception->value());
-    else
-        return eval_result.value_or(js_undefined());
+    return eval_result.value_or(js_undefined());
 }
 
 // 19.2.1.3 EvalDeclarationInstantiation ( body, varEnv, lexEnv, privateEnv, strict ), https://tc39.es/ecma262/#sec-evaldeclarationinstantiation
@@ -602,9 +642,11 @@ ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, GlobalObject& glo
             return IterationDecision::Continue;
 
         if (global_var_environment) {
-            auto function_definable = global_var_environment->can_declare_global_function(function.name());
-            if (vm.exception())
+            auto function_definable_or_error = global_var_environment->can_declare_global_function(function.name());
+            if (function_definable_or_error.is_error())
                 return IterationDecision::Break;
+            auto function_definable = function_definable_or_error.release_value();
+
             if (!function_definable) {
                 vm.throw_exception<TypeError>(global_object, ErrorType::CannotDeclareGlobalFunction, function.name());
                 return IterationDecision::Break;
@@ -635,17 +677,20 @@ ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, GlobalObject& glo
             if (global_var_environment) {
                 if (global_var_environment->has_lexical_declaration(function_name))
                     return IterationDecision::Continue;
-                auto var_definable = global_var_environment->can_declare_global_var(function_name);
-                if (vm.exception())
+
+                auto var_definable_or_error = global_var_environment->can_declare_global_var(function_name);
+                if (var_definable_or_error.is_error())
                     return IterationDecision::Break;
+                auto var_definable = var_definable_or_error.release_value();
+
                 if (!var_definable)
                     return IterationDecision::Continue;
             }
 
             if (!declared_function_names.contains(function_name) && !hoisted_functions.contains(function_name)) {
                 if (global_var_environment) {
-                    global_var_environment->create_global_var_binding(function_name, true);
-                    if (vm.exception())
+                    auto result = global_var_environment->create_global_var_binding(function_name, true);
+                    if (result.is_error())
                         return IterationDecision::Break;
                 } else {
                     if (!MUST(variable_environment->has_binding(function_name))) {
@@ -672,9 +717,10 @@ ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, GlobalObject& glo
         declaration.for_each_bound_name([&](auto const& name) {
             if (!declared_function_names.contains(name)) {
                 if (global_var_environment) {
-                    auto variable_definable = global_var_environment->can_declare_global_var(name);
-                    if (vm.exception())
+                    auto variable_definable_or_error = global_var_environment->can_declare_global_var(name);
+                    if (variable_definable_or_error.is_error())
                         return IterationDecision::Break;
+                    auto variable_definable = variable_definable_or_error.release_value();
                     if (!variable_definable) {
                         vm.throw_exception<TypeError>(global_object, ErrorType::CannotDeclareGlobalVariable, name);
                         return IterationDecision::Break;
@@ -713,11 +759,9 @@ ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, GlobalObject& glo
         return throw_completion(exception->value());
 
     for (auto& declaration : functions_to_initialize) {
-        auto* function = ECMAScriptFunctionObject::create(global_object, declaration.name(), declaration.body(), declaration.parameters(), declaration.function_length(), lexical_environment, private_environment, declaration.kind(), declaration.is_strict_mode(), declaration.might_need_arguments_object());
+        auto* function = ECMAScriptFunctionObject::create(global_object, declaration.name(), declaration.source_text(), declaration.body(), declaration.parameters(), declaration.function_length(), lexical_environment, private_environment, declaration.kind(), declaration.is_strict_mode(), declaration.might_need_arguments_object());
         if (global_var_environment) {
-            global_var_environment->create_global_function_binding(declaration.name(), function, true);
-            if (auto* exception = vm.exception())
-                return throw_completion(exception->value());
+            TRY(global_var_environment->create_global_function_binding(declaration.name(), function, true));
         } else {
             auto binding_exists = MUST(variable_environment->has_binding(declaration.name()));
 
@@ -732,9 +776,7 @@ ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, GlobalObject& glo
 
     for (auto& var_name : declared_var_names) {
         if (global_var_environment) {
-            global_var_environment->create_global_var_binding(var_name, true);
-            if (auto* exception = vm.exception())
-                return throw_completion(exception->value());
+            TRY(global_var_environment->create_global_var_binding(var_name, true));
         } else {
             auto binding_exists = MUST(variable_environment->has_binding(var_name));
 
@@ -871,19 +913,19 @@ Object* create_mapped_arguments_object(GlobalObject& global_object, FunctionObje
 }
 
 // 7.1.21 CanonicalNumericIndexString ( argument ), https://tc39.es/ecma262/#sec-canonicalnumericindexstring
-Value canonical_numeric_index_string(GlobalObject& global_object, PropertyKey const& property_name)
+Value canonical_numeric_index_string(GlobalObject& global_object, PropertyKey const& property_key)
 {
     // NOTE: If the property name is a number type (An implementation-defined optimized
     // property key type), it can be treated as a string property that has already been
     // converted successfully into a canonical numeric index.
 
-    VERIFY(property_name.is_string() || property_name.is_number());
+    VERIFY(property_key.is_string() || property_key.is_number());
 
-    if (property_name.is_number())
-        return Value(property_name.as_number());
+    if (property_key.is_number())
+        return Value(property_key.as_number());
 
     // 1. Assert: Type(argument) is String.
-    auto argument = Value(js_string(global_object.vm(), property_name.as_string()));
+    auto argument = Value(js_string(global_object.vm(), property_key.as_string()));
 
     // 2. If argument is "-0", return -0𝔽.
     if (argument.as_string().string() == "-0")

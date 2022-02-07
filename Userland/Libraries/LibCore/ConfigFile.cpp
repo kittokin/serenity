@@ -45,7 +45,7 @@ NonnullRefPtr<ConfigFile> ConfigFile::open(String const& filename, int fd)
     return adopt_ref(*new ConfigFile(filename, fd));
 }
 
-ConfigFile::ConfigFile(const String& filename, AllowWriting allow_altering)
+ConfigFile::ConfigFile(String const& filename, AllowWriting allow_altering)
     : m_file(File::construct(filename))
 {
     if (!m_file->open(allow_altering == AllowWriting::Yes ? OpenMode::ReadWrite : OpenMode::ReadOnly))
@@ -76,6 +76,12 @@ void ConfigFile::reparse()
 
     while (m_file->can_read_line()) {
         auto line = m_file->read_line();
+
+        if (line.is_null()) {
+            m_groups.clear();
+            return;
+        }
+
         auto* cp = line.characters();
 
         while (*cp && (*cp == ' ' || *cp == '\t' || *cp == '\n'))

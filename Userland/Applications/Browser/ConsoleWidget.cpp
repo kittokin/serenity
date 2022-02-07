@@ -8,6 +8,7 @@
 
 #include "ConsoleWidget.h"
 #include <AK/StringBuilder.h>
+#include <Applications/Browser/Browser.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/TextBox.h>
@@ -60,7 +61,7 @@ ConsoleWidget::ConsoleWidget()
 
     auto& clear_button = bottom_container.add<GUI::Button>();
     clear_button.set_fixed_size(22, 22);
-    clear_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/delete.png").release_value_but_fixme_should_propagate_errors());
+    clear_button.set_icon(g_icon_bag.delete_icon);
     clear_button.set_tooltip("Clear the console output");
     clear_button.on_click = [this](auto) {
         clear_output();
@@ -111,6 +112,12 @@ void ConsoleWidget::handle_console_messages(i32 start_index, const Vector<String
             print_html(message);
         } else if (type == "clear") {
             clear_output();
+        } else if (type == "group") {
+            begin_group(message, true);
+        } else if (type == "groupCollapsed") {
+            begin_group(message, false);
+        } else if (type == "groupEnd") {
+            end_group();
         } else {
             VERIFY_NOT_REACHED();
         }
@@ -138,24 +145,83 @@ void ConsoleWidget::print_source_line(StringView source)
 void ConsoleWidget::print_html(StringView line)
 {
     StringBuilder builder;
+
+    int parent_id = m_group_stack.is_empty() ? 0 : m_group_stack.last().id;
+    if (parent_id == 0) {
+        builder.append(R"~~~(
+        var parentGroup = document.body;
+)~~~");
+    } else {
+        builder.appendff(R"~~~(
+        var parentGroup = document.getElementById("group_{}");
+)~~~",
+            parent_id);
+    }
+
     builder.append(R"~~~(
         var p = document.createElement("p");
         p.innerHTML = ")~~~");
     builder.append_escaped_for_json(line);
     builder.append(R"~~~("
-        document.body.appendChild(p);
+        parentGroup.appendChild(p);
 )~~~");
     m_output_view->run_javascript(builder.string_view());
     // FIXME: Make it scroll to the bottom, using `window.scrollTo()` in the JS above.
     //        We used to call `m_output_view->scroll_to_bottom();` here, but that does not work because
     //        it runs synchronously, meaning it happens before the HTML is output via IPC above.
+    //        (See also: begin_group())
 }
 
 void ConsoleWidget::clear_output()
 {
+    m_group_stack.clear();
     m_output_view->run_javascript(R"~~~(
         document.body.innerHTML = "";
     )~~~");
+}
+
+void ConsoleWidget::begin_group(StringView label, bool start_expanded)
+{
+    StringBuilder builder;
+    int parent_id = m_group_stack.is_empty() ? 0 : m_group_stack.last().id;
+    if (parent_id == 0) {
+        builder.append(R"~~~(
+        var parentGroup = document.body;
+)~~~");
+    } else {
+        builder.appendff(R"~~~(
+        var parentGroup = document.getElementById("group_{}");
+)~~~",
+            parent_id);
+    }
+
+    Group group;
+    group.id = m_next_group_id++;
+    group.label = label;
+
+    builder.appendff(R"~~~(
+        var group = document.createElement("details");
+        group.id = "group_{}";
+        var label = document.createElement("summary");
+        label.innerText = ")~~~",
+        group.id);
+    builder.append_escaped_for_json(label);
+    builder.append(R"~~~(";
+        group.appendChild(label);
+        parentGroup.appendChild(group);
+)~~~");
+
+    if (start_expanded)
+        builder.append("group.open = true;");
+
+    m_output_view->run_javascript(builder.string_view());
+    // FIXME: Scroll console to bottom - see note in print_html()
+    m_group_stack.append(group);
+}
+
+void ConsoleWidget::end_group()
+{
+    m_group_stack.take_last();
 }
 
 void ConsoleWidget::reset()

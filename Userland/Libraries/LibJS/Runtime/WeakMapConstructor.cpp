@@ -55,13 +55,13 @@ ThrowCompletionOr<Object*> WeakMapConstructor::construct(FunctionObject& new_tar
     if (!adder.is_function())
         return vm.throw_completion<TypeError>(global_object, ErrorType::NotAFunction, "'set' property of WeakMap");
 
-    TRY(get_iterator_values(global_object, vm.argument(0), [&](Value iterator_value) -> Optional<Completion> {
+    (void)TRY(get_iterator_values(global_object, vm.argument(0), [&](Value iterator_value) -> Optional<Completion> {
         if (!iterator_value.is_object())
             return vm.throw_completion<TypeError>(global_object, ErrorType::NotAnObject, String::formatted("Iterator value {}", iterator_value.to_string_without_side_effects()));
 
         auto key = TRY(iterator_value.as_object().get(0));
         auto value = TRY(iterator_value.as_object().get(1));
-        TRY(vm.call(adder.as_function(), Value(weak_map), key, value));
+        TRY(JS::call(global_object, adder.as_function(), weak_map, key, value));
 
         return {};
     }));

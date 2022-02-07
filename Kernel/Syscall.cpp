@@ -11,6 +11,7 @@
 #include <Kernel/Panic.h>
 #include <Kernel/PerformanceManager.h>
 #include <Kernel/Process.h>
+#include <Kernel/Scheduler.h>
 #include <Kernel/Sections.h>
 #include <Kernel/ThreadTracer.h>
 
@@ -105,7 +106,7 @@ static const HandlerMetadata s_syscall_table[] = {
 ErrorOr<FlatPtr> handle(RegisterState& regs, FlatPtr function, FlatPtr arg1, FlatPtr arg2, FlatPtr arg3, FlatPtr arg4)
 {
     VERIFY_INTERRUPTS_ENABLED();
-    auto current_thread = Thread::current();
+    auto* current_thread = Thread::current();
     auto& process = current_thread->process();
     current_thread->did_syscall();
 
@@ -164,8 +165,11 @@ ErrorOr<FlatPtr> handle(RegisterState& regs, FlatPtr function, FlatPtr arg1, Fla
 
 NEVER_INLINE void syscall_handler(TrapFrame* trap)
 {
+    // Make sure SMAP protection is enabled on syscall entry.
+    clac();
+
     auto& regs = *trap->regs;
-    auto current_thread = Thread::current();
+    auto* current_thread = Thread::current();
     VERIFY(current_thread->previous_mode() == Thread::PreviousMode::UserMode);
     auto& process = current_thread->process();
     if (process.is_dying()) {
@@ -175,15 +179,12 @@ NEVER_INLINE void syscall_handler(TrapFrame* trap)
         return;
     }
 
-    if (auto tracer = process.tracer(); tracer && tracer->is_tracing_syscalls()) {
+    if (auto* tracer = process.tracer(); tracer && tracer->is_tracing_syscalls()) {
         tracer->set_trace_syscalls(false);
         process.tracer_trap(*current_thread, regs); // this triggers SIGTRAP and stops the thread!
     }
 
     current_thread->yield_if_stopped();
-
-    // Make sure SMAP protection is enabled on syscall entry.
-    clac();
 
     // Apply a random offset in the range 0-255 to the stack pointer,
     // to make kernel stacks a bit less deterministic.
@@ -219,7 +220,7 @@ NEVER_INLINE void syscall_handler(TrapFrame* trap)
         regs.set_return_reg(result.value());
     }
 
-    if (auto tracer = process.tracer(); tracer && tracer->is_tracing_syscalls()) {
+    if (auto* tracer = process.tracer(); tracer && tracer->is_tracing_syscalls()) {
         tracer->set_trace_syscalls(false);
         process.tracer_trap(*current_thread, regs); // this triggers SIGTRAP and stops the thread!
     }
@@ -233,6 +234,15 @@ NEVER_INLINE void syscall_handler(TrapFrame* trap)
 
     // Check if we're supposed to return to userspace or just die.
     current_thread->die_if_needed();
+
+    // Crash any processes which have commited a promise violation during syscall handling.
+    if (result.is_error() && result.error().code() == EPROMISEVIOLATION) {
+        VERIFY(current_thread->is_promise_violation_pending());
+        current_thread->set_promise_violation_pending(false);
+        process.crash(SIGABRT, 0);
+    } else {
+        VERIFY(!current_thread->is_promise_violation_pending());
+    }
 
     VERIFY(!g_scheduler_lock.is_locked_by_current_processor());
 }

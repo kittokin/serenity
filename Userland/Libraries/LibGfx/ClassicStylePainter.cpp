@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2020, Sarah Taube <metalflakecobaltpaint@gmail.com>
+ * Copyright (c) 2021, Filiph Sandström <filiph.sandstrom@filfatstudios.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -92,7 +93,7 @@ void ClassicStylePainter::paint_tab_button(Painter& painter, IntRect const& rect
     }
 }
 
-static void paint_button_new(Painter& painter, IntRect const& a_rect, Palette const& palette, ButtonStyle style, bool pressed, bool checked, bool hovered, bool enabled, bool focused)
+static void paint_button_new(Painter& painter, IntRect const& a_rect, Palette const& palette, ButtonStyle style, bool pressed, bool checked, bool hovered, bool enabled, bool focused, bool default_button)
 {
     Color button_color = palette.button();
     Color highlight_color = palette.threed_highlight();
@@ -110,7 +111,7 @@ static void paint_button_new(Painter& painter, IntRect const& a_rect, Palette co
     PainterStateSaver saver(painter);
 
     auto rect = a_rect;
-    if (focused) {
+    if (focused || default_button) {
         painter.draw_rect(a_rect, palette.threed_shadow2());
         rect.shrink(2, 2);
     }
@@ -164,10 +165,10 @@ static void paint_button_new(Painter& painter, IntRect const& a_rect, Palette co
     }
 }
 
-void ClassicStylePainter::paint_button(Painter& painter, IntRect const& rect, Palette const& palette, ButtonStyle button_style, bool pressed, bool hovered, bool checked, bool enabled, bool focused)
+void ClassicStylePainter::paint_button(Painter& painter, IntRect const& rect, Palette const& palette, ButtonStyle button_style, bool pressed, bool hovered, bool checked, bool enabled, bool focused, bool default_button)
 {
     if (button_style == ButtonStyle::Normal || button_style == ButtonStyle::ThickCap)
-        return paint_button_new(painter, rect, palette, button_style, pressed, checked, hovered, enabled, focused);
+        return paint_button_new(painter, rect, palette, button_style, pressed, checked, hovered, enabled, focused, default_button);
 
     if (button_style == ButtonStyle::Coolbar && !enabled)
         return;
@@ -286,8 +287,27 @@ void ClassicStylePainter::paint_window_frame(Painter& painter, IntRect const& re
     Color dark_shade = palette.threed_shadow2();
     Color mid_shade = palette.threed_shadow1();
     Color light_shade = palette.threed_highlight();
+    auto border_thickness = palette.window_border_thickness();
+    auto border_radius = palette.window_border_radius();
 
-    painter.draw_line(rect.top_left(), rect.top_right(), base_color);
+    if (border_radius > 0) {
+        // FIXME: This will draw "useless" pixels that'll get drawn over by the window contents.
+        // preferrably we should just remove the corner pixels from the completely drawn window
+        // but I don't know how to do that yet. :^)
+        painter.fill_rect_with_rounded_corners({ rect.x() - border_radius / 2,
+                                                   rect.y() - border_radius / 2,
+                                                   rect.width() + border_radius,
+                                                   rect.height() + border_radius },
+            base_color, border_radius);
+        return;
+    }
+
+    painter.draw_rect_with_thickness({ rect.x() + border_thickness / 2,
+                                         rect.y() + border_thickness / 2,
+                                         rect.width() - border_thickness,
+                                         rect.height() - border_thickness },
+        base_color, border_thickness);
+
     painter.draw_line(rect.top_left().translated(0, 1), rect.bottom_left(), base_color);
     painter.draw_line(rect.top_left().translated(1, 1), rect.top_right().translated(-1, 1), light_shade);
     painter.draw_line(rect.top_left().translated(1, 1), rect.bottom_left().translated(1, -1), light_shade);

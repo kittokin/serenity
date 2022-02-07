@@ -106,8 +106,9 @@ private:
     void skip_empty_indices();
 
     const IndexedProperties& m_indexed_properties;
-    u32 m_index;
-    bool m_skip_empty;
+    Vector<u32> m_cached_indices;
+    u32 m_index { 0 };
+    bool m_skip_empty { false };
 };
 
 class IndexedProperties {
@@ -123,9 +124,6 @@ public:
     Optional<ValueAndAttributes> get(u32 index) const;
     void put(u32 index, Value value, PropertyAttributes attributes = default_attributes);
     void remove(u32 index);
-
-    ValueAndAttributes take_first(Object* this_object);
-    ValueAndAttributes take_last(Object* this_object);
 
     void append(Value value, PropertyAttributes attributes = default_attributes) { put(array_like_size(), value, attributes); }
 

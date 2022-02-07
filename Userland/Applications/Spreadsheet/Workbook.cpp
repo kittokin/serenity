@@ -8,23 +8,28 @@
 #include "ExportDialog.h"
 #include "ImportDialog.h"
 #include "JSIntegration.h"
+#include "LibGUI/MessageBox.h"
 #include "Readers/CSV.h"
 #include <AK/ByteBuffer.h>
+#include <AK/StringView.h>
 #include <LibCore/File.h>
 #include <LibCore/MimeData.h>
+#include <LibFileSystemAccessClient/Client.h>
 #include <LibGUI/TextBox.h>
+#include <LibGUI/Window.h>
 #include <LibJS/Runtime/GlobalObject.h>
 
 namespace Spreadsheet {
 
-Workbook::Workbook(NonnullRefPtrVector<Sheet>&& sheets)
+Workbook::Workbook(NonnullRefPtrVector<Sheet>&& sheets, GUI::Window& parent_window)
     : m_sheets(move(sheets))
     , m_vm(JS::VM::create())
     , m_interpreter(JS::Interpreter::create<JS::GlobalObject>(m_vm))
     , m_interpreter_scope(*m_interpreter)
     , m_main_execution_context(m_vm->heap())
+    , m_parent_window(parent_window)
 {
-    m_workbook_object = m_vm->heap().allocate<WorkbookObject>(m_interpreter->global_object(), *this);
+    m_workbook_object = m_vm->heap().allocate<WorkbookObject>(m_interpreter->global_object(), *this, m_interpreter->global_object());
     m_interpreter->global_object().define_direct_property("workbook", workbook_object(), JS::default_attributes);
 
     m_main_execution_context.current_node = nullptr;
@@ -35,6 +40,8 @@ Workbook::Workbook(NonnullRefPtrVector<Sheet>&& sheets)
     m_main_execution_context.realm = &m_interpreter->realm();
     m_main_execution_context.is_strict_mode = true;
     MUST(m_vm->push_execution_context(m_main_execution_context, m_interpreter->global_object()));
+
+    m_vm->enable_default_host_import_module_dynamically_hook();
 }
 
 bool Workbook::set_filename(const String& filename)
@@ -46,31 +53,35 @@ bool Workbook::set_filename(const String& filename)
     return true;
 }
 
-Result<bool, String> Workbook::load(StringView filename)
+Result<bool, String> Workbook::open_file(Core::File& file)
 {
-    auto file_or_error = Core::File::open(filename, Core::OpenMode::ReadOnly);
-    if (file_or_error.is_error()) {
-        StringBuilder sb;
-        sb.append("Failed to open ");
-        sb.append(filename);
-        sb.append(" for reading. Error: ");
-        sb.appendff("{}", file_or_error.error());
-
-        return sb.to_string();
-    }
-
-    auto mime = Core::guess_mime_type_based_on_filename(filename);
+    auto mime = Core::guess_mime_type_based_on_filename(file.filename());
 
     // Make an import dialog, we might need to import it.
-    auto result = ImportDialog::make_and_run_for(mime, file_or_error.value(), *this);
+    auto result = ImportDialog::make_and_run_for(m_parent_window, mime, file, *this);
     if (result.is_error())
         return result.error();
 
     m_sheets = result.release_value();
 
-    set_filename(filename);
+    set_filename(file.filename());
 
     return true;
+}
+
+Result<bool, String> Workbook::load(StringView filename)
+{
+    auto response = FileSystemAccessClient::Client::the().try_request_file_read_only_approved(&m_parent_window, filename);
+    if (response.is_error()) {
+        StringBuilder sb;
+        sb.append("Failed to open ");
+        sb.append(filename);
+        sb.append(" for reading. Error: ");
+        sb.appendff("{}", response.error());
+        return sb.to_string();
+    }
+
+    return open_file(*response.value());
 }
 
 Result<bool, String> Workbook::save(StringView filename)

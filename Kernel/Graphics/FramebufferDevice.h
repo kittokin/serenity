@@ -17,7 +17,6 @@
 namespace Kernel {
 
 class FramebufferDevice final : public GenericFramebufferDevice {
-    AK_MAKE_ETERNAL
     friend class DeviceManagement;
 
 public:
@@ -41,6 +40,8 @@ public:
     virtual ErrorOr<size_t> vertical_offset(size_t head) const override;
     virtual ErrorOr<bool> vertical_offsetted(size_t head) const override;
 
+    virtual ErrorOr<ByteBuffer> get_edid(size_t head) const override;
+
 private:
     virtual ErrorOr<void> set_head_resolution(size_t head, size_t width, size_t height, size_t pitch) override;
     virtual ErrorOr<void> set_head_buffer(size_t head, bool second_buffer) override;
@@ -55,7 +56,7 @@ private:
     size_t m_framebuffer_height { 0 };
 
     Spinlock m_activation_lock;
-    mutable Mutex m_buffer_offset_lock;
+    mutable Spinlock m_buffer_offset_lock;
 
     RefPtr<Memory::AnonymousVMObject> m_real_framebuffer_vmobject;
     RefPtr<Memory::AnonymousVMObject> m_swapped_framebuffer_vmobject;

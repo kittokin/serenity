@@ -89,7 +89,7 @@ public:
     virtual void handle_mousedown(Badge<EventHandler>, const Gfx::IntPoint&, unsigned button, unsigned modifiers);
     virtual void handle_mouseup(Badge<EventHandler>, const Gfx::IntPoint&, unsigned button, unsigned modifiers);
     virtual void handle_mousemove(Badge<EventHandler>, const Gfx::IntPoint&, unsigned buttons, unsigned modifiers);
-    virtual bool handle_mousewheel(Badge<EventHandler>, const Gfx::IntPoint&, unsigned buttons, unsigned modifiers, int wheel_delta);
+    virtual bool handle_mousewheel(Badge<EventHandler>, const Gfx::IntPoint&, unsigned buttons, unsigned modifiers, int wheel_delta_x, int wheel_delta_y);
 
     virtual void before_children_paint(PaintContext&, PaintPhase) {};
     virtual void paint(PaintContext&, PaintPhase) = 0;
@@ -134,8 +134,6 @@ public:
     void removed_from(Node&) { }
     void children_changed() { }
 
-    virtual void split_into_lines(InlineFormattingContext&, LayoutMode);
-
     bool is_visible() const { return m_visible; }
     void set_visible(bool visible) { m_visible = visible; }
 
@@ -145,8 +143,6 @@ public:
     void set_children_are_inline(bool value) { m_children_are_inline = value; }
 
     Gfx::FloatPoint box_type_agnostic_position() const;
-
-    float font_size() const;
 
     enum class SelectionState {
         None,        // No selection
@@ -204,7 +200,6 @@ public:
 
     const Gfx::Font& font() const { return *m_font; }
     float line_height() const { return m_line_height; }
-    float font_size() const { return m_font_size; }
     Vector<CSS::BackgroundLayerData> const& background_layers() const { return computed_values().background_layers(); }
     const CSS::ImageStyleValue* list_style_image() const { return m_list_style_image; }
 
@@ -221,7 +216,6 @@ private:
     CSS::ComputedValues m_computed_values;
     RefPtr<Gfx::Font> m_font;
     float m_line_height { 0 };
-    float m_font_size { 0 };
     RefPtr<CSS::ImageStyleValue> m_list_style_image;
 
     bool m_has_definite_height { false };
@@ -253,13 +247,6 @@ inline const Gfx::Font& Node::font() const
     if (m_has_style)
         return static_cast<const NodeWithStyle*>(this)->font();
     return parent()->font();
-}
-
-inline float Node::font_size() const
-{
-    if (m_has_style)
-        return static_cast<const NodeWithStyle*>(this)->font_size();
-    return parent()->font_size();
 }
 
 inline const CSS::ImmutableComputedValues& Node::computed_values() const

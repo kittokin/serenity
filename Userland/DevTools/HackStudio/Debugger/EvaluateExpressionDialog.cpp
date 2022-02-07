@@ -108,25 +108,24 @@ void EvaluateExpressionDialog::handle_evaluation(const String& expression)
     m_output_container->remove_all_children();
     m_output_view->update();
 
-    auto parser = JS::Parser(JS::Lexer(expression));
-    auto program = parser.parse_program();
+    auto script_or_error = JS::Script::parse(expression, m_interpreter->realm());
 
     StringBuilder output_html;
-    if (parser.has_errors()) {
-        auto error = parser.errors()[0];
+    auto result = JS::ThrowCompletionOr<JS::Value> { JS::js_undefined() };
+    if (script_or_error.is_error()) {
+        auto error = script_or_error.error()[0];
         auto hint = error.source_location_hint(expression);
         if (!hint.is_empty())
             output_html.append(String::formatted("<pre>{}</pre>", escape_html_entities(hint)));
-        m_interpreter->vm().throw_exception<JS::SyntaxError>(m_interpreter->global_object(), error.to_string());
+        result = m_interpreter->vm().throw_completion<JS::SyntaxError>(m_interpreter->global_object(), error.to_string());
     } else {
-        m_interpreter->run(m_interpreter->global_object(), *program);
+        result = m_interpreter->run(script_or_error.value());
     }
 
-    if (m_interpreter->exception()) {
-        auto* exception = m_interpreter->exception();
+    if (result.is_error()) {
         m_interpreter->vm().clear_exception();
         output_html.append("Uncaught exception: ");
-        auto error = exception->value();
+        auto error = *result.throw_completion().value();
         if (error.is_object())
             output_html.append(JS::MarkupGenerator::html_from_error(error.as_object()));
         else
@@ -135,7 +134,7 @@ void EvaluateExpressionDialog::handle_evaluation(const String& expression)
         return;
     }
 
-    set_output(JS::MarkupGenerator::html_from_value(m_interpreter->vm().last_value()));
+    set_output(JS::MarkupGenerator::html_from_value(result.value()));
 }
 
 void EvaluateExpressionDialog::set_output(StringView html)

@@ -20,10 +20,8 @@ static IDAllocator s_menu_id_allocator;
 
 static HashMap<int, Menu*>& all_menus()
 {
-    static HashMap<int, Menu*>* map;
-    if (!map)
-        map = new HashMap<int, Menu*>();
-    return *map;
+    static HashMap<int, Menu*> s_map;
+    return s_map;
 }
 
 Menu* Menu::from_menu_id(int menu_id)
@@ -162,6 +160,14 @@ Action* Menu::action_at(size_t index)
     if (index >= m_items.size())
         return nullptr;
     return m_items[index].action();
+}
+
+void Menu::set_children_actions_enabled(bool enabled)
+{
+    for (auto& item : m_items) {
+        if (item.action())
+            item.action()->set_enabled(enabled);
+    }
 }
 
 void Menu::visibility_did_change(Badge<WindowServerConnection>, bool visible)

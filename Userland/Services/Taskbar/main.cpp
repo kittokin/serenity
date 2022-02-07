@@ -17,6 +17,7 @@
 #include <LibCore/StandardPaths.h>
 #include <LibCore/System.h>
 #include <LibDesktop/AppFile.h>
+#include <LibDesktop/Launcher.h>
 #include <LibGUI/ActionGroup.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Menu.h>
@@ -46,8 +47,10 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
             ;
     });
 
-    // We need to obtain the WM connection here as well before the pledge shortening.
+    TRY(Core::System::pledge("stdio recvfd sendfd proc exec rpath unix"));
+
     GUI::WindowManagerServerConnection::the();
+    Desktop::Launcher::ensure_connection();
 
     TRY(Core::System::pledge("stdio recvfd sendfd proc exec rpath"));
 

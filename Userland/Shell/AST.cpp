@@ -106,7 +106,7 @@ ErrorOr<void> AK::Formatter<Shell::AST::Command>::format(FormatBuilder& builder,
 
 namespace Shell::AST {
 
-static inline void print_indented(const String& str, int indent)
+static inline void print_indented(StringView str, int indent)
 {
     dbgln("{}{}", String::repeated(' ', indent * 2), str);
 }
@@ -1190,7 +1190,7 @@ RefPtr<Value> ForLoop::run(RefPtr<Shell> shell)
             return IterationDecision::Continue;
         }
 
-        if (!shell->has_error(Shell::ShellError::None))
+        if (shell->has_any_error() && !shell->has_error(Shell::ShellError::InternalControlFlowInterrupted))
             return IterationDecision::Break;
 
         if (block_value->is_job()) {
@@ -1199,13 +1199,12 @@ RefPtr<Value> ForLoop::run(RefPtr<Shell> shell)
                 return IterationDecision::Continue;
             shell->block_on_job(job);
 
-            if (job->signaled()) {
-                if (job->termination_signal() == SIGINT)
+            if (shell->has_any_error()) {
+                if (shell->has_error(Shell::ShellError::InternalControlFlowInterrupted))
                     ++consecutive_interruptions;
-                else
+
+                if (shell->has_error(Shell::ShellError::InternalControlFlowKilled))
                     return IterationDecision::Break;
-            } else {
-                consecutive_interruptions = 0;
             }
         }
         return IterationDecision::Continue;
@@ -1216,11 +1215,16 @@ RefPtr<Value> ForLoop::run(RefPtr<Shell> shell)
         Optional<StringView> index_name = m_index_variable.has_value() ? Optional<StringView>(m_index_variable->name) : Optional<StringView>();
         size_t i = 0;
         m_iterated_expression->for_each_entry(shell, [&](auto value) {
-            if (consecutive_interruptions == 2)
+            if (consecutive_interruptions >= 2)
                 return IterationDecision::Break;
 
-            if (shell && shell->has_any_error())
-                return IterationDecision::Break;
+            if (shell) {
+                if (shell->has_error(Shell::ShellError::InternalControlFlowInterrupted))
+                    shell->take_error();
+
+                if (shell->has_any_error())
+                    return IterationDecision::Break;
+            }
 
             RefPtr<Value> block_value;
 
@@ -1240,11 +1244,16 @@ RefPtr<Value> ForLoop::run(RefPtr<Shell> shell)
         });
     } else {
         for (;;) {
-            if (shell && shell->has_any_error())
+            if (consecutive_interruptions >= 2)
                 break;
 
-            if (consecutive_interruptions == 2)
-                break;
+            if (shell) {
+                if (shell->has_error(Shell::ShellError::InternalControlFlowInterrupted))
+                    shell->take_error();
+
+                if (shell->has_any_error())
+                    break;
+            }
 
             RefPtr<Value> block_value = m_block->run(shell);
             if (run(block_value) == IterationDecision::Break)
@@ -1645,7 +1654,7 @@ void Execute::for_each_entry(RefPtr<Shell> shell, Function<IterationDecision(Non
                         }
                 } else {
                     auto entry_result = ByteBuffer::create_uninitialized(line_end + ifs.length());
-                    if (!entry_result.has_value()) {
+                    if (entry_result.is_error()) {
                         loop.quit(Break);
                         notifier->set_enabled(false);
                         return Break;
@@ -1737,7 +1746,7 @@ void Execute::for_each_entry(RefPtr<Shell> shell, Function<IterationDecision(Non
 
             if (!stream.eof()) {
                 auto entry_result = ByteBuffer::create_uninitialized(stream.size());
-                if (!entry_result.has_value()) {
+                if (entry_result.is_error()) {
                     shell->raise_error(Shell::ShellError::OutOfMemory, {}, position());
                     return;
                 }
@@ -2834,6 +2843,9 @@ void SimpleVariable::highlight_in_editor(Line::Editor& editor, Shell& shell, Hig
 
 HitTestResult SimpleVariable::hit_test_position(size_t offset) const
 {
+    if (!position().contains(offset))
+        return {};
+
     if (m_slice && m_slice->position().contains(offset))
         return m_slice->hit_test_position(offset);
 
@@ -3001,23 +3013,36 @@ void Juxtaposition::highlight_in_editor(Line::Editor& editor, Shell& shell, High
 Vector<Line::CompletionSuggestion> Juxtaposition::complete_for_editor(Shell& shell, size_t offset, const HitTestResult& hit_test_result)
 {
     auto matching_node = hit_test_result.matching_node;
-    // '~/foo/bar' is special, we have to actually resolve the tilde
-    // then complete the bareword with that path prefix.
-    if (m_right->is_bareword() && m_left->is_tilde()) {
-        auto tilde_value = m_left->run(shell)->resolve_as_list(shell)[0];
-
-        auto corrected_offset = offset - matching_node->position().start_offset;
-        auto* node = static_cast<BarewordLiteral*>(matching_node.ptr());
-
-        if (corrected_offset > node->text().length())
-            return {};
-
-        auto text = node->text().substring(1, node->text().length() - 1);
-
-        return shell.complete_path(tilde_value, text, corrected_offset - 1, Shell::ExecutableOnly::No);
+    if (m_left->would_execute() || m_right->would_execute()) {
+        return {};
     }
 
-    return Node::complete_for_editor(shell, offset, hit_test_result);
+    // '~/foo/bar' is special, we have to actually resolve the tilde
+    // then complete the bareword with that path prefix.
+    auto left_values = m_left->run(shell)->resolve_as_list(shell);
+
+    if (left_values.is_empty())
+        return m_right->complete_for_editor(shell, offset, hit_test_result);
+
+    auto& left_value = left_values.first();
+
+    auto right_values = m_right->run(shell)->resolve_as_list(shell);
+    StringView right_value {};
+
+    auto corrected_offset = offset - matching_node->position().start_offset;
+
+    if (!right_values.is_empty())
+        right_value = right_values.first();
+
+    if (m_left->is_tilde() && !right_value.is_empty()) {
+        right_value = right_value.substring_view(1);
+        corrected_offset--;
+    }
+
+    if (corrected_offset > right_value.length())
+        return {};
+
+    return shell.complete_path(left_value, right_value, corrected_offset, Shell::ExecutableOnly::No);
 }
 
 HitTestResult Juxtaposition::hit_test_position(size_t offset) const
@@ -3555,7 +3580,7 @@ Vector<String> SpecialVariableValue::resolve_as_list(RefPtr<Shell> shell)
 
     switch (m_name) {
     case '?':
-        return { resolve_slices(shell, String::number(shell->last_return_code), m_slices) };
+        return { resolve_slices(shell, String::number(shell->last_return_code.value_or(0)), m_slices) };
     case '$':
         return { resolve_slices(shell, String::number(getpid()), m_slices) };
     case '*':

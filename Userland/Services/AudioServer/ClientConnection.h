@@ -27,7 +27,7 @@ public:
 
     void did_finish_playing_buffer(Badge<ClientAudioStream>, int buffer_id);
     void did_change_client_volume(Badge<ClientAudioStream>, double volume);
-    void did_change_muted_state(Badge<Mixer>, bool muted);
+    void did_change_main_mix_muted_state(Badge<Mixer>, bool muted);
     void did_change_main_mix_volume(Badge<Mixer>, double volume);
 
     virtual void die() override;
@@ -35,7 +35,7 @@ public:
     static void for_each(Function<void(ClientConnection&)>);
 
 private:
-    explicit ClientConnection(NonnullRefPtr<Core::LocalSocket>, int client_id, Mixer& mixer);
+    explicit ClientConnection(NonnullOwnPtr<Core::Stream::LocalSocket>, int client_id, Mixer& mixer);
 
     virtual Messages::AudioServer::GetMainMixVolumeResponse get_main_mix_volume() override;
     virtual void set_main_mix_volume(double) override;
@@ -47,8 +47,10 @@ private:
     virtual void set_paused(bool) override;
     virtual void clear_buffer(bool) override;
     virtual Messages::AudioServer::GetPlayingBufferResponse get_playing_buffer() override;
-    virtual Messages::AudioServer::GetMutedResponse get_muted() override;
-    virtual void set_muted(bool) override;
+    virtual Messages::AudioServer::IsMainMixMutedResponse is_main_mix_muted() override;
+    virtual void set_main_mix_muted(bool) override;
+    virtual Messages::AudioServer::IsSelfMutedResponse is_self_muted() override;
+    virtual void set_self_muted(bool) override;
     virtual void set_sample_rate(u32 sample_rate) override;
     virtual Messages::AudioServer::GetSampleRateResponse get_sample_rate() override;
 

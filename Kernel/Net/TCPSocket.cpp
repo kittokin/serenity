@@ -29,6 +29,22 @@ void TCPSocket::for_each(Function<void(const TCPSocket&)> callback)
     });
 }
 
+bool TCPSocket::unref() const
+{
+    bool did_hit_zero = sockets_by_tuple().with_exclusive([&](auto& table) {
+        if (deref_base())
+            return false;
+        table.remove(tuple());
+        const_cast<TCPSocket&>(*this).revoke_weak_ptrs();
+        return true;
+    });
+    if (did_hit_zero) {
+        const_cast<TCPSocket&>(*this).will_be_destroyed();
+        delete this;
+    }
+    return did_hit_zero;
+}
+
 void TCPSocket::set_state(State new_state)
 {
     dbgln_if(TCP_SOCKET_DEBUG, "TCPSocket({}) state moving from {} to {}", this, to_string(m_state), to_string(new_state));
@@ -145,10 +161,6 @@ TCPSocket::TCPSocket(int protocol, NonnullOwnPtr<DoubleBuffer> receive_buffer, N
 
 TCPSocket::~TCPSocket()
 {
-    sockets_by_tuple().with_exclusive([&](auto& table) {
-        table.remove(tuple());
-    });
-
     dequeue_for_retransmit();
 
     dbgln_if(TCP_SOCKET_DEBUG, "~TCPSocket in state {}", to_string(state()));
@@ -159,6 +171,13 @@ ErrorOr<NonnullRefPtr<TCPSocket>> TCPSocket::try_create(int protocol, NonnullOwn
     // Note: Scratch buffer is only used for SOCK_STREAM sockets.
     auto scratch_buffer = TRY(KBuffer::try_create_with_size(65536));
     return adopt_nonnull_ref_or_enomem(new (nothrow) TCPSocket(protocol, move(receive_buffer), move(scratch_buffer)));
+}
+
+ErrorOr<size_t> TCPSocket::protocol_size(ReadonlyBytes raw_ipv4_packet)
+{
+    auto& ipv4_packet = *reinterpret_cast<const IPv4Packet*>(raw_ipv4_packet.data());
+    auto& tcp_packet = *static_cast<const TCPPacket*>(ipv4_packet.payload());
+    return raw_ipv4_packet.size() - sizeof(IPv4Packet) - tcp_packet.header_size();
 }
 
 ErrorOr<size_t> TCPSocket::protocol_receive(ReadonlyBytes raw_ipv4_packet, UserOrKernelBuffer& buffer, size_t buffer_size, [[maybe_unused]] int flags)
@@ -482,8 +501,8 @@ bool TCPSocket::protocol_is_disconnected() const
 void TCPSocket::shut_down_for_writing()
 {
     if (state() == State::Established) {
-        dbgln_if(TCP_SOCKET_DEBUG, " Sending FIN/ACK from Established and moving into FinWait1");
-        [[maybe_unused]] auto rc = send_tcp_packet(TCPFlags::FIN | TCPFlags::ACK);
+        dbgln_if(TCP_SOCKET_DEBUG, " Sending FIN from Established and moving into FinWait1");
+        (void)send_tcp_packet(TCPFlags::FIN);
         set_state(State::FinWait1);
     } else {
         dbgln(" Shutting down TCPSocket for writing but not moving to FinWait1 since state is {}", to_string(state()));
@@ -595,7 +614,7 @@ void TCPSocket::retransmit_packets()
     });
 }
 
-bool TCPSocket::can_write(const OpenFileDescription& file_description, size_t size) const
+bool TCPSocket::can_write(const OpenFileDescription& file_description, u64 size) const
 {
     if (!IPv4Socket::can_write(file_description, size))
         return false;

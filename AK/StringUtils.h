@@ -7,9 +7,15 @@
 
 #pragma once
 
+#include <AK/Concepts.h>
 #include <AK/Forward.h>
 
 namespace AK {
+
+namespace Detail {
+template<Concepts::AnyString T, Concepts::AnyString U>
+inline constexpr bool IsHashCompatible<T, U> = true;
+}
 
 enum class CaseSensitivity {
     CaseInsensitive,
@@ -50,6 +56,8 @@ template<typename T = unsigned>
 Optional<T> convert_to_uint(StringView, TrimWhitespace = TrimWhitespace::Yes);
 template<typename T = unsigned>
 Optional<T> convert_to_uint_from_hex(StringView, TrimWhitespace = TrimWhitespace::Yes);
+template<typename T = unsigned>
+Optional<T> convert_to_uint_from_octal(StringView, TrimWhitespace = TrimWhitespace::Yes);
 bool equals_ignoring_case(StringView, StringView);
 bool ends_with(StringView a, StringView b, CaseSensitivity);
 bool starts_with(StringView, StringView, CaseSensitivity);

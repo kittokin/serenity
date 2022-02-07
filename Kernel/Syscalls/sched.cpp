@@ -5,13 +5,14 @@
  */
 
 #include <Kernel/Process.h>
+#include <Kernel/Scheduler.h>
 
 namespace Kernel {
 
 ErrorOr<FlatPtr> Process::sys$yield()
 {
     VERIFY_NO_PROCESS_BIG_LOCK(this);
-    REQUIRE_PROMISE(stdio);
+    TRY(require_promise(Pledge::stdio));
     Thread::current()->yield_without_releasing_big_lock();
     return 0;
 }
@@ -19,11 +20,10 @@ ErrorOr<FlatPtr> Process::sys$yield()
 ErrorOr<FlatPtr> Process::sys$sched_setparam(int pid, Userspace<const struct sched_param*> user_param)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(proc);
-    struct sched_param desired_param;
-    TRY(copy_from_user(&desired_param, user_param));
+    TRY(require_promise(Pledge::proc));
+    auto param = TRY(copy_typed_from_user(user_param));
 
-    if (desired_param.sched_priority < THREAD_PRIORITY_MIN || desired_param.sched_priority > THREAD_PRIORITY_MAX)
+    if (param.sched_priority < THREAD_PRIORITY_MIN || param.sched_priority > THREAD_PRIORITY_MAX)
         return EINVAL;
 
     auto* peer = Thread::current();
@@ -37,14 +37,14 @@ ErrorOr<FlatPtr> Process::sys$sched_setparam(int pid, Userspace<const struct sch
     if (!is_superuser() && euid() != peer->process().uid() && uid() != peer->process().uid())
         return EPERM;
 
-    peer->set_priority((u32)desired_param.sched_priority);
+    peer->set_priority((u32)param.sched_priority);
     return 0;
 }
 
 ErrorOr<FlatPtr> Process::sys$sched_getparam(pid_t pid, Userspace<struct sched_param*> user_param)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(proc);
+    TRY(require_promise(Pledge::proc));
     int priority;
     {
         auto* peer = Thread::current();

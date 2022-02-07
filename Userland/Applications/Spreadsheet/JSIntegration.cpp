@@ -18,7 +18,7 @@ namespace Spreadsheet {
 Optional<FunctionAndArgumentIndex> get_function_and_argument_index(StringView source)
 {
     JS::Lexer lexer { source };
-    // Track <identifier> <OpenParen>'s, and how many complete expressions are inside the parenthesised expression.
+    // Track <identifier> <OpenParen>'s, and how many complete expressions are inside the parenthesized expression.
     Vector<size_t> state;
     StringView last_name;
     Vector<StringView> names;
@@ -355,8 +355,8 @@ JS_DEFINE_NATIVE_FUNCTION(SheetGlobalObject::get_column_bound)
     return JS::Value(bounds.row);
 }
 
-WorkbookObject::WorkbookObject(Workbook& workbook)
-    : JS::Object(*JS::Object::create(workbook.vm().interpreter().global_object(), workbook.vm().interpreter().global_object().object_prototype()))
+WorkbookObject::WorkbookObject(Workbook& workbook, JS::GlobalObject& global_object)
+    : JS::Object(*JS::Object::create(global_object, global_object.object_prototype()))
     , m_workbook(workbook)
 {
 }

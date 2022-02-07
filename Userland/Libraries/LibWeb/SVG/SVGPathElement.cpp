@@ -443,11 +443,8 @@ SVGPathElement::SVGPathElement(DOM::Document& document, QualifiedName qualified_
 {
 }
 
-RefPtr<Layout::Node> SVGPathElement::create_layout_node()
+RefPtr<Layout::Node> SVGPathElement::create_layout_node(NonnullRefPtr<CSS::StyleProperties> style)
 {
-    auto style = document().style_computer().compute_style(*this);
-    if (style->display().is_none())
-        return nullptr;
     return adopt_ref(*new Layout::SVGPathBox(document(), *this, move(style)));
 }
 
@@ -465,6 +462,7 @@ Gfx::Path& SVGPathElement::get_path()
         return m_path.value();
 
     Gfx::Path path;
+    PathInstructionType last_instruction = PathInstructionType::Invalid;
 
     for (auto& instruction : m_instructions) {
         // If the first path element uses relative coordinates, we treat them as absolute by making them relative to (0, 0).
@@ -551,7 +549,8 @@ Gfx::Path& SVGPathElement::get_path()
         case PathInstructionType::SmoothQuadraticBezierCurve: {
             clear_last_control_point = false;
 
-            if (m_previous_control_point.is_null()) {
+            if (m_previous_control_point.is_null()
+                || ((last_instruction != PathInstructionType::QuadraticBezierCurve) && (last_instruction != PathInstructionType::SmoothQuadraticBezierCurve))) {
                 m_previous_control_point = last_point;
             }
 
@@ -572,6 +571,8 @@ Gfx::Path& SVGPathElement::get_path()
         }
 
         case PathInstructionType::Curve: {
+            clear_last_control_point = false;
+
             Gfx::FloatPoint c1 = { data[0], data[1] };
             Gfx::FloatPoint c2 = { data[2], data[3] };
             Gfx::FloatPoint p2 = { data[4], data[5] };
@@ -581,13 +582,34 @@ Gfx::Path& SVGPathElement::get_path()
                 c2 += last_point;
             }
             path.cubic_bezier_curve_to(c1, c2, p2);
+
+            m_previous_control_point = c2;
             break;
         }
 
-        case PathInstructionType::SmoothCurve:
-            // Instead of crashing the browser every time we come across an SVG
-            // with these path instructions, let's just skip them
-            continue;
+        case PathInstructionType::SmoothCurve: {
+            clear_last_control_point = false;
+
+            if (m_previous_control_point.is_null()
+                || ((last_instruction != PathInstructionType::Curve) && (last_instruction != PathInstructionType::SmoothCurve))) {
+                m_previous_control_point = last_point;
+            }
+
+            auto reflected_previous_control_x = last_point.dx_relative_to(m_previous_control_point);
+            auto reflected_previous_control_y = last_point.dy_relative_to(m_previous_control_point);
+            Gfx::FloatPoint c1 = Gfx::FloatPoint { reflected_previous_control_x, reflected_previous_control_y };
+            Gfx::FloatPoint c2 = { data[0], data[1] };
+            Gfx::FloatPoint p2 = { data[2], data[3] };
+            if (!absolute) {
+                p2 += last_point;
+                c1 += last_point;
+                c2 += last_point;
+            }
+            path.cubic_bezier_curve_to(c1, c2, p2);
+
+            m_previous_control_point = c2;
+            break;
+        }
         case PathInstructionType::Invalid:
             VERIFY_NOT_REACHED();
         }
@@ -595,6 +617,7 @@ Gfx::Path& SVGPathElement::get_path()
         if (clear_last_control_point) {
             m_previous_control_point = Gfx::FloatPoint {};
         }
+        last_instruction = instruction.type;
     }
 
     m_path = path;

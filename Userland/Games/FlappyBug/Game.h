@@ -28,8 +28,6 @@ public:
     Function<u32(u32)> on_game_end;
 
 private:
-    Game();
-
     virtual void paint_event(GUI::PaintEvent&) override;
     virtual void keydown_event(GUI::KeyEvent&) override;
     virtual void mousedown_event(GUI::MouseEvent&) override;
@@ -41,21 +39,37 @@ private:
     bool ready_to_start() const;
     void player_input();
 
+public:
     struct Bug {
         const float x { 50 };
         const float radius { 16 };
         const float starting_y { 200 };
-        NonnullRefPtr<Gfx::Bitmap> falling_bitmap { Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/falling.png").release_value_but_fixme_should_propagate_errors() };
-        NonnullRefPtr<Gfx::Bitmap> flapping_bitmap { Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/flapping.png").release_value_but_fixme_should_propagate_errors() };
+        NonnullRefPtr<Gfx::Bitmap> falling_bitmap;
+        NonnullRefPtr<Gfx::Bitmap> flapping_bitmap;
         float y {};
         float velocity {};
+
+    private:
+        Bug(NonnullRefPtr<Gfx::Bitmap> falling_bitmap_value, NonnullRefPtr<Gfx::Bitmap> flapping_bitmap_value)
+            : falling_bitmap(move(falling_bitmap_value))
+            , flapping_bitmap(move(flapping_bitmap_value))
+        {
+        }
+
+    public:
+        static ErrorOr<Bug> construct()
+        {
+            NonnullRefPtr<Gfx::Bitmap> falling_bitmap = TRY(Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/falling.png"));
+            NonnullRefPtr<Gfx::Bitmap> flapping_bitmap = TRY(Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/flapping.png"));
+            return Bug(move(falling_bitmap), move(flapping_bitmap));
+        }
 
         void reset()
         {
             y = starting_y;
         }
 
-        RefPtr<Gfx::Bitmap> current_bitmap() const
+        NonnullRefPtr<Gfx::Bitmap> current_bitmap() const
         {
             return velocity < 0 ? falling_bitmap : flapping_bitmap;
         }
@@ -108,19 +122,28 @@ private:
     };
 
     struct Cloud {
-        Vector<NonnullRefPtr<Gfx::Bitmap>> const cloud_bitmaps {
-            Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/cloud_0.png").release_value_but_fixme_should_propagate_errors(),
-            Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/cloud_1.png").release_value_but_fixme_should_propagate_errors(),
-            Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/cloud_2.png").release_value_but_fixme_should_propagate_errors(),
-        };
+        Vector<NonnullRefPtr<Gfx::Bitmap>> const cloud_bitmaps;
         float x {};
         float y {};
         int bitmap_id {};
 
-        Cloud()
+    private:
+        Cloud(Vector<NonnullRefPtr<Gfx::Bitmap>> const cloud_bitmaps_value)
+            : cloud_bitmaps(move(cloud_bitmaps_value))
         {
             reset();
             x = get_random_uniform(game_width);
+        }
+
+    public:
+        static ErrorOr<Cloud> construct()
+        {
+            Vector<NonnullRefPtr<Gfx::Bitmap>> const cloud_bitmaps {
+                TRY(Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/cloud_0.png")),
+                TRY(Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/cloud_1.png")),
+                TRY(Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/cloud_2.png")),
+            };
+            return Cloud(move(cloud_bitmaps));
         }
 
         void reset()
@@ -130,7 +153,7 @@ private:
             y = get_random_uniform(game_height / 2) + bitmap()->height();
         }
 
-        RefPtr<Gfx::Bitmap> bitmap() const
+        NonnullRefPtr<Gfx::Bitmap> bitmap() const
         {
             return cloud_bitmaps[bitmap_id];
         }
@@ -141,6 +164,7 @@ private:
         }
     };
 
+private:
     Bug m_bug;
     Obstacle m_obstacle;
     Cloud m_cloud;
@@ -152,6 +176,8 @@ private:
     NonnullRefPtr<Gfx::Bitmap> m_background_bitmap { Gfx::Bitmap::try_load_from_file("/res/icons/flappybug/background.png").release_value_but_fixme_should_propagate_errors() };
     const Gfx::IntRect m_score_rect { 10, 10, 20, 20 };
     const Gfx::IntRect m_text_rect { game_width / 2 - 80, game_height / 2 - 40, 160, 80 };
+
+    Game(Bug, Cloud);
 };
 
 }

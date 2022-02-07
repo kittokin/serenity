@@ -6,6 +6,7 @@
  */
 
 #include <LibGUI/DisplayLink.h>
+#include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/ResolvedCSSStyleDeclaration.h>
@@ -171,7 +172,7 @@ void Window::timer_did_fire(Badge<Timer>, Timer& timer)
         VERIFY(wrapper());
         auto& vm = wrapper()->vm();
 
-        [[maybe_unused]] auto rc = vm.call(strong_timer->callback(), wrapper());
+        [[maybe_unused]] auto rc = JS::call(wrapper()->global_object(), strong_timer->callback(), wrapper());
         if (vm.exception())
             vm.clear_exception();
     });
@@ -202,7 +203,7 @@ i32 Window::request_animation_frame(JS::FunctionObject& js_callback)
     auto callback = request_animation_frame_driver().add([this, handle = JS::make_handle(&js_callback)](i32 id) mutable {
         auto& function = *handle.cell();
         auto& vm = function.vm();
-        (void)vm.call(function, JS::js_undefined(), JS::Value(performance().now()));
+        (void)JS::call(function.global_object(), function, JS::js_undefined(), JS::Value(performance().now()));
         if (vm.exception())
             vm.clear_exception();
         m_request_animation_frame_callbacks.remove(id);
@@ -222,27 +223,27 @@ void Window::cancel_animation_frame(i32 id)
 
 void Window::did_set_location_href(Badge<Bindings::LocationObject>, AK::URL const& new_href)
 {
-    auto* frame = associated_document().browsing_context();
-    if (!frame)
+    auto* browsing_context = associated_document().browsing_context();
+    if (!browsing_context)
         return;
-    frame->loader().load(new_href, FrameLoader::Type::Navigation);
+    browsing_context->loader().load(new_href, FrameLoader::Type::Navigation);
 }
 
 void Window::did_call_location_reload(Badge<Bindings::LocationObject>)
 {
-    auto* frame = associated_document().browsing_context();
-    if (!frame)
+    auto* browsing_context = associated_document().browsing_context();
+    if (!browsing_context)
         return;
-    frame->loader().load(associated_document().url(), FrameLoader::Type::Reload);
+    browsing_context->loader().load(associated_document().url(), FrameLoader::Type::Reload);
 }
 
 void Window::did_call_location_replace(Badge<Bindings::LocationObject>, String url)
 {
-    auto* frame = associated_document().browsing_context();
-    if (!frame)
+    auto* browsing_context = associated_document().browsing_context();
+    if (!browsing_context)
         return;
     auto new_url = associated_document().parse_url(url);
-    frame->loader().load(move(new_url), FrameLoader::Type::Navigation);
+    browsing_context->loader().load(move(new_url), FrameLoader::Type::Navigation);
 }
 
 bool Window::dispatch_event(NonnullRefPtr<Event> event)
@@ -255,18 +256,24 @@ JS::Object* Window::create_wrapper(JS::GlobalObject& global_object)
     return &global_object;
 }
 
+// https://www.w3.org/TR/cssom-view-1/#dom-window-innerwidth
 int Window::inner_width() const
 {
-    if (!associated_document().layout_node())
-        return 0;
-    return associated_document().layout_node()->width();
+    // The innerWidth attribute must return the viewport width including the size of a rendered scroll bar (if any),
+    // or zero if there is no viewport.
+    if (auto const* browsing_context = associated_document().browsing_context())
+        return browsing_context->viewport_rect().width();
+    return 0;
 }
 
+// https://www.w3.org/TR/cssom-view-1/#dom-window-innerheight
 int Window::inner_height() const
 {
-    if (!associated_document().layout_node())
-        return 0;
-    return associated_document().layout_node()->height();
+    // The innerHeight attribute must return the viewport height including the size of a rendered scroll bar (if any),
+    // or zero if there is no viewport.
+    if (auto const* browsing_context = associated_document().browsing_context())
+        return browsing_context->viewport_rect().height();
+    return 0;
 }
 
 Page* Window::page()
@@ -291,59 +298,59 @@ NonnullRefPtr<CSS::MediaQueryList> Window::match_media(String media)
     return media_query_list;
 }
 
-RefPtr<CSS::StyleValue> Window::query_media_feature(FlyString const& name) const
+Optional<CSS::MediaFeatureValue> Window::query_media_feature(FlyString const& name) const
 {
     // FIXME: Many of these should be dependent on the hardware
 
     // MEDIAQUERIES-4 properties - https://www.w3.org/TR/mediaqueries-4/#media-descriptor-table
     if (name.equals_ignoring_case("any-hover"sv))
-        return CSS::IdentifierStyleValue::create(CSS::ValueID::Hover);
+        return CSS::MediaFeatureValue("hover");
     if (name.equals_ignoring_case("any-pointer"sv))
-        return CSS::IdentifierStyleValue::create(CSS::ValueID::Fine);
+        return CSS::MediaFeatureValue("fine");
     // FIXME: aspect-ratio
     if (name.equals_ignoring_case("color"sv))
-        return CSS::NumericStyleValue::create_integer(32);
+        return CSS::MediaFeatureValue(32);
     if (name.equals_ignoring_case("color-gamut"sv))
-        return CSS::IdentifierStyleValue::create(CSS::ValueID::Srgb);
+        return CSS::MediaFeatureValue("srgb");
     if (name.equals_ignoring_case("color-index"sv))
-        return CSS::NumericStyleValue::create_integer(0);
+        return CSS::MediaFeatureValue(0);
     // FIXME: device-aspect-ratio
     // FIXME: device-height
     // FIXME: device-width
     if (name.equals_ignoring_case("grid"sv))
-        return CSS::NumericStyleValue::create_integer(0);
+        return CSS::MediaFeatureValue(0);
     if (name.equals_ignoring_case("height"sv))
-        return CSS::LengthStyleValue::create(CSS::Length::make_px(inner_height()));
+        return CSS::MediaFeatureValue(CSS::Length::make_px(inner_height()));
     if (name.equals_ignoring_case("hover"sv))
-        return CSS::IdentifierStyleValue::create(CSS::ValueID::Hover);
+        return CSS::MediaFeatureValue("hover");
     if (name.equals_ignoring_case("monochrome"sv))
-        return CSS::NumericStyleValue::create_integer(0);
+        return CSS::MediaFeatureValue(0);
     if (name.equals_ignoring_case("hover"sv))
-        return CSS::IdentifierStyleValue::create(inner_height() >= inner_width() ? CSS::ValueID::Portrait : CSS::ValueID::Landscape);
+        return CSS::MediaFeatureValue(inner_height() >= inner_width() ? "portrait" : "landscape");
     if (name.equals_ignoring_case("overflow-block"sv))
-        return CSS::IdentifierStyleValue::create(CSS::ValueID::Scroll);
+        return CSS::MediaFeatureValue("scroll");
     // FIXME: overflow-inline
     if (name.equals_ignoring_case("pointer"sv))
-        return CSS::IdentifierStyleValue::create(CSS::ValueID::Fine);
+        return CSS::MediaFeatureValue("fine");
     // FIXME: resolution
     if (name.equals_ignoring_case("scan"sv))
-        return CSS::IdentifierStyleValue::create(CSS::ValueID::Progressive);
+        return CSS::MediaFeatureValue("progressive");
     if (name.equals_ignoring_case("update"sv))
-        return CSS::IdentifierStyleValue::create(CSS::ValueID::Fast);
+        return CSS::MediaFeatureValue("fast");
     if (name.equals_ignoring_case("width"sv))
-        return CSS::LengthStyleValue::create(CSS::Length::make_px(inner_width()));
+        return CSS::MediaFeatureValue(CSS::Length::make_px(inner_width()));
 
     // MEDIAQUERIES-5 properties - https://www.w3.org/TR/mediaqueries-5/#media-descriptor-table
     if (name.equals_ignoring_case("prefers-color-scheme")) {
         if (auto* page = this->page()) {
             switch (page->preferred_color_scheme()) {
             case CSS::PreferredColorScheme::Light:
-                return CSS::IdentifierStyleValue::create(CSS::ValueID::Light);
+                return CSS::MediaFeatureValue("light");
             case CSS::PreferredColorScheme::Dark:
-                return CSS::IdentifierStyleValue::create(CSS::ValueID::Dark);
+                return CSS::MediaFeatureValue("dark");
             case CSS::PreferredColorScheme::Auto:
             default:
-                return CSS::IdentifierStyleValue::create(page->palette().is_dark() ? CSS::ValueID::Dark : CSS::ValueID::Light);
+                return CSS::MediaFeatureValue(page->palette().is_dark() ? "dark" : "light");
             }
         }
     }
@@ -393,7 +400,7 @@ void Window::queue_microtask(JS::FunctionObject& callback)
     // The queueMicrotask(callback) method must queue a microtask to invoke callback,
     HTML::queue_a_microtask(associated_document(), [&callback, handle = JS::make_handle(&callback)]() {
         auto& vm = callback.vm();
-        [[maybe_unused]] auto rc = vm.call(callback, JS::js_null());
+        [[maybe_unused]] auto rc = JS::call(callback.global_object(), callback, JS::js_null());
         // FIXME: ...and if callback throws an exception, report the exception.
         if (vm.exception())
             vm.clear_exception();

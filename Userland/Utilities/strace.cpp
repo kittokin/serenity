@@ -13,6 +13,7 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <LibCore/System.h>
+#include <LibMain/Main.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -84,7 +85,6 @@ HANDLE(ENOTIMPL)
 HANDLE(EAFNOSUPPORT)
 HANDLE(ENOTSOCK)
 HANDLE(EADDRINUSE)
-HANDLE(EWHYTHO)
 HANDLE(ENOTEMPTY)
 HANDLE(EDOM)
 HANDLE(ECONNREFUSED)
@@ -232,13 +232,9 @@ static ErrorOr<void> copy_from_process(const void* source, Bytes target)
 
 static ErrorOr<ByteBuffer> copy_from_process(const void* source, size_t length)
 {
-    auto buffer = ByteBuffer::create_uninitialized(length);
-    if (!buffer.has_value()) {
-        // Allocation failed. Inject an error:
-        return Error::from_errno(ENOMEM);
-    }
-    TRY(copy_from_process(source, buffer->bytes()));
-    return buffer.release_value();
+    auto buffer = TRY(ByteBuffer::create_uninitialized(length));
+    TRY(copy_from_process(source, buffer.bytes()));
+    return buffer;
 }
 
 template<typename T>
@@ -452,10 +448,10 @@ static void format_getrandom(FormattedSyscallBuilder& builder, void* buffer, siz
     builder.add_arguments(buffer, size, flags);
 }
 
-static void format_realpath(FormattedSyscallBuilder& builder, Syscall::SC_realpath_params* params_p)
+static void format_realpath(FormattedSyscallBuilder& builder, Syscall::SC_realpath_params* params_p, size_t length)
 {
     auto params = copy_from_process(params_p).release_value_but_fixme_should_propagate_errors();
-    builder.add_arguments(StringArgument { params.path }, StringArgument { { params.buffer.data, params.buffer.size } });
+    builder.add_arguments(StringArgument { params.path }, StringArgument { { params.buffer.data, min(params.buffer.size, length) } });
 }
 
 static void format_exit(FormattedSyscallBuilder& builder, int status)
@@ -634,7 +630,8 @@ static void format_recvmsg(FormattedSyscallBuilder& builder, int socket, struct 
 struct MmapFlags : BitflagBase {
     static constexpr auto options = {
         BITFLAG(MAP_SHARED), BITFLAG(MAP_PRIVATE), BITFLAG(MAP_FIXED), BITFLAG(MAP_ANONYMOUS),
-        BITFLAG(MAP_RANDOMIZED), BITFLAG(MAP_STACK), BITFLAG(MAP_NORESERVE), BITFLAG(MAP_PURGEABLE)
+        BITFLAG(MAP_RANDOMIZED), BITFLAG(MAP_STACK), BITFLAG(MAP_NORESERVE), BITFLAG(MAP_PURGEABLE),
+        BITFLAG(MAP_FIXED_NOREPLACE)
     };
     static constexpr StringView default_ = "MAP_FILE";
 };
@@ -747,7 +744,7 @@ static void format_syscall(FormattedSyscallBuilder& builder, Syscall::Function s
         result_type = Ssize;
         break;
     case SC_realpath:
-        format_realpath(builder, (Syscall::SC_realpath_params*)arg1);
+        format_realpath(builder, (Syscall::SC_realpath_params*)arg1, (size_t)res);
         break;
     case SC_recvmsg:
         format_recvmsg(builder, (int)arg1, (struct msghdr*)arg2, (int)arg3);
@@ -795,12 +792,9 @@ static void format_syscall(FormattedSyscallBuilder& builder, Syscall::Function s
     }
 }
 
-int main(int argc, char** argv)
+ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
-    if (pledge("stdio wpath cpath proc exec ptrace sigaction", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio wpath cpath proc exec ptrace sigaction"));
 
     Vector<const char*> child_argv;
 
@@ -821,16 +815,11 @@ int main(int argc, char** argv)
     parser.add_option(include_syscalls_option, "Comma-delimited syscalls to include", "include", 'i', "include");
     parser.add_positional_argument(child_argv, "Arguments to exec", "argument", Core::ArgsParser::Required::No);
 
-    parser.parse(argc, argv);
+    parser.parse(arguments);
 
-    if (output_filename != nullptr) {
-        auto open_result = Core::File::open(output_filename, Core::OpenMode::WriteOnly);
-        if (open_result.is_error()) {
-            outln(stderr, "Failed to open output file: {}", open_result.error());
-            return 1;
-        }
-        trace_file = open_result.value();
-    }
+    if (output_filename != nullptr)
+        trace_file = TRY(Core::File::open(output_filename, Core::OpenMode::WriteOnly));
+
     auto parse_syscalls = [](const char* option, auto& hash_table) {
         if (option != nullptr) {
             for (auto syscall : StringView(option).split_view(','))
@@ -840,30 +829,19 @@ int main(int argc, char** argv)
     parse_syscalls(exclude_syscalls_option, exclude_syscalls);
     parse_syscalls(include_syscalls_option, include_syscalls);
 
-    if (pledge("stdio proc exec ptrace sigaction", nullptr) < 0) {
-        perror("pledge");
-        return 1;
-    }
+    TRY(Core::System::pledge("stdio proc exec ptrace sigaction"));
 
     int status;
     if (g_pid == -1) {
-        if (child_argv.is_empty()) {
-            warnln("strace: Expected either a pid or some arguments");
-            return 1;
-        }
+        if (child_argv.is_empty())
+            return Error::from_string_literal("Expected either a pid or some arguments"sv);
 
         child_argv.append(nullptr);
-        int pid = fork();
-        if (pid < 0) {
-            perror("fork");
-            return 1;
-        }
+        auto pid = TRY(Core::System::fork());
 
         if (!pid) {
-            if (ptrace(PT_TRACE_ME, 0, 0, 0) == -1) {
-                perror("traceme");
-                return 1;
-            }
+            TRY(Core::System::ptrace(PT_TRACE_ME, 0, 0, 0));
+
             int rc = execvp(child_argv.first(), const_cast<char**>(child_argv.data()));
             if (rc < 0) {
                 perror("execvp");
@@ -879,34 +857,25 @@ int main(int argc, char** argv)
         }
     }
 
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(struct sigaction));
+    struct sigaction sa = {};
     sa.sa_handler = handle_sigint;
-    sigaction(SIGINT, &sa, nullptr);
+    TRY(Core::System::sigaction(SIGINT, &sa, nullptr));
 
-    if (ptrace(PT_ATTACH, g_pid, 0, 0) == -1) {
-        perror("attach");
-        return 1;
-    }
+    TRY(Core::System::ptrace(PT_ATTACH, g_pid, 0, 0));
     if (waitpid(g_pid, &status, WSTOPPED | WEXITED) != g_pid || !WIFSTOPPED(status)) {
         perror("waitpid");
         return 1;
     }
 
     for (;;) {
-        if (ptrace(PT_SYSCALL, g_pid, 0, 0) == -1) {
-            perror("syscall");
-            return 1;
-        }
+        TRY(Core::System::ptrace(PT_SYSCALL, g_pid, 0, 0));
+
         if (waitpid(g_pid, &status, WSTOPPED | WEXITED) != g_pid || !WIFSTOPPED(status)) {
             perror("wait_pid");
             return 1;
         }
         PtraceRegisters regs = {};
-        if (ptrace(PT_GETREGS, g_pid, &regs, 0) == -1) {
-            perror("getregs");
-            return 1;
-        }
+        TRY(Core::System::ptrace(PT_GETREGS, g_pid, &regs, 0));
 #if ARCH(I386)
         syscall_arg_t syscall_index = regs.eax;
         syscall_arg_t arg1 = regs.edx;
@@ -919,19 +888,13 @@ int main(int argc, char** argv)
         syscall_arg_t arg3 = regs.rbx;
 #endif
 
-        if (ptrace(PT_SYSCALL, g_pid, 0, 0) == -1) {
-            perror("syscall");
-            return 1;
-        }
+        TRY(Core::System::ptrace(PT_SYSCALL, g_pid, 0, 0));
         if (waitpid(g_pid, &status, WSTOPPED | WEXITED) != g_pid || !WIFSTOPPED(status)) {
             perror("wait_pid");
             return 1;
         }
 
-        if (ptrace(PT_GETREGS, g_pid, &regs, 0) == -1) {
-            perror("getregs");
-            return 1;
-        }
+        TRY(Core::System::ptrace(PT_GETREGS, g_pid, &regs, 0));
 
 #if ARCH(I386)
         u32 res = regs.eax;

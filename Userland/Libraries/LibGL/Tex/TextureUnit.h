@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/IntrusiveList.h>
 #include <AK/OwnPtr.h>
 #include <LibGL/Tex/Texture2D.h>
 

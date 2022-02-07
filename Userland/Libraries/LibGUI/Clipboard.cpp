@@ -16,11 +16,11 @@ namespace GUI {
 class ClipboardServerConnection final
     : public IPC::ServerConnection<ClipboardClientEndpoint, ClipboardServerEndpoint>
     , public ClipboardClientEndpoint {
-    C_OBJECT(ClipboardServerConnection);
+    IPC_CLIENT_CONNECTION(ClipboardServerConnection, "/tmp/portal/clipboard")
 
 private:
-    ClipboardServerConnection()
-        : IPC::ServerConnection<ClipboardClientEndpoint, ClipboardServerEndpoint>(*this, "/tmp/portal/clipboard")
+    ClipboardServerConnection(NonnullOwnPtr<Core::Stream::LocalSocket> socket)
+        : IPC::ServerConnection<ClipboardClientEndpoint, ClipboardServerEndpoint>(*this, move(socket))
     {
     }
 
@@ -30,7 +30,7 @@ private:
     }
 };
 
-static ClipboardServerConnection* s_connection;
+static RefPtr<ClipboardServerConnection> s_connection;
 
 static ClipboardServerConnection& connection()
 {
@@ -39,15 +39,13 @@ static ClipboardServerConnection& connection()
 
 void Clipboard::initialize(Badge<Application>)
 {
-    s_connection = &ClipboardServerConnection::construct().leak_ref();
+    s_connection = ClipboardServerConnection::try_create().release_value_but_fixme_should_propagate_errors();
 }
 
 Clipboard& Clipboard::the()
 {
-    static Clipboard* s_the;
-    if (!s_the)
-        s_the = new Clipboard;
-    return *s_the;
+    static Clipboard s_the;
+    return s_the;
 }
 
 Clipboard::DataAndType Clipboard::fetch_data_and_type() const
@@ -56,7 +54,7 @@ Clipboard::DataAndType Clipboard::fetch_data_and_type() const
     if (!response.data().is_valid())
         return {};
     auto data = ByteBuffer::copy(response.data().data<void>(), response.data().size());
-    if (!data.has_value())
+    if (data.is_error())
         return {};
 
     auto type = response.mime_type();

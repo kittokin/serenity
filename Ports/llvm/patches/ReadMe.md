@@ -1,15 +1,5 @@
 # Patches for LLVM on SerenityOS
 
-## `build-crt.patch`
-
-This patch lets us use LLVM's `crtbegin.o`/`crtend.o` implementation.
-
-### Status
-- [ ] Local?
-- [x] Should be merged to upstream?
-- [ ] Resolves issue(s) with our side of things
-- [ ] Hack
-
 ## `insert-ifdef-serenity.patch`
 
 This patch adds several defines in order to omit things not supported by SerenityOS.
@@ -31,16 +21,6 @@ symbol versioning, which our dynamic linker does not support.
 - [X] Resolves issue(s) with our side of things
 - [ ] Hack
 
-## `remove-wstring.patch`
-
-Removes `std::wstring`s from the source code, as our libstdc++ does not support it.
-
-### Status
-- [ ] Local?
-- [ ] Should be merged to upstream?
-- [X] Resolves issue(s) with our side of things
-- [X] Hack
-
 ## `toolchain.patch`
 
 Adds support for the `$arch-pc-serenity` target to the Clang front end. This makes the compiler
@@ -52,3 +32,14 @@ stack-smashing protection and building position-independent executables by defau
 - [x] Should be merged to upstream?
 - [ ] Resolves issue(s) with our side of things
 - [ ] Hack
+
+## `llvm-backport-objcopy-update-section.patch`
+
+Backports support for `llvm-objcopy --update-section` used by our toolchain from reviews.llvm.org/D112116.
+
+### Status
+- [ ] Local?
+- [ ] Should be merged to upstream?
+- [ ] Resolves issues(s) with our side of things
+- [ ] Hack
+

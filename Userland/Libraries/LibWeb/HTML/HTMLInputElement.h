@@ -20,7 +20,7 @@ public:
     HTMLInputElement(DOM::Document&, QualifiedName);
     virtual ~HTMLInputElement() override;
 
-    virtual RefPtr<Layout::Node> create_layout_node() override;
+    virtual RefPtr<Layout::Node> create_layout_node(NonnullRefPtr<CSS::StyleProperties>) override;
 
     String type() const { return attribute(HTML::AttributeNames::type); }
     String default_value() const { return attribute(HTML::AttributeNames::value); }
@@ -36,6 +36,8 @@ public:
 
     void did_click_button(Badge<Layout::ButtonBox>);
 
+    virtual bool is_focusable() const override;
+
 private:
     // ^DOM::Node
     virtual void inserted() override;
@@ -43,6 +45,9 @@ private:
 
     // ^HTML::FormAssociatedElement
     virtual HTMLElement& form_associated_element_to_html_element() override { return *this; }
+
+    // ^DOM::EventTarget
+    virtual void did_receive_focus() override;
 
     void create_shadow_tree_if_needed();
 

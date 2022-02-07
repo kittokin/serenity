@@ -35,13 +35,17 @@ public:
     ProxyConstructor* proxy_constructor() { return m_proxy_constructor; }
 
     // Not included in JS_ENUMERATE_NATIVE_OBJECTS due to missing distinct constructor
-    GeneratorObjectPrototype* generator_object_prototype() { return m_generator_object_prototype; }
+    GeneratorPrototype* generator_prototype() { return m_generator_prototype; }
     AsyncFromSyncIteratorPrototype* async_from_sync_iterator_prototype() { return m_async_from_sync_iterator_prototype; }
+
+    // Not included in JS_ENUMERATE_INTL_OBJECTS due to missing distinct constructor
+    Intl::SegmentsPrototype* intl_segments_prototype() { return m_intl_segments_prototype; }
 
     FunctionObject* array_prototype_values_function() const { return m_array_prototype_values_function; }
     FunctionObject* date_constructor_now_function() const { return m_date_constructor_now_function; }
     FunctionObject* eval_function() const { return m_eval_function; }
     FunctionObject* throw_type_error_function() const { return m_throw_type_error_function; }
+    FunctionObject* json_parse_function() const { return m_json_parse_function; }
 
 #define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \
     ConstructorName* snake_name##_constructor() { return m_##snake_name##_constructor; } \
@@ -102,13 +106,17 @@ private:
     ProxyConstructor* m_proxy_constructor { nullptr };
 
     // Not included in JS_ENUMERATE_NATIVE_OBJECTS due to missing distinct constructor
-    GeneratorObjectPrototype* m_generator_object_prototype { nullptr };
+    GeneratorPrototype* m_generator_prototype { nullptr };
     AsyncFromSyncIteratorPrototype* m_async_from_sync_iterator_prototype { nullptr };
+
+    // Not included in JS_ENUMERATE_INTL_OBJECTS due to missing distinct constructor
+    Intl::SegmentsPrototype* m_intl_segments_prototype { nullptr };
 
     FunctionObject* m_array_prototype_values_function { nullptr };
     FunctionObject* m_date_constructor_now_function { nullptr };
     FunctionObject* m_eval_function { nullptr };
     FunctionObject* m_throw_type_error_function { nullptr };
+    FunctionObject* m_json_parse_function { nullptr };
 
 #define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \
     ConstructorName* m_##snake_name##_constructor { nullptr };                           \
@@ -135,22 +143,22 @@ private:
 };
 
 template<typename ConstructorType>
-inline void GlobalObject::initialize_constructor(PropertyKey const& property_name, ConstructorType*& constructor, Object* prototype)
+inline void GlobalObject::initialize_constructor(PropertyKey const& property_key, ConstructorType*& constructor, Object* prototype)
 {
     auto& vm = this->vm();
     constructor = heap().allocate<ConstructorType>(*this, *this);
-    constructor->define_direct_property(vm.names.name, js_string(heap(), property_name.as_string()), Attribute::Configurable);
+    constructor->define_direct_property(vm.names.name, js_string(heap(), property_key.as_string()), Attribute::Configurable);
     if (prototype)
         prototype->define_direct_property(vm.names.constructor, constructor, Attribute::Writable | Attribute::Configurable);
 }
 
 template<typename ConstructorType>
-inline void GlobalObject::add_constructor(PropertyKey const& property_name, ConstructorType*& constructor, Object* prototype)
+inline void GlobalObject::add_constructor(PropertyKey const& property_key, ConstructorType*& constructor, Object* prototype)
 {
     // Some constructors are pre-initialized separately.
     if (!constructor)
-        initialize_constructor(property_name, constructor, prototype);
-    define_direct_property(property_name, constructor, Attribute::Writable | Attribute::Configurable);
+        initialize_constructor(property_key, constructor, prototype);
+    define_direct_property(property_key, constructor, Attribute::Writable | Attribute::Configurable);
 }
 
 inline GlobalObject* Shape::global_object() const
@@ -162,15 +170,15 @@ template<>
 inline bool Object::fast_is<GlobalObject>() const { return is_global_object(); }
 
 template<typename... Args>
-[[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> Value::invoke(GlobalObject& global_object, PropertyKey const& property_name, Args... args)
+[[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> Value::invoke(GlobalObject& global_object, PropertyKey const& property_key, Args... args)
 {
     if constexpr (sizeof...(Args) > 0) {
         MarkedValueList arglist { global_object.vm().heap() };
         (..., arglist.append(move(args)));
-        return invoke_internal(global_object, property_name, move(arglist));
+        return invoke_internal(global_object, property_key, move(arglist));
     }
 
-    return invoke_internal(global_object, property_name, Optional<MarkedValueList> {});
+    return invoke_internal(global_object, property_key, Optional<MarkedValueList> {});
 }
 
 }

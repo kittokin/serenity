@@ -19,7 +19,7 @@
 #include <Kernel/FileSystem/Mount.h>
 #include <Kernel/FileSystem/UnveilNode.h>
 #include <Kernel/Forward.h>
-#include <Kernel/Locking/MutexProtected.h>
+#include <Kernel/Locking/SpinlockProtected.h>
 
 namespace Kernel {
 
@@ -33,8 +33,11 @@ struct UidAndGid {
 };
 
 class VirtualFileSystem {
-    AK_MAKE_ETERNAL
 public:
+    // Required to be at least 8 by POSIX
+    // https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/limits.h.html
+    static constexpr int symlink_recursion_limit = 8;
+
     static void initialize();
     static VirtualFileSystem& the();
 
@@ -54,9 +57,9 @@ public:
     ErrorOr<void> unlink(StringView path, Custody& base);
     ErrorOr<void> symlink(StringView target, StringView linkpath, Custody& base);
     ErrorOr<void> rmdir(StringView path, Custody& base);
-    ErrorOr<void> chmod(StringView path, mode_t, Custody& base);
+    ErrorOr<void> chmod(StringView path, mode_t, Custody& base, int options = 0);
     ErrorOr<void> chmod(Custody&, mode_t);
-    ErrorOr<void> chown(StringView path, UserID, GroupID, Custody& base);
+    ErrorOr<void> chown(StringView path, UserID, GroupID, Custody& base, int options);
     ErrorOr<void> chown(Custody&, UserID, GroupID);
     ErrorOr<void> access(StringView path, int mode, Custody& base);
     ErrorOr<InodeMetadata> lookup_metadata(StringView path, Custody& base, int options = 0);
@@ -92,7 +95,7 @@ private:
     RefPtr<Inode> m_root_inode;
     RefPtr<Custody> m_root_custody;
 
-    MutexProtected<Vector<Mount, 16>> m_mounts;
+    SpinlockProtected<Vector<Mount, 16>> m_mounts;
 };
 
 }

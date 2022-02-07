@@ -40,9 +40,13 @@ TEST_CASE(construct_contents)
     EXPECT(test_string != "ABCDEFG");
 }
 
+TEST_CASE(equal)
+{
+    EXPECT_NE(String::empty(), String {});
+}
+
 TEST_CASE(compare)
 {
-    String test_string = "ABCDEF";
     EXPECT("a" < String("b"));
     EXPECT(!("a" > String("b")));
     EXPECT("b" > String("a"));
@@ -51,6 +55,20 @@ TEST_CASE(compare)
     EXPECT(!("a" >= String("b")));
     EXPECT("a" <= String("a"));
     EXPECT(!("b" <= String("a")));
+
+    EXPECT(String("a") > String());
+    EXPECT(!(String() > String("a")));
+    EXPECT(String() < String("a"));
+    EXPECT(!(String("a") < String()));
+    EXPECT(String("a") >= String());
+    EXPECT(!(String() >= String("a")));
+    EXPECT(String() <= String("a"));
+    EXPECT(!(String("a") <= String()));
+
+    EXPECT(!(String() > String()));
+    EXPECT(!(String() < String()));
+    EXPECT(String() >= String());
+    EXPECT(String() <= String());
 }
 
 TEST_CASE(index_access)

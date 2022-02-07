@@ -1,9 +1,10 @@
 /*
- * Copyright (c) 2021, Tim Flynn <trflynn89@pm.me>
+ * Copyright (c) 2021, Tim Flynn <trflynn89@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/CharacterTypes.h>
 #include <AK/Utf8View.h>
 #include <LibUnicode/CharacterTypes.h>
 #include <LibUnicode/Locale.h>
@@ -11,82 +12,54 @@
 
 #if ENABLE_UNICODE_DATA
 #    include <LibUnicode/UnicodeData.h>
-#    include <LibUnicode/UnicodeNumberFormat.h>
 #endif
 
 namespace Unicode {
 
-Optional<StringView> get_number_system_symbol([[maybe_unused]] StringView locale, [[maybe_unused]] StringView system, [[maybe_unused]] NumericSymbol symbol)
-{
-#if ENABLE_UNICODE_DATA
-    return Detail::get_number_system_symbol(locale, system, symbol);
-#else
-    return {};
-#endif
-}
+Span<StringView const> __attribute__((weak)) get_available_number_systems() { return {}; }
+Optional<NumberSystem> __attribute__((weak)) number_system_from_string(StringView) { return {}; }
+Optional<StringView> __attribute__((weak)) get_number_system_symbol(StringView, StringView, NumericSymbol) { return {}; }
+Optional<NumberGroupings> __attribute__((weak)) get_number_system_groupings(StringView, StringView) { return {}; }
+Optional<NumberFormat> __attribute__((weak)) get_standard_number_system_format(StringView, StringView, StandardNumberFormatType) { return {}; }
+Vector<NumberFormat> __attribute__((weak)) get_compact_number_system_formats(StringView, StringView, CompactNumberFormatType) { return {}; }
+Vector<NumberFormat> __attribute__((weak)) get_unit_formats(StringView, StringView, Style) { return {}; }
 
-Optional<NumberGroupings> get_number_system_groupings([[maybe_unused]] StringView locale, [[maybe_unused]] StringView system)
+Optional<StringView> get_default_number_system(StringView locale)
 {
-#if ENABLE_UNICODE_DATA
-    return Detail::get_number_system_groupings(locale, system);
-#else
-    return {};
-#endif
-}
-
-Optional<NumberFormat> get_standard_number_system_format([[maybe_unused]] StringView locale, [[maybe_unused]] StringView system, [[maybe_unused]] StandardNumberFormatType type)
-{
-#if ENABLE_UNICODE_DATA
-    return Detail::get_standard_number_system_format(locale, system, type);
-#else
-    return {};
-#endif
-}
-
-Vector<NumberFormat> get_compact_number_system_formats([[maybe_unused]] StringView locale, [[maybe_unused]] StringView system, [[maybe_unused]] CompactNumberFormatType type)
-{
-#if ENABLE_UNICODE_DATA
-    return Detail::get_compact_number_system_formats(locale, system, type);
-#else
-    return {};
-#endif
-}
-
-Vector<NumberFormat> get_unit_formats([[maybe_unused]] StringView locale, [[maybe_unused]] StringView unit, [[maybe_unused]] Style style)
-{
-#if ENABLE_UNICODE_DATA
-    return Detail::get_unit_formats(locale, unit, style);
-#else
-    return {};
-#endif
-}
-
-Optional<NumberFormat> select_pattern_with_plurality(Vector<NumberFormat> const& formats, double number)
-{
-    // FIXME: This is a rather naive and locale-unaware implementation Unicode's TR-35 pluralization
-    //        rules: https://www.unicode.org/reports/tr35/tr35-numbers.html#Language_Plural_Rules
-    //        Once those rules are implemented for LibJS, we better use them instead.
-    auto find_plurality = [&](auto plurality) -> Optional<NumberFormat> {
-        if (auto it = formats.find_if([&](auto& patterns) { return patterns.plurality == plurality; }); it != formats.end())
-            return *it;
-        return {};
-    };
-
-    if (number == 0) {
-        if (auto patterns = find_plurality(NumberFormat::Plurality::Zero); patterns.has_value())
-            return patterns;
-    } else if (number == 1) {
-        if (auto patterns = find_plurality(NumberFormat::Plurality::One); patterns.has_value())
-            return patterns;
-    } else if (number == 2) {
-        if (auto patterns = find_plurality(NumberFormat::Plurality::Two); patterns.has_value())
-            return patterns;
-    } else if (number > 2) {
-        if (auto patterns = find_plurality(NumberFormat::Plurality::Many); patterns.has_value())
-            return patterns;
+    if (auto systems = get_locale_key_mapping(locale, "nu"sv); systems.has_value()) {
+        auto index = systems->find(',');
+        return index.has_value() ? systems->substring_view(0, *index) : *systems;
     }
 
-    return find_plurality(NumberFormat::Plurality::Other);
+    return {};
+}
+
+Optional<Span<u32 const>> __attribute__((weak)) get_digits_for_number_system(StringView)
+{
+    // Fall back to "latn" digits when Unicode data generation is disabled.
+    constexpr Array<u32, 10> digits { { 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39 } };
+    return digits.span();
+}
+
+String replace_digits_for_number_system(StringView system, StringView number)
+{
+    auto digits = get_digits_for_number_system(system);
+    if (!digits.has_value())
+        digits = get_digits_for_number_system("latn"sv);
+    VERIFY(digits.has_value());
+
+    StringBuilder builder;
+
+    for (auto ch : number) {
+        if (is_ascii_digit(ch)) {
+            u32 digit = digits->at(parse_ascii_digit(ch));
+            builder.append_code_point(digit);
+        } else {
+            builder.append(ch);
+        }
+    }
+
+    return builder.build();
 }
 
 // https://www.unicode.org/reports/tr35/tr35-numbers.html#Currencies

@@ -5,6 +5,7 @@
  */
 
 #include "UnsignedBigInteger.h"
+#include <AK/BuiltinWrappers.h>
 #include <AK/CharacterTypes.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringHash.h>
@@ -66,7 +67,7 @@ size_t UnsignedBigInteger::export_data(Bytes data, bool remove_leading_zeros) co
     return out;
 }
 
-UnsignedBigInteger UnsignedBigInteger::from_base(u16 N, const String& str)
+UnsignedBigInteger UnsignedBigInteger::from_base(u16 N, StringView str)
 {
     VERIFY(N <= 36);
     UnsignedBigInteger result;
@@ -144,6 +145,16 @@ void UnsignedBigInteger::set_to(const UnsignedBigInteger& other)
     m_cached_hash = 0;
 }
 
+bool UnsignedBigInteger::is_zero() const
+{
+    for (size_t i = 0; i < length(); ++i) {
+        if (m_words[i] != 0)
+            return false;
+    }
+
+    return true;
+}
+
 size_t UnsignedBigInteger::trimmed_length() const
 {
     if (!m_cached_trimmed_length.has_value()) {
@@ -171,6 +182,17 @@ void UnsignedBigInteger::resize_with_leading_zeros(size_t new_length)
         m_words.resize_and_keep_capacity(new_length);
         __builtin_memset(&m_words.data()[old_length], 0, (new_length - old_length) * sizeof(u32));
     }
+}
+
+size_t UnsignedBigInteger::one_based_index_of_highest_set_bit() const
+{
+    size_t number_of_words = trimmed_length();
+    size_t index = 0;
+    if (number_of_words > 0) {
+        index += (number_of_words - 1) * BITS_IN_WORD;
+        index += BITS_IN_WORD - count_leading_zeroes(m_words[number_of_words - 1]);
+    }
+    return index;
 }
 
 FLATTEN UnsignedBigInteger UnsignedBigInteger::plus(const UnsignedBigInteger& other) const
@@ -218,11 +240,11 @@ FLATTEN UnsignedBigInteger UnsignedBigInteger::bitwise_xor(const UnsignedBigInte
     return result;
 }
 
-FLATTEN UnsignedBigInteger UnsignedBigInteger::bitwise_not() const
+FLATTEN UnsignedBigInteger UnsignedBigInteger::bitwise_not_fill_to_one_based_index(size_t size) const
 {
     UnsignedBigInteger result;
 
-    UnsignedBigIntegerAlgorithms::bitwise_not_without_allocation(*this, result);
+    UnsignedBigIntegerAlgorithms::bitwise_not_fill_to_one_based_index_without_allocation(*this, size, result);
 
     return result;
 }

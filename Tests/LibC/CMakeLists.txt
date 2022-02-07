@@ -1,4 +1,6 @@
 set(TEST_SOURCES
+    TestAbort.cpp
+    TestAssert.cpp
     TestIo.cpp
     TestLibCExec.cpp
     TestLibCDirEnt.cpp
@@ -7,13 +9,16 @@ set(TEST_SOURCES
     TestLibCSetjmp.cpp
     TestLibCString.cpp
     TestLibCTime.cpp
+    TestMalloc.cpp
     TestMemmem.cpp
     TestQsort.cpp
+    TestRaise.cpp
     TestRealpath.cpp
     TestScanf.cpp
     TestSearch.cpp
     TestSnprintf.cpp
     TestStackSmash.cpp
+    TestStdio.cpp
     TestStrlcpy.cpp
     TestStrtodAccuracy.cpp
     TestWchar.cpp

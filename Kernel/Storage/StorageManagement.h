@@ -19,30 +19,31 @@ namespace Kernel {
 
 class PartitionTable;
 class StorageManagement {
-    AK_MAKE_ETERNAL;
 
 public:
     StorageManagement();
     static bool initialized();
-    void initialize(StringView boot_argument, bool force_pio);
+    void initialize(StringView boot_argument, bool force_pio, bool nvme_poll);
     static StorageManagement& the();
 
     NonnullRefPtr<FileSystem> root_filesystem() const;
 
-    static int major_number();
-    static int minor_number();
+    static MajorNumber storage_type_major_number();
+    static MinorNumber generate_storage_minor_number();
 
     void remove_device(StorageDevice&);
 
 private:
     bool boot_argument_contains_partition_uuid();
 
-    void enumerate_controllers(bool force_pio);
+    void enumerate_controllers(bool force_pio, bool nvme_poll);
     void enumerate_storage_devices();
-    void enumerate_disk_partitions() const;
+    void enumerate_disk_partitions();
 
     void determine_boot_device();
     void determine_boot_device_with_partition_uuid();
+
+    void dump_storage_devices_and_partitions() const;
 
     OwnPtr<PartitionTable> try_to_initialize_partition_table(const StorageDevice&) const;
 

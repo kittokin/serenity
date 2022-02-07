@@ -13,7 +13,6 @@
 namespace Kernel {
 
 class MemoryDevice final : public CharacterDevice {
-    AK_MAKE_ETERNAL
     friend class DeviceManagement;
 
 public:
@@ -26,13 +25,11 @@ private:
     MemoryDevice();
 
     virtual StringView class_name() const override { return "MemoryDevice"sv; }
-    virtual bool can_read(const OpenFileDescription&, size_t) const override { return true; }
-    virtual bool can_write(const OpenFileDescription&, size_t) const override { return false; }
+    virtual bool can_read(const OpenFileDescription&, u64) const override { return true; }
+    virtual bool can_write(const OpenFileDescription&, u64) const override { return false; }
     virtual bool is_seekable() const override { return true; }
     virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
     virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override { return EINVAL; }
-
-    virtual void did_seek(OpenFileDescription&, off_t) override;
 
     bool is_allowed_range(PhysicalAddress, Memory::VirtualRange const&) const;
 };

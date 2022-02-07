@@ -135,6 +135,12 @@ void Action::activate(Core::Object* activator)
     m_activator = nullptr;
 }
 
+void Action::flash_menubar_menu(GUI::Window& window)
+{
+    for (auto& menu_item : m_menu_items)
+        window.flash_menubar_menu_for(*menu_item);
+}
+
 void Action::register_button(Badge<Button>, Button& button)
 {
     m_buttons.set(&button);

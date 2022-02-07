@@ -13,7 +13,6 @@
 namespace Kernel::Memory {
 
 class PhysicalRegion {
-    AK_MAKE_ETERNAL;
     AK_MAKE_NONCOPYABLE(PhysicalRegion);
     AK_MAKE_NONMOVABLE(PhysicalRegion);
 
@@ -46,8 +45,7 @@ private:
 
     NonnullOwnPtrVector<PhysicalZone> m_zones;
 
-    size_t m_large_zones;
-    size_t m_small_zones;
+    size_t m_large_zones { 0 };
 
     PhysicalZone::List m_usable_zones;
     PhysicalZone::List m_full_zones;

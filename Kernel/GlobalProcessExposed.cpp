@@ -6,12 +6,10 @@
 
 #include <AK/JsonObjectSerializer.h>
 #include <AK/UBSanitizer.h>
-#include <Kernel/Arch/x86/CPU.h>
 #include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Arch/x86/ProcessorInfo.h>
 #include <Kernel/Bus/PCI/API.h>
 #include <Kernel/CommandLine.h>
-#include <Kernel/Devices/ConsoleDevice.h>
 #include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/HID/HIDManagement.h>
 #include <Kernel/FileSystem/Custody.h>
@@ -22,13 +20,13 @@
 #include <Kernel/Interrupts/InterruptManagement.h>
 #include <Kernel/KBufferBuilder.h>
 #include <Kernel/Net/LocalSocket.h>
-#include <Kernel/Net/NetworkAdapter.h>
 #include <Kernel/Net/NetworkingManagement.h>
 #include <Kernel/Net/Routing.h>
 #include <Kernel/Net/TCPSocket.h>
 #include <Kernel/Net/UDPSocket.h>
 #include <Kernel/Process.h>
 #include <Kernel/ProcessExposed.h>
+#include <Kernel/Scheduler.h>
 #include <Kernel/Sections.h>
 #include <Kernel/TTY/TTY.h>
 
@@ -77,7 +75,7 @@ private:
     virtual ErrorOr<void> try_generate(KBufferBuilder& builder) override
     {
         JsonArraySerializer array { builder };
-        arp_table().for_each_shared([&](const auto& it) {
+        arp_table().for_each([&](const auto& it) {
             auto obj = array.add_object();
             obj.add("mac_address", it.value.to_string());
             obj.add("ip_address", it.key.to_string());
@@ -131,7 +129,7 @@ private:
         JsonArraySerializer array { builder };
         LocalSocket::for_each([&array](auto& socket) {
             auto obj = array.add_object();
-            obj.add("path", String(socket.socket_path()));
+            obj.add("path", socket.socket_path());
             obj.add("origin_pid", socket.origin_pid().value());
             obj.add("origin_uid", socket.origin_uid().value());
             obj.add("origin_gid", socket.origin_gid().value());
@@ -265,20 +263,12 @@ private:
 class ProcFSUBSanDeadly : public ProcFSSystemBoolean {
 public:
     static NonnullRefPtr<ProcFSUBSanDeadly> must_create(const ProcFSSystemDirectory&);
-    virtual bool value() const override
-    {
-        MutexLocker locker(m_lock);
-        return AK::UBSanitizer::g_ubsan_is_deadly;
-    }
-    virtual void set_value(bool new_value) override
-    {
-        MutexLocker locker(m_lock);
-        AK::UBSanitizer::g_ubsan_is_deadly = new_value;
-    }
+
+    virtual bool value() const override { return AK::UBSanitizer::g_ubsan_is_deadly; }
+    virtual void set_value(bool new_value) override { AK::UBSanitizer::g_ubsan_is_deadly = new_value; }
 
 private:
     ProcFSUBSanDeadly();
-    mutable Mutex m_lock;
 };
 
 class ProcFSCapsLockRemap : public ProcFSSystemBoolean {
@@ -336,9 +326,7 @@ private:
     ProcFSSelfProcessDirectory();
     virtual bool acquire_link(KBufferBuilder& builder) override
     {
-        if (builder.appendff("{}", Process::current().pid().value()).is_error())
-            return false;
-        return true;
+        return !builder.appendff("{}", Process::current().pid().value()).is_error();
     }
 };
 
@@ -360,7 +348,12 @@ private:
             fs_object.add("free_block_count", fs.free_block_count());
             fs_object.add("total_inode_count", fs.total_inode_count());
             fs_object.add("free_inode_count", fs.free_inode_count());
-            fs_object.add("mount_point", mount.absolute_path());
+            auto mount_point_or_error = mount.absolute_path();
+            if (mount_point_or_error.is_error()) {
+                result = mount_point_or_error.release_error();
+                return IterationDecision::Break;
+            }
+            fs_object.add("mount_point", mount_point_or_error.value()->view());
             fs_object.add("block_size", static_cast<u64>(fs.block_size()));
             fs_object.add("readonly", fs.is_readonly());
             fs_object.add("mount_flags", mount.flags());
@@ -372,7 +365,7 @@ private:
                     result = pseudo_path_or_error.release_error();
                     return IterationDecision::Break;
                 }
-                fs_object.add("source", pseudo_path_or_error.value()->characters());
+                fs_object.add("source", pseudo_path_or_error.value()->view());
             } else {
                 fs_object.add("source", "none");
             }
@@ -403,7 +396,6 @@ private:
         JsonObjectSerializer<KBufferBuilder> json { builder };
         json.add("kmalloc_allocated", stats.bytes_allocated);
         json.add("kmalloc_available", stats.bytes_free);
-        json.add("kmalloc_eternal_allocated", stats.bytes_eternal);
         json.add("user_physical_allocated", system_memory.user_physical_pages_used);
         json.add("user_physical_available", system_memory.user_physical_pages - system_memory.user_physical_pages_used);
         json.add("user_physical_committed", system_memory.user_physical_pages_committed);
@@ -412,14 +404,6 @@ private:
         json.add("super_physical_available", system_memory.super_physical_pages - system_memory.super_physical_pages_used);
         json.add("kmalloc_call_count", stats.kmalloc_call_count);
         json.add("kfree_call_count", stats.kfree_call_count);
-        TRY(slab_alloc_stats([&json](size_t slab_size, size_t num_allocated, size_t num_free) -> ErrorOr<void> {
-            auto prefix = TRY(KString::formatted("slab_{}", slab_size));
-            auto formatted_num_allocated = TRY(KString::formatted("{}_num_allocated", prefix));
-            auto formatted_num_free = TRY(KString::formatted("{}_num_free", prefix));
-            json.add(formatted_num_allocated->view(), num_allocated);
-            json.add(formatted_num_free->view(), num_free);
-            return {};
-        }));
         json.finish();
         return {};
     }
@@ -459,20 +443,19 @@ private:
         JsonObjectSerializer<KBufferBuilder> json { builder };
 
         // Keep this in sync with CProcessStatistics.
-        auto build_process = [&](JsonArraySerializer<KBufferBuilder>& array, const Process& process) {
+        auto build_process = [&](JsonArraySerializer<KBufferBuilder>& array, const Process& process) -> ErrorOr<void> {
             auto process_object = array.add_object();
 
             if (process.is_user_process()) {
                 StringBuilder pledge_builder;
 
-#define __ENUMERATE_PLEDGE_PROMISE(promise)      \
-    if (process.has_promised(Pledge::promise)) { \
-        pledge_builder.append(#promise " ");     \
-    }
+#define __ENUMERATE_PLEDGE_PROMISE(promise)    \
+    if (process.has_promised(Pledge::promise)) \
+        TRY(pledge_builder.try_append(#promise " "));
                 ENUMERATE_PLEDGE_PROMISES
 #undef __ENUMERATE_PLEDGE_PROMISE
 
-                process_object.add("pledge", pledge_builder.to_string());
+                process_object.add("pledge", pledge_builder.string_view());
 
                 switch (process.veil_state()) {
                 case VeilState::None:
@@ -486,8 +469,8 @@ private:
                     break;
                 }
             } else {
-                process_object.add("pledge", String());
-                process_object.add("veil", String());
+                process_object.add("pledge", ""sv);
+                process_object.add("veil", ""sv);
             }
 
             process_object.add("pid", process.pid().value());
@@ -497,14 +480,14 @@ private:
             process_object.add("uid", process.uid().value());
             process_object.add("gid", process.gid().value());
             process_object.add("ppid", process.ppid().value());
-            process_object.add("nfds", process.fds().open_count());
+            process_object.add("nfds", process.fds().with_shared([](auto& fds) { return fds.open_count(); }));
             process_object.add("name", process.name());
-            process_object.add("executable", process.executable() ? process.executable()->absolute_path() : "");
+            process_object.add("executable", process.executable() ? TRY(process.executable()->try_serialize_absolute_path())->view() : ""sv);
             process_object.add("tty", process.tty() ? process.tty()->tty_name().view() : "notty"sv);
             process_object.add("amount_virtual", process.address_space().amount_virtual());
             process_object.add("amount_resident", process.address_space().amount_resident());
             process_object.add("amount_dirty_private", process.address_space().amount_dirty_private());
-            process_object.add("amount_clean_inode", process.address_space().amount_clean_inode());
+            process_object.add("amount_clean_inode", TRY(process.address_space().amount_clean_inode()));
             process_object.add("amount_shared", process.address_space().amount_shared());
             process_object.add("amount_purgeable_volatile", process.address_space().amount_purgeable_volatile());
             process_object.add("amount_purgeable_nonvolatile", process.address_space().amount_purgeable_nonvolatile());
@@ -536,16 +519,20 @@ private:
                 thread_object.add("ipv4_socket_read_bytes", thread.ipv4_socket_read_bytes());
                 thread_object.add("ipv4_socket_write_bytes", thread.ipv4_socket_write_bytes());
             });
+
+            return {};
         };
 
         SpinlockLocker lock(g_scheduler_lock);
         {
             {
                 auto array = json.add_array("processes");
-                auto processes = Process::all_processes();
-                build_process(array, *Scheduler::colonel());
-                for (auto& process : processes)
-                    build_process(array, process);
+                TRY(build_process(array, *Scheduler::colonel()));
+                TRY(Process::all_instances().with([&](auto& processes) -> ErrorOr<void> {
+                    for (auto& process : processes)
+                        TRY(build_process(array, process));
+                    return {};
+                }));
             }
 
             auto total_time_scheduled = Scheduler::get_total_time_scheduled();
@@ -573,14 +560,16 @@ private:
                 obj.add("family", info.display_family());
 
                 auto features_array = obj.add_array("features");
-                for (auto& feature : info.features().split(' '))
+                auto keep_empty = false;
+                info.features().for_each_split_view(' ', keep_empty, [&](StringView feature) {
                     features_array.add(feature);
+                });
                 features_array.finish();
 
                 obj.add("model", info.display_model());
                 obj.add("stepping", info.stepping());
                 obj.add("type", info.type());
-                obj.add("brandstr", info.brandstr());
+                obj.add("brand", info.brand());
             });
         array.finish();
         return {};
@@ -681,8 +670,8 @@ private:
         JsonArraySerializer array { builder };
         DeviceManagement::the().for_each([&array](auto& device) {
             auto obj = array.add_object();
-            obj.add("major", device.major());
-            obj.add("minor", device.minor());
+            obj.add("major", device.major().value());
+            obj.add("minor", device.minor().value());
             obj.add("class_name", device.class_name());
 
             if (device.is_block_device())
@@ -764,7 +753,7 @@ private:
     {
         if (!Process::current().is_superuser())
             return EPERM;
-        return builder.append(String::number(kernel_load_base));
+        return builder.appendff("{}", kernel_load_base);
     }
 };
 
@@ -945,12 +934,12 @@ ErrorOr<void> ProcFSRootDirectory::traverse_as_directory(FileSystemID fsid, Func
     TRY(callback({ ".", { fsid, component_index() }, 0 }));
     TRY(callback({ "..", { fsid, 0 }, 0 }));
 
-    for (auto& component : m_components) {
+    for (auto const& component : m_components) {
         InodeIdentifier identifier = { fsid, component.component_index() };
         TRY(callback({ component.name(), identifier, 0 }));
     }
 
-    return processes().with([&](auto& list) -> ErrorOr<void> {
+    return Process::all_instances().with([&](auto& list) -> ErrorOr<void> {
         for (auto& process : list) {
             VERIFY(!(process.pid() < 0));
             u64 process_id = (u64)process.pid().value();
@@ -973,8 +962,7 @@ ErrorOr<NonnullRefPtr<ProcFSExposedComponent>> ProcFSRootDirectory::lookup(Strin
         return maybe_candidate.release_value();
     }
 
-    String process_directory_name = name;
-    auto pid = process_directory_name.to_uint<unsigned>();
+    auto pid = name.to_uint<unsigned>();
     if (!pid.has_value())
         return ESRCH;
     auto actual_pid = pid.value();

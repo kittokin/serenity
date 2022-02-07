@@ -9,6 +9,7 @@
 #include "AttributeValue.h"
 #include "CompilationUnit.h"
 
+#include <AK/ByteReader.h>
 #include <AK/MemoryStream.h>
 #include <LibDebug/DebugInfo.h>
 
@@ -25,6 +26,7 @@ DwarfInfo::DwarfInfo(ELF::Image const& elf)
     m_debug_range_lists_data = section_data(".debug_rnglists"sv);
     m_debug_str_offsets_data = section_data(".debug_str_offsets"sv);
     m_debug_addr_data = section_data(".debug_addr"sv);
+    m_debug_ranges_data = section_data(".debug_ranges"sv);
 
     populate_compilation_units();
 }
@@ -82,7 +84,7 @@ AttributeValue DwarfInfo::get_attribute_value(AttributeDataForm form, ssize_t im
     value.m_compilation_unit = unit;
 
     auto assign_raw_bytes_value = [&](size_t length) {
-        value.m_data.as_raw_bytes = { reinterpret_cast<const u8*>(debug_info_data().data() + debug_info_stream.offset()), length };
+        value.m_data.as_raw_bytes = { debug_info_data().offset_pointer(debug_info_stream.offset()), length };
 
         debug_info_stream.discard_or_error(length);
         VERIFY(!debug_info_stream.has_any_error());
@@ -96,7 +98,7 @@ AttributeValue DwarfInfo::get_attribute_value(AttributeDataForm form, ssize_t im
         value.m_type = AttributeValue::Type::String;
 
         auto strings_data = debug_strings_data();
-        value.m_data.as_string = reinterpret_cast<const char*>(strings_data.data() + offset);
+        value.m_data.as_string = bit_cast<const char*>(strings_data.offset_pointer(offset));
         break;
     }
     case AttributeDataForm::Data1: {
@@ -197,7 +199,7 @@ AttributeValue DwarfInfo::get_attribute_value(AttributeDataForm form, ssize_t im
         debug_info_stream >> str;
         VERIFY(!debug_info_stream.has_any_error());
         value.m_type = AttributeValue::Type::String;
-        value.m_data.as_string = reinterpret_cast<const char*>(str_offset + debug_info_data().data());
+        value.m_data.as_string = bit_cast<const char*>(debug_info_data().offset_pointer(str_offset));
         break;
     }
     case AttributeDataForm::Block1: {
@@ -239,7 +241,7 @@ AttributeValue DwarfInfo::get_attribute_value(AttributeDataForm form, ssize_t im
         value.m_type = AttributeValue::Type::String;
 
         auto strings_data = debug_line_strings_data();
-        value.m_data.as_string = reinterpret_cast<const char*>(strings_data.data() + offset);
+        value.m_data.as_string = bit_cast<const char*>(strings_data.offset_pointer(offset));
         break;
     }
     case AttributeDataForm::ImplicitConst: {
@@ -321,7 +323,7 @@ AttributeValue DwarfInfo::get_attribute_value(AttributeDataForm form, ssize_t im
         break;
     }
     default:
-        dbgln("Unimplemented AttributeDataForm: {}", (u32)form);
+        dbgln("Unimplemented AttributeDataForm: {}", to_underlying(form));
         VERIFY_NOT_REACHED();
     }
     return value;
@@ -343,14 +345,22 @@ void DwarfInfo::build_cached_dies() const
                 auto index = ranges->as_unsigned();
                 auto base = die.compilation_unit().range_lists_base();
                 // FIXME: This assumes that the format is DWARf32
-                auto offsets = reinterpret_cast<u32 const*>(debug_range_lists_data().offset(base));
-                offset = offsets[index] + base;
+                auto offsets = debug_range_lists_data().slice(base);
+                offset = ByteReader::load32(offsets.offset_pointer(index * sizeof(u32))) + base;
             }
-            AddressRanges address_ranges(debug_range_lists_data(), offset, die.compilation_unit());
+
             Vector<DIERange> entries;
-            address_ranges.for_each_range([&entries](auto range) {
-                entries.empend(range.start, range.end);
-            });
+            if (die.compilation_unit().dwarf_version() == 5) {
+                AddressRangesV5 address_ranges(debug_range_lists_data(), offset, die.compilation_unit());
+                address_ranges.for_each_range([&entries](auto range) {
+                    entries.empend(range.start, range.end);
+                });
+            } else {
+                AddressRangesV4 address_ranges(debug_ranges_data(), offset, die.compilation_unit());
+                address_ranges.for_each_range([&entries](auto range) {
+                    entries.empend(range.start, range.end);
+                });
+            }
             return entries;
         }
 

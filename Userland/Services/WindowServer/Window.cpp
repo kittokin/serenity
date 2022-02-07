@@ -74,6 +74,14 @@ static Gfx::Bitmap& pin_icon()
     return *s_icon;
 }
 
+static Gfx::Bitmap& move_icon()
+{
+    static RefPtr<Gfx::Bitmap> s_icon;
+    if (!s_icon)
+        s_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/move.png").release_value_but_fixme_should_propagate_errors();
+    return *s_icon;
+}
+
 Window::Window(Core::Object& parent, WindowType type)
     : Core::Object(&parent)
     , m_type(type)
@@ -146,7 +154,7 @@ void Window::set_rect(const Gfx::IntRect& rect)
     m_rect = rect;
     if (rect.is_empty()) {
         m_backing_store = nullptr;
-    } else if (!m_client && (!m_backing_store || old_rect.size() != rect.size())) {
+    } else if (is_internal() && (!m_backing_store || old_rect.size() != rect.size())) {
         auto format = has_alpha_channel() ? Gfx::BitmapFormat::BGRA8888 : Gfx::BitmapFormat::BGRx8888;
         m_backing_store = Gfx::Bitmap::try_create(format, m_rect.size()).release_value_but_fixme_should_propagate_errors();
     }
@@ -256,19 +264,19 @@ void Window::handle_mouse_event(const MouseEvent& event)
 
     switch (event.type()) {
     case Event::MouseMove:
-        m_client->async_mouse_move(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta(), event.is_drag(), event.mime_types());
+        m_client->async_mouse_move(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta_x(), event.wheel_delta_y(), event.is_drag(), event.mime_types());
         break;
     case Event::MouseDown:
-        m_client->async_mouse_down(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta());
+        m_client->async_mouse_down(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta_x(), event.wheel_delta_y());
         break;
     case Event::MouseDoubleClick:
-        m_client->async_mouse_double_click(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta());
+        m_client->async_mouse_double_click(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta_x(), event.wheel_delta_y());
         break;
     case Event::MouseUp:
-        m_client->async_mouse_up(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta());
+        m_client->async_mouse_up(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta_x(), event.wheel_delta_y());
         break;
     case Event::MouseWheel:
-        m_client->async_mouse_wheel(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta());
+        m_client->async_mouse_wheel(m_window_id, event.position(), (u32)event.button(), event.buttons(), event.modifiers(), event.wheel_delta_x(), event.wheel_delta_y());
         break;
     default:
         VERIFY_NOT_REACHED();
@@ -525,7 +533,7 @@ void Window::set_resizable(bool resizable)
 
 void Window::event(Core::Event& event)
 {
-    if (!m_client) {
+    if (is_internal()) {
         VERIFY(parent());
         event.ignore();
         return;
@@ -795,6 +803,7 @@ void Window::ensure_window_menu()
 
         auto move_item = make<MenuItem>(*m_window_menu, (unsigned)WindowMenuAction::Move, "&Move");
         m_window_menu_move_item = move_item.ptr();
+        m_window_menu_move_item->set_icon(&move_icon());
         m_window_menu->add_item(move(move_item));
 
         m_window_menu->add_item(make<MenuItem>(*m_window_menu, MenuItem::Type::Separator));
@@ -898,6 +907,9 @@ void Window::window_menu_activate_default()
 
 void Window::request_close()
 {
+    if (is_destroyed())
+        return;
+
     Event close_request(Event::WindowCloseRequest);
     event(close_request);
 }

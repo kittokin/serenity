@@ -8,6 +8,7 @@ set(LIBC_SOURCES
     fcntl.cpp
     fenv.cpp
     fnmatch.cpp
+    ifaddrs.cpp
     getopt.cpp
     grp.cpp
     inttypes.cpp
@@ -44,7 +45,6 @@ set(LIBC_SOURCES
     string.cpp
     strings.cpp
     stubs.cpp
-    syslog.cpp
     sys/auxv.cpp
     sys/file.cpp
     sys/mman.cpp
@@ -52,10 +52,11 @@ set(LIBC_SOURCES
     sys/ptrace.cpp
     sys/select.cpp
     sys/socket.cpp
+    sys/statvfs.cpp
     sys/uio.cpp
     sys/wait.cpp
-    sys/statvfs.cpp
     sys/xattr.cpp
+    syslog.cpp
     termcap.cpp
     termios.cpp
     time.cpp
@@ -66,6 +67,7 @@ set(LIBC_SOURCES
     utsname.cpp
     wchar.cpp
     wctype.cpp
+    wstdio.cpp
 )
 
 file(GLOB AK_SOURCES CONFIGURE_DEPENDS "../../../AK/*.cpp")
@@ -120,6 +122,7 @@ add_custom_command(
     TARGET ssp
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_OBJECTS:ssp> ${CMAKE_INSTALL_PREFIX}/usr/lib/ssp.o
 )
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/libssp.a DESTINATION ${CMAKE_INSTALL_PREFIX}/usr/lib/)
 
 set(SOURCES ${LIBC_SOURCES} ${AK_SOURCES} ${ELF_SOURCES} ${ASM_SOURCES})
 
@@ -127,7 +130,7 @@ set(SOURCES ${LIBC_SOURCES} ${AK_SOURCES} ${ELF_SOURCES} ${ASM_SOURCES})
 set_source_files_properties(stdio.cpp PROPERTIES COMPILE_FLAGS "-fno-builtin-fputc -fno-builtin-fputs -fno-builtin-fwrite")
 
 add_library(LibCStaticWithoutDeps STATIC ${SOURCES})
-target_link_libraries(LibCStaticWithoutDeps ssp)
+target_link_libraries(LibCStaticWithoutDeps ssp LibTimeZone)
 add_dependencies(LibCStaticWithoutDeps LibM LibSystem LibUBSanitizer)
 
 add_custom_target(LibCStatic
@@ -151,7 +154,7 @@ set_property(
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -nolibc")
 serenity_libc(LibC c)
 add_dependencies(LibC crti crt0 crt0_shared crtn)
-target_link_libraries(LibC ssp system)
+target_link_libraries(LibC ssp system LibTimeZone)
 
 # We mark LibCStatic as a dependency of LibC because this triggers the build of the LibCStatic target
 add_dependencies(LibC LibM LibSystem LibCStatic)

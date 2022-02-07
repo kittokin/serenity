@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021-2022, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -21,9 +21,17 @@ struct ParseResult {
     Optional<StringView> time_hour;
     Optional<StringView> time_minute;
     Optional<StringView> time_second;
-    Optional<StringView> time_fractional_part;
+    Optional<StringView> time_fraction;
+    Optional<StringView> time_hour_not_valid_month;
+    Optional<StringView> time_hour_not_thirty_one_day_month;
+    Optional<StringView> time_hour_two_only;
+    Optional<StringView> time_minute_not_valid_day;
+    Optional<StringView> time_minute_thirty_only;
+    Optional<StringView> time_minute_thirty_one_only;
+    Optional<StringView> time_second_not_valid_month;
     Optional<StringView> calendar_name;
     Optional<StringView> utc_designator;
+    Optional<StringView> time_zone_numeric_utc_offset;
     Optional<StringView> time_zone_utc_offset_sign;
     Optional<StringView> time_zone_utc_offset_hour;
     Optional<StringView> time_zone_utc_offset_minute;
@@ -90,7 +98,7 @@ public:
     [[nodiscard]] bool parse_duration_designator();
     [[nodiscard]] bool parse_seconds_designator();
     [[nodiscard]] bool parse_date_time_separator();
-    [[nodiscard]] bool parse_duration_time_designator();
+    [[nodiscard]] bool parse_time_designator();
     [[nodiscard]] bool parse_weeks_designator();
     [[nodiscard]] bool parse_years_designator();
     [[nodiscard]] bool parse_utc_designator();
@@ -103,8 +111,14 @@ public:
     [[nodiscard]] bool parse_time_hour();
     [[nodiscard]] bool parse_time_minute();
     [[nodiscard]] bool parse_time_second();
+    [[nodiscard]] bool parse_time_hour_not_valid_month();
+    [[nodiscard]] bool parse_time_hour_not_thirty_one_day_month();
+    [[nodiscard]] bool parse_time_hour_two_only();
+    [[nodiscard]] bool parse_time_minute_not_valid_day();
+    [[nodiscard]] bool parse_time_minute_thirty_only();
+    [[nodiscard]] bool parse_time_minute_thirty_one_only();
+    [[nodiscard]] bool parse_time_second_not_valid_month();
     [[nodiscard]] bool parse_fractional_part();
-    [[nodiscard]] bool parse_time_fractional_part();
     [[nodiscard]] bool parse_fraction();
     [[nodiscard]] bool parse_time_fraction();
     [[nodiscard]] bool parse_time_zone_utc_offset_sign();
@@ -115,7 +129,13 @@ public:
     [[nodiscard]] bool parse_time_zone_utc_offset_fraction();
     [[nodiscard]] bool parse_time_zone_numeric_utc_offset();
     [[nodiscard]] bool parse_time_zone_utc_offset();
+    [[nodiscard]] bool parse_time_zone_numeric_utc_offset_not_ambiguous();
+    [[nodiscard]] bool parse_time_zone_numeric_utc_offset_not_ambiguous_allowed_negative_hour();
     [[nodiscard]] bool parse_time_zone_utc_offset_name();
+    [[nodiscard]] bool parse_tz_leading_char();
+    [[nodiscard]] bool parse_tz_char();
+    [[nodiscard]] bool parse_time_zone_iana_component();
+    [[nodiscard]] bool parse_time_zone_iana_name_tail();
     [[nodiscard]] bool parse_time_zone_iana_name();
     [[nodiscard]] bool parse_time_zone_bracketed_name();
     [[nodiscard]] bool parse_time_zone_bracketed_annotation();
@@ -125,10 +145,13 @@ public:
     [[nodiscard]] bool parse_calendar_name();
     [[nodiscard]] bool parse_calendar();
     [[nodiscard]] bool parse_time_spec();
-    [[nodiscard]] bool parse_time();
+    [[nodiscard]] bool parse_time_hour_minute_basic_format_not_ambiguous();
+    [[nodiscard]] bool parse_time_spec_with_optional_time_zone_not_ambiguous();
     [[nodiscard]] bool parse_time_spec_separator();
     [[nodiscard]] bool parse_date_time();
+    [[nodiscard]] bool parse_calendar_time();
     [[nodiscard]] bool parse_calendar_date_time();
+    [[nodiscard]] bool parse_calendar_date_time_time_required();
     [[nodiscard]] bool parse_duration_whole_seconds();
     [[nodiscard]] bool parse_duration_seconds_fraction();
     [[nodiscard]] bool parse_duration_seconds_part();

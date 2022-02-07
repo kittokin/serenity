@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
+ * Copyright (c) 2021, kleines Filmröllchen <filmroellchen@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -9,6 +9,7 @@
 
 #include <AK/ByteBuffer.h>
 #include <AK/Error.h>
+#include <AK/FixedArray.h>
 #include <AK/MemoryStream.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/RefPtr.h>
@@ -73,7 +74,8 @@ class Buffer : public RefCounted<Buffer> {
 public:
     static ErrorOr<NonnullRefPtr<Buffer>> from_pcm_data(ReadonlyBytes data, int num_channels, PcmSampleFormat sample_format);
     static ErrorOr<NonnullRefPtr<Buffer>> from_pcm_stream(InputMemoryStream& stream, int num_channels, PcmSampleFormat sample_format, int num_samples);
-    static ErrorOr<NonnullRefPtr<Buffer>> create_with_samples(Vector<Sample>&& samples)
+    template<ArrayLike<Sample> ArrayT>
+    static ErrorOr<NonnullRefPtr<Buffer>> create_with_samples(ArrayT&& samples)
     {
         return adopt_nonnull_ref_or_enomem(new (nothrow) Buffer(move(samples)));
     }
@@ -84,18 +86,19 @@ public:
     static NonnullRefPtr<Buffer> create_empty()
     {
         // If we can't allocate an empty buffer, things are in a very bad state.
-        return MUST(adopt_nonnull_ref_or_enomem(new (nothrow) Buffer({})));
+        return MUST(adopt_nonnull_ref_or_enomem(new (nothrow) Buffer(FixedArray<Sample>())));
     }
 
-    const Sample* samples() const { return (const Sample*)data(); }
+    Sample const* samples() const { return (const Sample*)data(); }
     int sample_count() const { return m_sample_count; }
-    const void* data() const { return m_buffer.data<void>(); }
+    void const* data() const { return m_buffer.data<void>(); }
     int size_in_bytes() const { return m_sample_count * (int)sizeof(Sample); }
     int id() const { return m_id; }
-    const Core::AnonymousBuffer& anonymous_buffer() const { return m_buffer; }
+    Core::AnonymousBuffer const& anonymous_buffer() const { return m_buffer; }
 
 private:
-    explicit Buffer(const Vector<Sample> samples)
+    template<ArrayLike<Sample> ArrayT>
+    explicit Buffer(ArrayT&& samples)
         // FIXME: AnonymousBuffers can't be empty, so even for empty buffers we create a buffer of size 1 here,
         //        although the sample count is set to 0 to mark this.
         : m_buffer(Core::AnonymousBuffer::create_with_size(max(samples.size(), 1) * sizeof(Sample)).release_value())

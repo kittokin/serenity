@@ -105,6 +105,7 @@ namespace JS {
     P(console)                               \
     P(construct)                             \
     P(constructor)                           \
+    P(containing)                            \
     P(compare)                               \
     P(copyWithin)                            \
     P(cos)                                   \
@@ -240,6 +241,12 @@ namespace JS {
     P(getYear)                               \
     P(global)                                \
     P(globalThis)                            \
+    P(granularity)                           \
+    P(group)                                 \
+    P(groupBy)                               \
+    P(groupByToMap)                          \
+    P(groupCollapsed)                        \
+    P(groupEnd)                              \
     P(groups)                                \
     P(has)                                   \
     P(hasIndices)                            \
@@ -253,6 +260,7 @@ namespace JS {
     P(hypot)                                 \
     P(id)                                    \
     P(ignoreCase)                            \
+    P(ignorePunctuation)                     \
     P(imul)                                  \
     P(importValue)                           \
     P(includes)                              \
@@ -284,11 +292,13 @@ namespace JS {
     P(isoNanosecond)                         \
     P(isoSecond)                             \
     P(isoYear)                               \
+    P(isWordLike)                            \
     P(italics)                               \
     P(join)                                  \
     P(keyFor)                                \
     P(keys)                                  \
     P(language)                              \
+    P(languageDisplay)                       \
     P(largestUnit)                           \
     P(lastIndex)                             \
     P(lastIndexOf)                           \
@@ -351,6 +361,7 @@ namespace JS {
     P(plainDateTimeISO)                      \
     P(plainTime)                             \
     P(plainTimeISO)                          \
+    P(pluralCategories)                      \
     P(pop)                                   \
     P(pow)                                   \
     P(preventExtensions)                     \
@@ -380,6 +391,8 @@ namespace JS {
     P(seal)                                  \
     P(second)                                \
     P(seconds)                               \
+    P(segment)                               \
+    P(sensitivity)                           \
     P(set)                                   \
     P(setBigInt64)                           \
     P(setBigUint64)                          \
@@ -438,14 +451,19 @@ namespace JS {
     P(subtract)                              \
     P(sup)                                   \
     P(supportedLocalesOf)                    \
+    P(supportedValuesOf)                     \
     P(tan)                                   \
     P(tanh)                                  \
     P(test)                                  \
     P(then)                                  \
+    P(time)                                  \
+    P(timeEnd)                               \
+    P(timeLog)                               \
     P(timeStyle)                             \
     P(timeZone)                              \
     P(timeZoneName)                          \
     P(toDateString)                          \
+    P(toExponential)                         \
     P(toFixed)                               \
     P(toGMTString)                           \
     P(toInstant)                             \
@@ -462,6 +480,7 @@ namespace JS {
     P(toPlainMonthDay)                       \
     P(toPlainTime)                           \
     P(toPlainYearMonth)                      \
+    P(toPrecision)                           \
     P(toString)                              \
     P(total)                                 \
     P(toTemporalInstant)                     \
@@ -486,6 +505,7 @@ namespace JS {
     P(until)                                 \
     P(unregister)                            \
     P(unshift)                               \
+    P(usage)                                 \
     P(useGrouping)                           \
     P(value)                                 \
     P(valueOf)                               \

@@ -17,7 +17,6 @@ namespace Kernel {
 
 class VGACompatibleAdapter : public GenericGraphicsAdapter
     , public PCI::Device {
-    AK_MAKE_ETERNAL
 public:
     static NonnullRefPtr<VGACompatibleAdapter> initialize_with_preset_resolution(PCI::DeviceIdentifier const&, PhysicalAddress, size_t framebuffer_width, size_t framebuffer_height, size_t framebuffer_pitch);
     static NonnullRefPtr<VGACompatibleAdapter> initialize(PCI::DeviceIdentifier const&);
@@ -31,6 +30,8 @@ public:
 
     virtual bool try_to_set_resolution(size_t output_port_index, size_t width, size_t height) override;
     virtual bool set_y_offset(size_t output_port_index, size_t y) override;
+
+    ErrorOr<ByteBuffer> get_edid(size_t output_port_index) const override;
 
 protected:
     explicit VGACompatibleAdapter(PCI::Address);

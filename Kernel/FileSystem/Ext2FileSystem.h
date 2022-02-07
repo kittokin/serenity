@@ -33,9 +33,6 @@ public:
     bool is_symlink() const { return Kernel::is_symlink(m_raw_inode.i_mode); }
     bool is_directory() const { return Kernel::is_directory(m_raw_inode.i_mode); }
 
-    // ^Inode (RefCounted magic)
-    virtual void one_ref_left() override;
-
 private:
     // ^Inode
     virtual ErrorOr<size_t> read_bytes(off_t, size_t, UserOrKernelBuffer& buffer, OpenFileDescription*) const override;
@@ -76,8 +73,8 @@ private:
     Ext2FSInode(Ext2FS&, InodeIndex);
 
     mutable Vector<BlockBasedFileSystem::BlockIndex> m_block_list;
-    mutable HashMap<String, InodeIndex> m_lookup_cache;
-    ext2_inode m_raw_inode;
+    mutable HashMap<NonnullOwnPtr<KString>, InodeIndex> m_lookup_cache;
+    ext2_inode m_raw_inode {};
 };
 
 class Ext2FS final : public BlockBasedFileSystem {
@@ -125,7 +122,7 @@ private:
     ErrorOr<void> write_ext2_inode(InodeIndex, ext2_inode const&);
     bool find_block_containing_inode(InodeIndex, BlockIndex& block_index, unsigned& offset) const;
 
-    bool flush_super_block();
+    ErrorOr<void> flush_super_block();
 
     virtual StringView class_name() const override { return "Ext2FS"sv; }
     virtual Ext2FSInode& root_inode() override;
@@ -159,7 +156,7 @@ private:
 
     u64 m_block_group_count { 0 };
 
-    mutable ext2_super_block m_super_block;
+    mutable ext2_super_block m_super_block {};
     mutable OwnPtr<KBuffer> m_cached_group_descriptor_table;
 
     mutable HashMap<InodeIndex, RefPtr<Ext2FSInode>> m_inode_cache;

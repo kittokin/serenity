@@ -27,8 +27,8 @@ static void free_pages(void* ptr, size_t bytes)
 
 NonnullOwnPtr<MmapRegion> MmapRegion::create_anonymous(u32 base, u32 size, u32 prot, String name)
 {
-    auto data = (u8*)mmap_initialized(size, 0, String::formatted("(UE) {}", name).characters());
-    auto shadow_data = (u8*)mmap_initialized(size, 1, "MmapRegion ShadowData");
+    auto* data = (u8*)mmap_initialized(size, 0, String::formatted("(UE) {}", name).characters());
+    auto* shadow_data = (u8*)mmap_initialized(size, 1, "MmapRegion ShadowData");
     auto region = adopt_own(*new MmapRegion(base, size, prot, data, shadow_data));
     region->m_name = move(name);
     return region;
@@ -36,11 +36,11 @@ NonnullOwnPtr<MmapRegion> MmapRegion::create_anonymous(u32 base, u32 size, u32 p
 
 NonnullOwnPtr<MmapRegion> MmapRegion::create_file_backed(u32 base, u32 size, u32 prot, int flags, int fd, off_t offset, String name)
 {
-    // Since we put the memory to an arbitrary location, do not pass MAP_FIXED to the Kernel.
-    auto real_flags = flags & ~MAP_FIXED;
-    auto data = (u8*)mmap_with_name(nullptr, size, prot, real_flags, fd, offset, name.is_empty() ? nullptr : String::formatted("(UE) {}", name).characters());
+    // Since we put the memory to an arbitrary location, do not pass MAP_FIXED and MAP_FIXED_NOREPLACE to the Kernel.
+    auto real_flags = flags & ~(MAP_FIXED | MAP_FIXED_NOREPLACE);
+    auto* data = (u8*)mmap_with_name(nullptr, size, prot, real_flags, fd, offset, name.is_empty() ? nullptr : String::formatted("(UE) {}", name).characters());
     VERIFY(data != MAP_FAILED);
-    auto shadow_data = (u8*)mmap_initialized(size, 1, "MmapRegion ShadowData");
+    auto* shadow_data = (u8*)mmap_initialized(size, 1, "MmapRegion ShadowData");
     auto region = adopt_own(*new MmapRegion(base, size, prot, data, shadow_data));
     region->m_file_backed = true;
     region->m_name = move(name);

@@ -359,8 +359,7 @@ JS_DEFINE_NATIVE_FUNCTION(DurationPrototype::round)
         // b. Set roundTo to ! OrdinaryObjectCreate(null).
         round_to = Object::create(global_object, nullptr);
 
-        // FIXME: "_smallestUnit_" is a spec bug, see https://github.com/tc39/proposal-temporal/pull/1931
-        // c. Perform ! CreateDataPropertyOrThrow(roundTo, "_smallestUnit_", paramString).
+        // c. Perform ! CreateDataPropertyOrThrow(roundTo, "smallestUnit", paramString).
         MUST(round_to->create_data_property_or_throw(vm.names.smallestUnit, vm.argument(0)));
     }
     // 5. Else,
@@ -426,7 +425,7 @@ JS_DEFINE_NATIVE_FUNCTION(DurationPrototype::round)
     auto maximum = maximum_temporal_duration_rounding_increment(*smallest_unit);
 
     // 19. Let roundingIncrement be ? ToTemporalRoundingIncrement(roundTo, maximum, false).
-    auto rounding_increment = TRY(to_temporal_rounding_increment(global_object, *round_to, maximum.has_value() ? *maximum : Optional<double> {}, false));
+    auto rounding_increment = TRY(to_temporal_rounding_increment(global_object, *round_to, Optional<double>(maximum), false));
 
     // 20. Let relativeTo be ? ToRelativeTemporalObject(roundTo).
     auto relative_to = TRY(to_relative_temporal_object(global_object, *round_to));

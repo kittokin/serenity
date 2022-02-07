@@ -11,7 +11,10 @@ namespace Kernel {
 ErrorOr<FlatPtr> Process::sys$seteuid(UserID new_euid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(id);
+    TRY(require_promise(Pledge::id));
+
+    if (new_euid == (uid_t)-1)
+        return EINVAL;
 
     if (new_euid != uid() && new_euid != suid() && !is_superuser())
         return EPERM;
@@ -28,7 +31,10 @@ ErrorOr<FlatPtr> Process::sys$seteuid(UserID new_euid)
 ErrorOr<FlatPtr> Process::sys$setegid(GroupID new_egid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(id);
+    TRY(require_promise(Pledge::id));
+
+    if (new_egid == (uid_t)-1)
+        return EINVAL;
 
     if (new_egid != gid() && new_egid != sgid() && !is_superuser())
         return EPERM;
@@ -44,7 +50,10 @@ ErrorOr<FlatPtr> Process::sys$setegid(GroupID new_egid)
 ErrorOr<FlatPtr> Process::sys$setuid(UserID new_uid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(id);
+    TRY(require_promise(Pledge::id));
+
+    if (new_uid == (uid_t)-1)
+        return EINVAL;
 
     if (new_uid != uid() && new_uid != euid() && !is_superuser())
         return EPERM;
@@ -62,7 +71,10 @@ ErrorOr<FlatPtr> Process::sys$setuid(UserID new_uid)
 ErrorOr<FlatPtr> Process::sys$setgid(GroupID new_gid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(id);
+    TRY(require_promise(Pledge::id));
+
+    if (new_gid == (uid_t)-1)
+        return EINVAL;
 
     if (new_gid != gid() && new_gid != egid() && !is_superuser())
         return EPERM;
@@ -80,7 +92,7 @@ ErrorOr<FlatPtr> Process::sys$setgid(GroupID new_gid)
 ErrorOr<FlatPtr> Process::sys$setreuid(UserID new_ruid, UserID new_euid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(id);
+    TRY(require_promise(Pledge::id));
 
     if (new_ruid == (uid_t)-1)
         new_ruid = uid();
@@ -106,7 +118,7 @@ ErrorOr<FlatPtr> Process::sys$setreuid(UserID new_ruid, UserID new_euid)
 ErrorOr<FlatPtr> Process::sys$setresuid(UserID new_ruid, UserID new_euid, UserID new_suid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(id);
+    TRY(require_promise(Pledge::id));
 
     if (new_ruid == (uid_t)-1)
         new_ruid = uid();
@@ -132,7 +144,7 @@ ErrorOr<FlatPtr> Process::sys$setresuid(UserID new_ruid, UserID new_euid, UserID
 ErrorOr<FlatPtr> Process::sys$setresgid(GroupID new_rgid, GroupID new_egid, GroupID new_sgid)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(id);
+    TRY(require_promise(Pledge::id));
 
     if (new_rgid == (gid_t)-1)
         new_rgid = gid();
@@ -158,7 +170,7 @@ ErrorOr<FlatPtr> Process::sys$setresgid(GroupID new_rgid, GroupID new_egid, Grou
 ErrorOr<FlatPtr> Process::sys$setgroups(size_t count, Userspace<const gid_t*> user_gids)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
-    REQUIRE_PROMISE(id);
+    TRY(require_promise(Pledge::id));
     if (!is_superuser())
         return EPERM;
 
@@ -175,7 +187,7 @@ ErrorOr<FlatPtr> Process::sys$setgroups(size_t count, Userspace<const gid_t*> us
     HashTable<gid_t> unique_extra_gids;
     for (auto& extra_gid : new_extra_gids) {
         if (extra_gid != gid())
-            unique_extra_gids.set(extra_gid);
+            TRY(unique_extra_gids.try_set(extra_gid));
     }
 
     ProtectedDataMutationScope scope { *this };

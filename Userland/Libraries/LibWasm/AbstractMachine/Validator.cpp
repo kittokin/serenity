@@ -103,6 +103,9 @@ ErrorOr<void, ValidationError> Validator::validate(Module& module)
         for (auto& segment : section.segments())
             m_context.elements.unchecked_append(segment.type);
     });
+    module.for_each_section_of_type<DataSection>([this](DataSection const& section) {
+        m_context.datas.resize(section.data().size());
+    });
 
     // FIXME: C.refs is the set funcidx(module with funcs=ϵ with start=ϵ),
     //        i.e., the set of function indices occurring in the module, except in its functions or start function.
@@ -1623,11 +1626,11 @@ VALIDATE_INSTRUCTION(f64_reinterpret_i64)
 
 VALIDATE_INSTRUCTION(i32_reinterpret_f32)
 {
-    if (stack.is_empty() || !stack.last().is_of_kind(ValueType::I32))
+    if (stack.is_empty() || !stack.last().is_of_kind(ValueType::F32))
         return Errors::invalid_stack_state();
 
     stack.take_last();
-    stack.append(ValueType(ValueType::F32));
+    stack.append(ValueType(ValueType::I32));
     return {};
 }
 
@@ -2421,10 +2424,13 @@ VALIDATE_INSTRUCTION(block)
     if (stack.size() < parameters.size())
         return Errors::invalid_stack_state();
 
-    for (size_t i = 0; i < parameters.size(); ++i) {
+    for (size_t i = 1; i <= parameters.size(); ++i) {
         if (stack.take_last() != parameters[parameters.size() - i])
             return Errors::invalid_stack_state();
     }
+
+    for (auto& parameter : parameters)
+        stack.append(parameter);
 
     m_entered_scopes.append(ChildScopeKind::Block);
     m_block_details.empend(stack.actual_size(), Empty {});
@@ -2447,6 +2453,9 @@ VALIDATE_INSTRUCTION(loop)
         if (stack.take_last() != parameters[parameters.size() - i - 1])
             return Errors::invalid_stack_state();
     }
+
+    for (auto& parameter : parameters)
+        stack.append(parameter);
 
     m_entered_scopes.append(ChildScopeKind::Block);
     m_block_details.empend(stack.actual_size(), Empty {});
@@ -2472,6 +2481,9 @@ VALIDATE_INSTRUCTION(if_)
         if (stack.take_last() != parameters[parameters.size() - i])
             return Errors::invalid_stack_state();
     }
+
+    for (auto& parameter : parameters)
+        stack.append(parameter);
 
     m_entered_scopes.append(args.else_ip.has_value() ? ChildScopeKind::IfWithElse : ChildScopeKind::IfWithoutElse);
     m_block_details.empend(stack.actual_size(), BlockDetails::IfDetails { stack, {} });

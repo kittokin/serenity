@@ -6,11 +6,11 @@
 
 #include <AK/ScopeGuard.h>
 #include <AK/StringView.h>
+#include <Kernel/API/POSIX/errno.h>
 #include <Kernel/Arch/x86/InterruptDisabler.h>
 #include <Kernel/Debug.h>
 #include <Kernel/Process.h>
 #include <Kernel/TTY/TTY.h>
-#include <LibC/errno_numbers.h>
 #include <LibC/signal_numbers.h>
 #include <LibC/sys/ioctl_numbers.h>
 #define TTYDEFCHARS
@@ -19,7 +19,7 @@
 
 namespace Kernel {
 
-TTY::TTY(unsigned major, unsigned minor)
+TTY::TTY(MajorNumber major, MinorNumber minor)
     : CharacterDevice(major, minor)
 {
     set_default_termios();
@@ -139,7 +139,7 @@ void TTY::process_output(u8 ch, Functor put_char)
     }
 }
 
-bool TTY::can_read(const OpenFileDescription&, size_t) const
+bool TTY::can_read(const OpenFileDescription&, u64) const
 {
     if (in_canonical_mode()) {
         return m_available_lines > 0;
@@ -147,7 +147,7 @@ bool TTY::can_read(const OpenFileDescription&, size_t) const
     return !m_input_buffer.is_empty();
 }
 
-bool TTY::can_write(const OpenFileDescription&, size_t) const
+bool TTY::can_write(const OpenFileDescription&, u64) const
 {
     return true;
 }
@@ -474,11 +474,8 @@ ErrorOr<void> TTY::set_termios(const termios& t)
 
 ErrorOr<void> TTY::ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg)
 {
-    REQUIRE_PROMISE(tty);
     auto& current_process = Process::current();
-    Userspace<termios*> user_termios;
-    Userspace<winsize*> user_winsize;
-
+    TRY(current_process.require_promise(Pledge::tty));
 #if 0
     // FIXME: When should we block things?
     //        How do we make this work together with MasterPTY forwarding to us?
@@ -521,15 +518,14 @@ ErrorOr<void> TTY::ioctl(OpenFileDescription&, unsigned request, Userspace<void*
         return {};
     }
     case TCGETS: {
-        user_termios = static_ptr_cast<termios*>(arg);
+        auto user_termios = static_ptr_cast<termios*>(arg);
         return copy_to_user(user_termios, &m_termios);
     }
     case TCSETS:
     case TCSETSF:
     case TCSETSW: {
-        user_termios = static_ptr_cast<termios*>(arg);
-        termios termios;
-        TRY(copy_from_user(&termios, user_termios));
+        auto user_termios = static_ptr_cast<termios const*>(arg);
+        auto termios = TRY(copy_typed_from_user(user_termios));
         auto rc = set_termios(termios);
         if (request == TCSETSF)
             flush_input();
@@ -545,18 +541,18 @@ ErrorOr<void> TTY::ioctl(OpenFileDescription&, unsigned request, Userspace<void*
         }
         return {};
     }
-    case TIOCGWINSZ:
-        user_winsize = static_ptr_cast<winsize*>(arg);
-        winsize ws;
+    case TIOCGWINSZ: {
+        auto user_winsize = static_ptr_cast<winsize*>(arg);
+        winsize ws {};
         ws.ws_row = m_rows;
         ws.ws_col = m_columns;
         ws.ws_xpixel = 0;
         ws.ws_ypixel = 0;
         return copy_to_user(user_winsize, &ws);
+    }
     case TIOCSWINSZ: {
-        user_winsize = static_ptr_cast<winsize*>(arg);
-        winsize ws;
-        TRY(copy_from_user(&ws, user_winsize));
+        auto user_winsize = static_ptr_cast<winsize const*>(arg);
+        auto ws = TRY(copy_typed_from_user(user_winsize));
         if (ws.ws_col == m_columns && ws.ws_row == m_rows)
             return {};
         m_rows = ws.ws_row;

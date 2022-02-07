@@ -84,6 +84,7 @@ public:
         pal.set_color(ColorRole::Background, color);
         set_palette(pal);
         update();
+        m_color = color;
     }
 
     Function<void(Color const&)> on_color_change;
@@ -143,17 +144,20 @@ PaletteWidget::PaletteWidget()
     display_color_list(result.value());
 }
 
-void PaletteWidget::set_image_editor(ImageEditor& editor)
+void PaletteWidget::set_image_editor(ImageEditor* editor)
 {
-    m_editor = &editor;
-    set_primary_color(editor.primary_color());
-    set_secondary_color(editor.secondary_color());
+    m_editor = editor;
+    if (!m_editor)
+        return;
 
-    editor.on_primary_color_change = [this](Color color) {
+    set_primary_color(editor->primary_color());
+    set_secondary_color(editor->secondary_color());
+
+    editor->on_primary_color_change = [this](Color color) {
         set_primary_color(color);
     };
 
-    editor.on_secondary_color_change = [this](Color color) {
+    editor->on_secondary_color_change = [this](Color color) {
         set_secondary_color(color);
     };
 }
@@ -164,13 +168,15 @@ PaletteWidget::~PaletteWidget()
 
 void PaletteWidget::set_primary_color(Color color)
 {
-    m_editor->set_primary_color(color);
+    if (m_editor)
+        m_editor->set_primary_color(color);
     m_primary_color_widget->set_background_color(color);
 }
 
 void PaletteWidget::set_secondary_color(Color color)
 {
-    m_editor->set_secondary_color(color);
+    if (m_editor)
+        m_editor->set_secondary_color(color);
     m_secondary_color_widget->set_background_color(color);
 }
 
@@ -249,16 +255,6 @@ Result<Vector<Color>, String> PaletteWidget::load_palette_file(Core::File& file)
     return palette;
 }
 
-Result<Vector<Color>, String> PaletteWidget::load_palette_fd_and_close(int fd)
-{
-    auto file = Core::File::construct();
-    file->open(fd, Core::OpenMode::ReadOnly, Core::File::ShouldCloseFileDescriptor::Yes);
-    if (file->has_error())
-        return String { file->error_string() };
-
-    return load_palette_file(file);
-}
-
 Result<Vector<Color>, String> PaletteWidget::load_palette_path(String const& file_path)
 {
     auto file_or_error = Core::File::open(file_path, Core::OpenMode::ReadOnly);
@@ -269,20 +265,12 @@ Result<Vector<Color>, String> PaletteWidget::load_palette_path(String const& fil
     return load_palette_file(file);
 }
 
-Result<void, String> PaletteWidget::save_palette_fd_and_close(Vector<Color> palette, int fd)
+Result<void, String> PaletteWidget::save_palette_file(Vector<Color> palette, Core::File& file)
 {
-    auto file = Core::File::construct();
-    file->open(fd, Core::OpenMode::WriteOnly, Core::File::ShouldCloseFileDescriptor::Yes);
-    if (file->has_error())
-        return String { file->error_string() };
-
     for (auto& color : palette) {
-        file->write(color.to_string_without_alpha());
-        file->write("\n");
+        file.write(color.to_string_without_alpha());
+        file.write("\n");
     }
-
-    file->close();
-
     return {};
 }
 

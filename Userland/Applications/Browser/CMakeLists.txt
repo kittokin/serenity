@@ -18,6 +18,7 @@ set(SOURCES
     DownloadWidget.cpp
     EditBookmarkGML.h
     History.cpp
+    IconBag.cpp
     InspectorWidget.cpp
     Tab.cpp
     TabGML.h
@@ -27,3 +28,4 @@ set(SOURCES
 
 serenity_app(Browser ICON app-browser)
 target_link_libraries(Browser LibWeb LibProtocol LibGUI LibDesktop LibConfig LibMain)
+link_with_unicode_data(Browser)

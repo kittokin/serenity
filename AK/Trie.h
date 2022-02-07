@@ -43,7 +43,8 @@ class Trie {
         explicit ConstIterator(const Trie& node)
         {
             m_current_node = &node;
-            m_state.empend(false, node.m_children.begin(), node.m_children.end());
+            // FIXME: Figure out how to OOM harden this iterator.
+            MUST(m_state.try_empend(false, node.m_children.begin(), node.m_children.end()));
         }
 
     private:
@@ -58,7 +59,9 @@ class Trie {
                 return pop_and_get_next();
 
             m_current_node = &*(*current_state.it).value;
-            m_state.empend(false, m_current_node->m_children.begin(), m_current_node->m_children.end());
+
+            // FIXME: Figure out how to OOM harden this iterator.
+            MUST(m_state.try_empend(false, m_current_node->m_children.begin(), m_current_node->m_children.end()));
         }
         void pop_and_get_next()
         {
@@ -132,7 +135,7 @@ public:
     {
         auto it = m_children.find(value);
         if (it == m_children.end()) {
-            auto node = make<Trie>(value, move(metadata));
+            auto node = adopt_nonnull_own_or_enomem(new (nothrow) Trie(value, move(metadata))).release_value_but_fixme_should_propagate_errors();
             auto& node_ref = *node;
             m_children.set(move(value), move(node));
             return static_cast<BaseType&>(node_ref);
@@ -192,7 +195,7 @@ public:
     {
         Trie root(m_value, m_metadata);
         for (auto& it : m_children)
-            root.m_children.set(it.key, make<Trie>(it.value->deep_copy()));
+            root.m_children.set(it.key, adopt_nonnull_own_or_enomem(new (nothrow) Trie(it.value->deep_copy())).release_value_but_fixme_should_propagate_errors());
         return static_cast<BaseType&&>(move(root));
     }
 

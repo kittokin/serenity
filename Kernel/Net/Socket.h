@@ -104,7 +104,7 @@ public:
     // ^File
     virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override final;
     virtual ErrorOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override final;
-    virtual ErrorOr<void> stat(::stat&) const override;
+    virtual ErrorOr<struct stat> stat() const override;
     virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const override = 0;
 
     bool has_receive_timeout() const { return m_receive_timeout != Time::zero(); }
@@ -130,16 +130,22 @@ protected:
 
     Role m_role { Role::None };
 
-    ErrorOr<void> so_error() const { return m_so_error; }
+    ErrorOr<void> so_error() const
+    {
+        VERIFY(m_mutex.is_exclusively_locked_by_current_thread());
+        return m_so_error;
+    }
 
     Error set_so_error(ErrnoCode error_code)
     {
+        MutexLocker locker(mutex());
         auto error = Error::from_errno(error_code);
         m_so_error = error;
         return error;
     }
     Error set_so_error(Error error)
     {
+        MutexLocker locker(mutex());
         m_so_error = error;
         return error;
     }
@@ -181,44 +187,6 @@ private:
     ErrorOr<void> m_so_error;
 
     NonnullRefPtrVector<Socket> m_pending;
-};
-
-template<typename SocketType>
-class SocketHandle {
-public:
-    SocketHandle() = default;
-
-    SocketHandle(NonnullRefPtr<SocketType>&& socket)
-        : m_socket(move(socket))
-    {
-        if (m_socket)
-            m_socket->mutex().lock();
-    }
-
-    SocketHandle(SocketHandle&& other)
-        : m_socket(move(other.m_socket))
-    {
-    }
-
-    ~SocketHandle()
-    {
-        if (m_socket)
-            m_socket->mutex().unlock();
-    }
-
-    SocketHandle(const SocketHandle&) = delete;
-    SocketHandle& operator=(const SocketHandle&) = delete;
-
-    operator bool() const { return m_socket; }
-
-    SocketType* operator->() { return &socket(); }
-    const SocketType* operator->() const { return &socket(); }
-
-    SocketType& socket() { return *m_socket; }
-    const SocketType& socket() const { return *m_socket; }
-
-private:
-    RefPtr<SocketType> m_socket;
 };
 
 // This is a special variant of TRY() that also updates the socket's SO_ERROR field on error.

@@ -12,9 +12,9 @@ namespace GUI {
 
 WindowManagerServerConnection& WindowManagerServerConnection::the()
 {
-    static WindowManagerServerConnection* s_connection = nullptr;
+    static RefPtr<WindowManagerServerConnection> s_connection = nullptr;
     if (!s_connection)
-        s_connection = new WindowManagerServerConnection;
+        s_connection = WindowManagerServerConnection::try_create().release_value_but_fixme_should_propagate_errors();
     return *s_connection;
 }
 
@@ -68,6 +68,12 @@ void WindowManagerServerConnection::workspace_changed(i32 wm_id, u32 row, u32 co
 {
     if (auto* window = Window::from_window_id(wm_id))
         Core::EventLoop::current().post_event(*window, make<WMWorkspaceChangedEvent>(wm_id, row, column));
+}
+
+void WindowManagerServerConnection::keymap_changed(i32 wm_id, String const& keymap)
+{
+    if (auto* window = Window::from_window_id(wm_id))
+        Core::EventLoop::current().post_event(*window, make<WMKeymapChangedEvent>(wm_id, keymap));
 }
 
 }

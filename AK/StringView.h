@@ -120,6 +120,36 @@ public:
 
     [[nodiscard]] Vector<StringView> split_view_if(Function<bool(char)> const& predicate, bool keep_empty = false) const;
 
+    template<VoidFunction<StringView> Callback>
+    void for_each_split_view(char separator, bool keep_empty, Callback callback) const
+    {
+        StringView seperator_view { &separator, 1 };
+        for_each_split_view(seperator_view, keep_empty, callback);
+    }
+
+    template<VoidFunction<StringView> Callback>
+    void for_each_split_view(StringView separator, bool keep_empty, Callback callback) const
+    {
+        VERIFY(!separator.is_empty());
+
+        if (is_empty())
+            return;
+
+        StringView view { *this };
+
+        auto maybe_separator_index = find(separator);
+        while (maybe_separator_index.has_value()) {
+            auto separator_index = maybe_separator_index.value();
+            auto part_with_separator = view.substring_view(0, separator_index + separator.length());
+            if (keep_empty || separator_index > 0)
+                callback(part_with_separator.substring_view(0, separator_index));
+            view = view.substring_view_starting_after_substring(part_with_separator);
+            maybe_separator_index = view.find(separator);
+        }
+        if (keep_empty || !view.is_empty())
+            callback(view);
+    }
+
     // Create a Vector of StringViews split by line endings. As of CommonMark
     // 0.29, the spec defines a line ending as "a newline (U+000A), a carriage
     // return (U+000D) not followed by a newline, or a carriage return and a
@@ -174,28 +204,43 @@ public:
 
     bool operator==(const String&) const;
 
+    [[nodiscard]] constexpr int compare(StringView other) const
+    {
+        if (m_characters == nullptr)
+            return other.m_characters ? -1 : 0;
+
+        if (other.m_characters == nullptr)
+            return 1;
+
+        size_t rlen = min(m_length, other.m_length);
+        int c = __builtin_memcmp(m_characters, other.m_characters, rlen);
+        if (c == 0) {
+            if (length() < other.length())
+                return -1;
+            if (length() == other.length())
+                return 0;
+            return 1;
+        }
+        return c;
+    }
+
     constexpr bool operator==(StringView other) const
     {
-        if (is_null())
-            return other.is_null();
-        if (other.is_null())
-            return false;
-        if (length() != other.length())
-            return false;
-        return __builtin_memcmp(m_characters, other.m_characters, m_length) == 0;
+        return length() == other.length() && compare(other) == 0;
     }
 
     constexpr bool operator!=(StringView other) const
     {
-        return !(*this == other);
+        return length() != other.length() || compare(other) != 0;
     }
 
-    bool operator<(StringView other) const
-    {
-        if (int c = __builtin_memcmp(m_characters, other.m_characters, min(m_length, other.m_length)))
-            return c < 0;
-        return m_length < other.m_length;
-    }
+    constexpr bool operator<(StringView other) const { return compare(other) < 0; }
+
+    constexpr bool operator<=(StringView other) const { return compare(other) <= 0; }
+
+    constexpr bool operator>(StringView other) const { return compare(other) > 0; }
+
+    constexpr bool operator>=(StringView other) const { return compare(other) >= 0; }
 
     [[nodiscard]] String to_string() const;
 
@@ -221,6 +266,15 @@ struct Traits<StringView> : public GenericTraits<StringView> {
     static unsigned hash(StringView s) { return s.hash(); }
 };
 
+struct CaseInsensitiveStringViewTraits : public Traits<StringView> {
+    static unsigned hash(StringView s)
+    {
+        if (s.is_empty())
+            return 0;
+        return case_insensitive_string_hash(s.characters_without_null_termination(), s.length());
+    }
+};
+
 }
 
 [[nodiscard]] ALWAYS_INLINE constexpr AK::StringView operator"" sv(const char* cstring, size_t length)
@@ -228,4 +282,5 @@ struct Traits<StringView> : public GenericTraits<StringView> {
     return AK::StringView(cstring, length);
 }
 
+using AK::CaseInsensitiveStringViewTraits;
 using AK::StringView;

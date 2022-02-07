@@ -9,6 +9,7 @@ set(SOURCES
     AbstractSlider.cpp
     AbstractTableView.cpp
     AbstractView.cpp
+    AbstractZoomPanWidget.cpp
     Action.cpp
     ActionGroup.cpp
     Application.cpp
@@ -26,6 +27,7 @@ set(SOURCES
     CommonLocationsProvider.cpp
     ComboBox.cpp
     Command.cpp
+    CommandPalette.cpp
     Desktop.cpp
     Dialog.cpp
     DisplayLink.cpp
@@ -41,6 +43,9 @@ set(SOURCES
     FontPicker.cpp
     FontPickerDialogGML.h
     Frame.cpp
+    GitCommitLexer.cpp
+    GitCommitSyntaxHighlighter.cpp
+    GlyphMapWidget.cpp
     GMLAutocompleteProvider.cpp
     GMLFormatter.cpp
     GMLLexer.cpp

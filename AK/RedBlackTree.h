@@ -449,9 +449,14 @@ public:
         return &node->value;
     }
 
-    void insert(K key, const V& value)
+    ErrorOr<void> try_insert(K key, V const& value)
     {
-        insert(key, V(value));
+        return try_insert(key, V(value));
+    }
+
+    void insert(K key, V const& value)
+    {
+        MUST(try_insert(key, value));
     }
 
     ErrorOr<void> try_insert(K key, V&& value)
@@ -521,10 +526,8 @@ public:
 
     void clear()
     {
-        if (this->m_root) {
-            delete this->m_root;
-            this->m_root = nullptr;
-        }
+        delete this->m_root;
+        this->m_root = nullptr;
         this->m_minimum = nullptr;
         this->m_size = 0;
     }
@@ -542,10 +545,8 @@ private:
 
         ~Node()
         {
-            if (this->left_child)
-                delete this->left_child;
-            if (this->right_child)
-                delete this->right_child;
+            delete this->left_child;
+            delete this->right_child;
         }
     };
 };

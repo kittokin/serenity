@@ -227,7 +227,7 @@ void Editor::get_terminal_size()
     }
 }
 
-void Editor::add_to_history(const String& line)
+void Editor::add_to_history(String const& line)
 {
     if (line.is_empty())
         return;
@@ -246,7 +246,7 @@ void Editor::add_to_history(const String& line)
     m_history_dirty = true;
 }
 
-bool Editor::load_history(const String& path)
+bool Editor::load_history(String const& path)
 {
     auto history_file = Core::File::construct(path);
     if (!history_file->open(Core::OpenMode::ReadOnly))
@@ -263,7 +263,7 @@ bool Editor::load_history(const String& path)
 }
 
 template<typename It0, typename It1, typename OutputT, typename MapperT, typename LessThan>
-static void merge(It0&& begin0, const It0& end0, It1&& begin1, const It1& end1, OutputT& output, MapperT left_mapper, LessThan less_than)
+static void merge(It0&& begin0, It0 const& end0, It1&& begin1, It1 const& end1, OutputT& output, MapperT left_mapper, LessThan less_than)
 {
     for (;;) {
         if (begin0 == end0 && begin1 == end1)
@@ -304,7 +304,7 @@ static void merge(It0&& begin0, const It0& end0, It1&& begin1, const It1& end1, 
     }
 }
 
-bool Editor::save_history(const String& path)
+bool Editor::save_history(String const& path)
 {
     Vector<HistoryEntry> final_history { { "", 0 } };
     {
@@ -320,7 +320,7 @@ bool Editor::save_history(const String& path)
                 auto string = str.substring_view(it == 0 ? it : it + 2);
                 return HistoryEntry { string, time };
             },
-            [](const HistoryEntry& left, const HistoryEntry& right) { return left.timestamp < right.timestamp; });
+            [](HistoryEntry const& left, HistoryEntry const& right) { return left.timestamp < right.timestamp; });
     }
 
     auto file_or_error = Core::File::open(path, Core::OpenMode::WriteOnly, 0600);
@@ -328,7 +328,7 @@ bool Editor::save_history(const String& path)
         return false;
     auto file = file_or_error.release_value();
     final_history.take_first();
-    for (const auto& entry : final_history)
+    for (auto const& entry : final_history)
         file->write(String::formatted("{}::{}\n\n", entry.timestamp, entry.entry));
 
     m_history_dirty = false;
@@ -347,13 +347,13 @@ void Editor::clear_line()
     m_inline_search_cursor = m_cursor;
 }
 
-void Editor::insert(const Utf32View& string)
+void Editor::insert(Utf32View const& string)
 {
     for (size_t i = 0; i < string.length(); ++i)
         insert(string.code_points()[i]);
 }
 
-void Editor::insert(const String& string)
+void Editor::insert(String const& string)
 {
     for (auto ch : Utf8View { string })
         insert(ch);
@@ -388,7 +388,7 @@ void Editor::insert(const u32 cp)
     m_inline_search_cursor = m_cursor;
 }
 
-void Editor::register_key_input_callback(const KeyBinding& binding)
+void Editor::register_key_input_callback(KeyBinding const& binding)
 {
     if (binding.kind == KeyBinding::Kind::InternalFunction) {
         auto internal_function = find_internal_function(binding.binding);
@@ -456,7 +456,7 @@ Editor::CodepointRange Editor::byte_offset_range_to_code_point_offset_range(size
     return range;
 }
 
-void Editor::stylize(const Span& span, const Style& style)
+void Editor::stylize(Span const& span, Style const& style)
 {
     if (style.is_empty())
         return;
@@ -474,22 +474,15 @@ void Editor::stylize(const Span& span, const Style& style)
     auto& spans_starting = style.is_anchored() ? m_current_spans.m_anchored_spans_starting : m_current_spans.m_spans_starting;
     auto& spans_ending = style.is_anchored() ? m_current_spans.m_anchored_spans_ending : m_current_spans.m_spans_ending;
 
-    auto starting_map = spans_starting.get(start).value_or({});
-
+    auto& starting_map = spans_starting.ensure(start);
     if (!starting_map.contains(end))
         m_refresh_needed = true;
-
     starting_map.set(end, style);
 
-    spans_starting.set(start, starting_map);
-
-    auto ending_map = spans_ending.get(end).value_or({});
-
+    auto& ending_map = spans_ending.ensure(end);
     if (!ending_map.contains(start))
         m_refresh_needed = true;
     ending_map.set(start, style);
-
-    spans_ending.set(end, ending_map);
 }
 
 void Editor::suggest(size_t invariant_offset, size_t static_offset, Span::Mode offset_mode) const
@@ -628,6 +621,7 @@ void Editor::handle_resize_event(bool reset_origin)
 
     reposition_cursor(stderr_stream, true);
     m_suggestion_display->redisplay(m_suggestion_manager, m_num_lines, m_num_columns);
+    m_origin_row = m_suggestion_display->origin_row();
     reposition_cursor(stderr_stream);
 
     if (m_is_searching)
@@ -656,7 +650,7 @@ void Editor::really_quit_event_loop()
     Core::EventLoop::current().quit(Exit);
 }
 
-auto Editor::get_line(const String& prompt) -> Result<String, Editor::Error>
+auto Editor::get_line(String const& prompt) -> Result<String, Editor::Error>
 {
     initialize();
     m_is_editing = true;
@@ -1121,17 +1115,15 @@ void Editor::handle_read_event()
                 break;
             }
 
-            if (m_times_tab_pressed > 1) {
-                if (m_suggestion_manager.count() > 0) {
-                    if (m_suggestion_display->cleanup())
-                        reposition_cursor(stderr_stream);
+            if (m_times_tab_pressed > 1 && m_suggestion_manager.count() > 0) {
+                if (m_suggestion_display->cleanup())
+                    reposition_cursor(stderr_stream);
 
-                    m_suggestion_display->set_initial_prompt_lines(m_prompt_lines_at_suggestion_initiation);
+                m_suggestion_display->set_initial_prompt_lines(m_prompt_lines_at_suggestion_initiation);
 
-                    m_suggestion_display->display(m_suggestion_manager);
+                m_suggestion_display->display(m_suggestion_manager);
 
-                    m_origin_row = m_suggestion_display->origin_row();
-                }
+                m_origin_row = m_suggestion_display->origin_row();
             }
 
             if (m_times_tab_pressed > 2) {
@@ -1576,7 +1568,7 @@ String Style::Hyperlink::to_vt_escape(bool starting) const
     return String::formatted("\e]8;;{}\e\\", starting ? m_link : String::empty());
 }
 
-void Style::unify_with(const Style& other, bool prefer_other)
+void Style::unify_with(Style const& other, bool prefer_other)
 {
     // Unify colors.
     if (prefer_other || m_background.is_default())
@@ -1642,7 +1634,7 @@ String Style::to_string() const
     return builder.build();
 }
 
-void VT::apply_style(const Style& style, OutputStream& stream, bool is_starting)
+void VT::apply_style(Style const& style, OutputStream& stream, bool is_starting)
 {
     if (is_starting) {
         stream.write(String::formatted("\033[{};{};{}m{}{}{}",
@@ -1714,7 +1706,7 @@ StringMetrics Editor::actual_rendered_string_metrics(StringView string)
     return metrics;
 }
 
-StringMetrics Editor::actual_rendered_string_metrics(const Utf32View& view)
+StringMetrics Editor::actual_rendered_string_metrics(Utf32View const& view)
 {
     StringMetrics metrics;
     StringMetrics::LineMetrics current_line;
@@ -1999,7 +1991,7 @@ void Editor::readjust_anchored_styles(size_t hint_index, ModificationKind modifi
     }
 }
 
-size_t StringMetrics::lines_with_addition(const StringMetrics& offset, size_t column_width) const
+size_t StringMetrics::lines_with_addition(StringMetrics const& offset, size_t column_width) const
 {
     size_t lines = 0;
 
@@ -2016,7 +2008,7 @@ size_t StringMetrics::lines_with_addition(const StringMetrics& offset, size_t co
     return lines;
 }
 
-size_t StringMetrics::offset_with_addition(const StringMetrics& offset, size_t column_width) const
+size_t StringMetrics::offset_with_addition(StringMetrics const& offset, size_t column_width) const
 {
     if (offset.line_metrics.size() > 1)
         return offset.line_metrics.last().total_length() % column_width;
@@ -2026,19 +2018,20 @@ size_t StringMetrics::offset_with_addition(const StringMetrics& offset, size_t c
     return last % column_width;
 }
 
-bool Editor::Spans::contains_up_to_offset(const Spans& other, size_t offset) const
+bool Editor::Spans::contains_up_to_offset(Spans const& other, size_t offset) const
 {
     auto compare = [&]<typename K, typename V>(const HashMap<K, HashMap<K, V>>& left, const HashMap<K, HashMap<K, V>>& right) -> bool {
         for (auto& entry : right) {
             if (entry.key > offset + 1)
                 continue;
 
-            auto left_map = left.get(entry.key);
-            if (!left_map.has_value())
+            auto left_map_it = left.find(entry.key);
+            if (left_map_it == left.end())
                 return false;
 
-            for (auto& left_entry : left_map.value()) {
-                if (auto value = entry.value.get(left_entry.key); !value.has_value()) {
+            for (auto& left_entry : left_map_it->value) {
+                auto value_it = entry.value.find(left_entry.key);
+                if (value_it == entry.value.end()) {
                     // Might have the same thing with a longer span
                     bool found = false;
                     for (auto& possibly_longer_span_entry : entry.value) {
@@ -2055,8 +2048,8 @@ bool Editor::Spans::contains_up_to_offset(const Spans& other, size_t offset) con
                             dbgln("Have: {}-{} = {}", entry.key, x.key, x.value.to_string());
                     }
                     return false;
-                } else if (value.value() != left_entry.value) {
-                    dbgln_if(LINE_EDITOR_DEBUG, "Compare for {}-{} failed, different values: {} != {}", entry.key, left_entry.key, value.value().to_string(), left_entry.value.to_string());
+                } else if (value_it->value != left_entry.value) {
+                    dbgln_if(LINE_EDITOR_DEBUG, "Compare for {}-{} failed, different values: {} != {}", entry.key, left_entry.key, value_it->value.to_string(), left_entry.value.to_string());
                     return false;
                 }
             }

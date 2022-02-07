@@ -122,12 +122,12 @@ private:
     OwnPtr<MallocTracer> m_malloc_tracer;
 
     void setup_stack(Vector<ELF::AuxiliaryValue>);
-    Vector<ELF::AuxiliaryValue> generate_auxiliary_vector(FlatPtr load_base, FlatPtr entry_eip, String executable_path, int executable_fd) const;
+    Vector<ELF::AuxiliaryValue> generate_auxiliary_vector(FlatPtr load_base, FlatPtr entry_eip, String const& executable_path, int executable_fd) const;
     void register_signal_handlers();
     void setup_signal_trampoline();
 
     void emit_profile_sample(AK::OutputStream&);
-    void emit_profile_event(AK::OutputStream&, StringView event_name, String contents);
+    void emit_profile_event(AK::OutputStream&, StringView event_name, String const& contents);
 
     int virt$accept4(FlatPtr);
     int virt$access(FlatPtr, size_t, int);
@@ -136,7 +136,7 @@ private:
     int virt$beep();
     int virt$bind(int sockfd, FlatPtr address, socklen_t address_length);
     int virt$chdir(FlatPtr, size_t);
-    int virt$chmod(FlatPtr, size_t, mode_t);
+    int virt$chmod(FlatPtr);
     int virt$chown(FlatPtr);
     int virt$clock_gettime(int, FlatPtr);
     int virt$clock_nanosleep(FlatPtr);
@@ -170,6 +170,7 @@ private:
     int virt$getpgid(pid_t);
     int virt$getpgrp();
     u32 virt$getpid();
+    pid_t virt$getppid();
     ssize_t virt$getrandom(FlatPtr buffer, size_t buffer_size, unsigned int flags);
     int virt$getsid(pid_t);
     int virt$getsockname(FlatPtr);
@@ -224,6 +225,7 @@ private:
     int virt$setuid(uid_t);
     int virt$shutdown(int sockfd, int how);
     int virt$sigaction(int, FlatPtr, FlatPtr);
+    int virt$sigprocmask(int how, FlatPtr set, FlatPtr old_set);
     int virt$sigreturn();
     int virt$socket(int, int, int);
     int virt$stat(FlatPtr);
@@ -243,7 +245,7 @@ private:
     MmapRegion const* load_library_from_address(FlatPtr address);
     MmapRegion const* first_region_for_object(StringView name);
     String create_backtrace_line(FlatPtr address);
-    String create_instruction_line(FlatPtr address, X86::Instruction insn);
+    String create_instruction_line(FlatPtr address, X86::Instruction const& insn);
 
     bool m_shutdown { false };
     int m_exit_status { 0 };

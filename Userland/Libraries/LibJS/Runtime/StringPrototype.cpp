@@ -354,7 +354,7 @@ static ThrowCompletionOr<String> resolve_best_locale(GlobalObject& global_object
     return locale;
 }
 
-// 18.1.2 String.prototype.toLocaleLowerCase ( [ locales ] ), https://tc39.es/ecma402/#sup-string.prototype.tolocalelowercase
+// 19.1.2 String.prototype.toLocaleLowerCase ( [ locales ] ), https://tc39.es/ecma402/#sup-string.prototype.tolocalelowercase
 JS_DEFINE_NATIVE_FUNCTION(StringPrototype::to_locale_lowercase)
 {
     auto string = TRY(ak_string_from(vm, global_object));
@@ -363,7 +363,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::to_locale_lowercase)
     return js_string(vm, move(lowercase));
 }
 
-// 18.1.3 String.prototype.toLocaleUpperCase ( [ locales ] ), https://tc39.es/ecma402/#sup-string.prototype.tolocaleuppercase
+// 19.1.3 String.prototype.toLocaleUpperCase ( [ locales ] ), https://tc39.es/ecma402/#sup-string.prototype.tolocaleuppercase
 JS_DEFINE_NATIVE_FUNCTION(StringPrototype::to_locale_uppercase)
 {
     auto string = TRY(ak_string_from(vm, global_object));
@@ -452,27 +452,42 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::pad_end)
     return pad_string(global_object, move(string), PadPlacement::End);
 }
 
-static Utf8View const whitespace_characters = Utf8View("\x09\x0A\x0B\x0C\x0D\x20\xC2\xA0\xE1\x9A\x80\xE2\x80\x80\xE2\x80\x81\xE2\x80\x82\xE2\x80\x83\xE2\x80\x84\xE2\x80\x85\xE2\x80\x86\xE2\x80\x87\xE2\x80\x88\xE2\x80\x89\xE2\x80\x8A\xE2\x80\xAF\xE2\x81\x9F\xE3\x80\x80\xE2\x80\xA8\xE2\x80\xA9\xEF\xBB\xBF"sv);
+static constexpr Utf8View whitespace_characters = Utf8View("\x09\x0A\x0B\x0C\x0D\x20\xC2\xA0\xE1\x9A\x80\xE2\x80\x80\xE2\x80\x81\xE2\x80\x82\xE2\x80\x83\xE2\x80\x84\xE2\x80\x85\xE2\x80\x86\xE2\x80\x87\xE2\x80\x88\xE2\x80\x89\xE2\x80\x8A\xE2\x80\xAF\xE2\x81\x9F\xE3\x80\x80\xE2\x80\xA8\xE2\x80\xA9\xEF\xBB\xBF"sv);
+ThrowCompletionOr<String> trim_string(GlobalObject& global_object, Value input_value, TrimMode where)
+{
+    // 1. Let str be ? RequireObjectCoercible(string).
+    auto input_string = TRY(require_object_coercible(global_object, input_value));
+
+    // 2. Let S be ? ToString(str).
+    auto string = TRY(input_string.to_string(global_object));
+
+    // 3. If where is start, let T be the String value that is a copy of S with leading white space removed.
+    // 4. Else if where is end, let T be the String value that is a copy of S with trailing white space removed.
+    // 5. Else,
+    // a. Assert: where is start+end.
+    // b. Let T be the String value that is a copy of S with both leading and trailing white space removed.
+    auto trimmed_string = Utf8View(string).trim(whitespace_characters, where).as_string();
+
+    // 6. Return T.
+    return trimmed_string;
+}
 
 // 22.1.3.30 String.prototype.trim ( ), https://tc39.es/ecma262/#sec-string.prototype.trim
 JS_DEFINE_NATIVE_FUNCTION(StringPrototype::trim)
 {
-    auto string = TRY(ak_string_from(vm, global_object));
-    return js_string(vm, Utf8View(string).trim(whitespace_characters, TrimMode::Both).as_string());
+    return js_string(vm, TRY(trim_string(global_object, vm.this_value(global_object), TrimMode::Both)));
 }
 
 // 22.1.3.32 String.prototype.trimStart ( ), https://tc39.es/ecma262/#sec-string.prototype.trimstart
 JS_DEFINE_NATIVE_FUNCTION(StringPrototype::trim_start)
 {
-    auto string = TRY(ak_string_from(vm, global_object));
-    return js_string(vm, Utf8View(string).trim(whitespace_characters, TrimMode::Left).as_string());
+    return js_string(vm, TRY(trim_string(global_object, vm.this_value(global_object), TrimMode::Left)));
 }
 
 // 22.1.3.31 String.prototype.trimEnd ( ), https://tc39.es/ecma262/#sec-string.prototype.trimend
 JS_DEFINE_NATIVE_FUNCTION(StringPrototype::trim_end)
 {
-    auto string = TRY(ak_string_from(vm, global_object));
-    return js_string(vm, Utf8View(string).trim(whitespace_characters, TrimMode::Right).as_string());
+    return js_string(vm, TRY(trim_string(global_object, vm.this_value(global_object), TrimMode::Right)));
 }
 
 // 22.1.3.5 String.prototype.concat ( ...args ), https://tc39.es/ecma262/#sec-string.prototype.concat
@@ -517,8 +532,8 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::substr)
     auto int_start = TRY(vm.argument(0).to_integer_or_infinity(global_object));
     if (Value(int_start).is_negative_infinity())
         int_start = 0;
-    if (int_start < 0)
-        int_start = max(size + (i32)int_start, 0);
+    else if (int_start < 0)
+        int_start = max(size + int_start, 0);
 
     auto length = vm.argument(1);
 
@@ -599,7 +614,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::split)
     if (!separator_argument.is_nullish()) {
         auto splitter = TRY(separator_argument.get_method(global_object, *vm.well_known_symbol_split()));
         if (splitter)
-            return TRY(vm.call(*splitter, separator_argument, object, limit_argument));
+            return TRY(call(global_object, *splitter, separator_argument, object, limit_argument));
     }
 
     auto string = TRY(object.to_utf16_string(global_object));
@@ -724,7 +739,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::match)
     auto regexp = vm.argument(0);
     if (!regexp.is_nullish()) {
         if (auto* matcher = TRY(regexp.get_method(global_object, *vm.well_known_symbol_match())))
-            return TRY(vm.call(*matcher, regexp, this_object));
+            return TRY(call(global_object, *matcher, regexp, this_object));
     }
 
     auto string = TRY(this_object.to_utf16_string(global_object));
@@ -748,7 +763,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::match_all)
                 return vm.throw_completion<TypeError>(global_object, ErrorType::StringNonGlobalRegExp);
         }
         if (auto* matcher = TRY(regexp.get_method(global_object, *vm.well_known_symbol_match_all())))
-            return TRY(vm.call(*matcher, regexp, this_object));
+            return TRY(call(global_object, *matcher, regexp, this_object));
     }
 
     auto string = TRY(this_object.to_utf16_string(global_object));
@@ -766,7 +781,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::replace)
 
     if (!search_value.is_nullish()) {
         if (auto* replacer = TRY(search_value.get_method(global_object, *vm.well_known_symbol_replace())))
-            return TRY(vm.call(*replacer, search_value, this_object, replace_value));
+            return TRY(call(global_object, *replacer, search_value, this_object, replace_value));
     }
 
     auto string = TRY(this_object.to_utf16_string(global_object));
@@ -785,7 +800,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::replace)
     String replacement;
 
     if (replace_value.is_function()) {
-        auto result = TRY(vm.call(replace_value.as_function(), js_undefined(), js_string(vm, search_string), Value(position.value()), js_string(vm, string)));
+        auto result = TRY(call(global_object, replace_value.as_function(), js_undefined(), js_string(vm, search_string), Value(position.value()), js_string(vm, string)));
         replacement = TRY(result.to_string(global_object));
     } else {
         replacement = TRY(get_substitution(global_object, search_string.view(), string.view(), *position, {}, js_undefined(), replace_value));
@@ -819,7 +834,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::replace_all)
 
         auto* replacer = TRY(search_value.get_method(global_object, *vm.well_known_symbol_replace()));
         if (replacer)
-            return TRY(vm.call(*replacer, search_value, this_object, replace_value));
+            return TRY(call(global_object, *replacer, search_value, this_object, replace_value));
     }
 
     auto string = TRY(this_object.to_utf16_string(global_object));
@@ -850,7 +865,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::replace_all)
         String replacement;
 
         if (replace_value.is_function()) {
-            auto result = TRY(vm.call(replace_value.as_function(), js_undefined(), js_string(vm, search_string), Value(position), js_string(vm, string)));
+            auto result = TRY(call(global_object, replace_value.as_function(), js_undefined(), js_string(vm, search_string), Value(position), js_string(vm, string)));
             replacement = TRY(result.to_string(global_object));
         } else {
             replacement = TRY(get_substitution(global_object, search_string.view(), string.view(), position, {}, js_undefined(), replace_value));
@@ -875,7 +890,7 @@ JS_DEFINE_NATIVE_FUNCTION(StringPrototype::search)
     auto regexp = vm.argument(0);
     if (!regexp.is_nullish()) {
         if (auto* searcher = TRY(regexp.get_method(global_object, *vm.well_known_symbol_search())))
-            return TRY(vm.call(*searcher, regexp, this_object));
+            return TRY(call(global_object, *searcher, regexp, this_object));
     }
 
     auto string = TRY(this_object.to_utf16_string(global_object));

@@ -126,12 +126,15 @@ bool MailWidget::connect_and_login()
             return false;
     }
 
-    m_imap_client = make<IMAP::Client>(server, port, tls);
-    auto connection_promise = m_imap_client->connect();
-    if (!connection_promise) {
-        GUI::MessageBox::show_error(window(), String::formatted("Failed to connect to '{}:{}' over {}.", server, port, tls ? "TLS" : "Plaintext"));
+    auto maybe_imap_client = tls ? IMAP::Client::connect_tls(server, port) : IMAP::Client::connect_plaintext(server, port);
+    if (maybe_imap_client.is_error()) {
+        GUI::MessageBox::show_error(window(), String::formatted("Failed to connect to '{}:{}' over {}: {}", server, port, tls ? "TLS" : "Plaintext", maybe_imap_client.error()));
         return false;
     }
+    m_imap_client = maybe_imap_client.release_value();
+
+    auto connection_promise = m_imap_client->connection_promise();
+    VERIFY(!connection_promise.is_null());
     connection_promise->await();
 
     auto response = m_imap_client->login(username, password)->await().release_value();
@@ -496,7 +499,9 @@ void MailWidget::selected_email_to_load()
     if (selected_alternative_encoding.equals_ignoring_case("7bit") || selected_alternative_encoding.equals_ignoring_case("8bit")) {
         decoded_data = encoded_data;
     } else if (selected_alternative_encoding.equals_ignoring_case("base64")) {
-        decoded_data = decode_base64(encoded_data).value_or(ByteBuffer());
+        auto decoded_base64 = decode_base64(encoded_data);
+        if (!decoded_base64.is_error())
+            decoded_data = decoded_base64.release_value();
     } else if (selected_alternative_encoding.equals_ignoring_case("quoted-printable")) {
         decoded_data = IMAP::decode_quoted_printable(encoded_data);
     } else {

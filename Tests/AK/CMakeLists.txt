@@ -10,6 +10,7 @@ set(AK_TEST_SOURCES
     TestBinarySearch.cpp
     TestBitCast.cpp
     TestBitmap.cpp
+    TestBuiltinWrappers.cpp
     TestByteBuffer.cpp
     TestCharacterTypes.cpp
     TestChecked.cpp
@@ -32,6 +33,7 @@ set(AK_TEST_SOURCES
     TestHex.cpp
     TestIPv4Address.cpp
     TestIndexSequence.cpp
+    TestIntegerMath.cpp
     TestIntrusiveList.cpp
     TestIntrusiveRedBlackTree.cpp
     TestJSON.cpp

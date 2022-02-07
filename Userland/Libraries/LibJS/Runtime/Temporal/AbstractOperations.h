@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
- * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021-2022, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -68,7 +68,7 @@ struct TemporalTime {
 
 struct TemporalTimeZone {
     bool z;
-    Optional<String> offset;
+    Optional<String> offset_string;
     Optional<String> name;
 };
 
@@ -144,7 +144,7 @@ ThrowCompletionOr<double> to_positive_integer(GlobalObject&, Value argument);
 ThrowCompletionOr<Object*> prepare_temporal_fields(GlobalObject&, Object const& fields, Vector<String> const& field_names, Vector<StringView> const& required_fields);
 ThrowCompletionOr<Object*> prepare_partial_temporal_fields(GlobalObject&, Object const& fields, Vector<String> const& field_names);
 
-// 13.47 ToIntegerThrowOnInfinity ( argument ), https://tc39.es/proposal-temporal/#sec-temporal-tointegerthrowoninfinity
+// 13.46 ToIntegerThrowOnInfinity ( argument ), https://tc39.es/proposal-temporal/#sec-temporal-tointegerthrowoninfinity
 template<typename... Args>
 ThrowCompletionOr<double> to_integer_throw_on_infinity(GlobalObject& global_object, Value argument, ErrorType error_type, Args... args)
 {
@@ -163,7 +163,7 @@ ThrowCompletionOr<double> to_integer_throw_on_infinity(GlobalObject& global_obje
     return integer;
 }
 
-// 13.48 ToIntegerWithoutRounding ( argument ), https://tc39.es/proposal-temporal/#sec-temporal-tointegerwithoutrounding
+// 13.47 ToIntegerWithoutRounding ( argument ), https://tc39.es/proposal-temporal/#sec-temporal-tointegerwithoutrounding
 template<typename... Args>
 ThrowCompletionOr<double> to_integer_without_rounding(GlobalObject& global_object, Value argument, ErrorType error_type, Args... args)
 {

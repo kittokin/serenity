@@ -13,7 +13,7 @@ namespace Kernel {
 ErrorOr<FlatPtr> Process::sys$chdir(Userspace<const char*> user_path, size_t path_length)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this);
-    REQUIRE_PROMISE(rpath);
+    TRY(require_promise(Pledge::rpath));
     auto path = TRY(get_syscall_path_argument(user_path, path_length));
     m_cwd = TRY(VirtualFileSystem::the().open_directory(path->view(), current_directory()));
     return 0;
@@ -22,8 +22,8 @@ ErrorOr<FlatPtr> Process::sys$chdir(Userspace<const char*> user_path, size_t pat
 ErrorOr<FlatPtr> Process::sys$fchdir(int fd)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this);
-    REQUIRE_PROMISE(stdio);
-    auto description = TRY(fds().open_file_description(fd));
+    TRY(require_promise(Pledge::stdio));
+    auto description = TRY(open_file_description(fd));
     if (!description->is_directory())
         return ENOTDIR;
     if (!description->metadata().may_execute(*this))
@@ -35,7 +35,7 @@ ErrorOr<FlatPtr> Process::sys$fchdir(int fd)
 ErrorOr<FlatPtr> Process::sys$getcwd(Userspace<char*> buffer, size_t size)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this);
-    REQUIRE_PROMISE(rpath);
+    TRY(require_promise(Pledge::rpath));
 
     if (size > NumericLimits<ssize_t>::max())
         return EINVAL;

@@ -22,6 +22,8 @@ public:
     static ErrorOr<NonnullRefPtr<TCPSocket>> try_create(int protocol, NonnullOwnPtr<DoubleBuffer> receive_buffer);
     virtual ~TCPSocket() override;
 
+    virtual bool unref() const override;
+
     enum class Direction {
         Unspecified,
         Outgoing,
@@ -157,7 +159,7 @@ public:
 
     virtual ErrorOr<void> close() override;
 
-    virtual bool can_write(const OpenFileDescription&, size_t) const override;
+    virtual bool can_write(const OpenFileDescription&, u64) const override;
 
     static NetworkOrdered<u16> compute_tcp_checksum(IPv4Address const& source, IPv4Address const& destination, TCPPacket const&, u16 payload_size);
 
@@ -174,6 +176,7 @@ private:
     virtual ErrorOr<size_t> protocol_send(const UserOrKernelBuffer&, size_t) override;
     virtual ErrorOr<void> protocol_connect(OpenFileDescription&, ShouldBlock) override;
     virtual ErrorOr<u16> protocol_allocate_local_port() override;
+    virtual ErrorOr<size_t> protocol_size(ReadonlyBytes raw_ipv4_packet) override;
     virtual bool protocol_is_disconnected() const override;
     virtual ErrorOr<void> protocol_bind() override;
     virtual ErrorOr<void> protocol_listen(bool did_allocate_port) override;

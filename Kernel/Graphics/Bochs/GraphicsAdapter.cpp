@@ -103,12 +103,11 @@ void BochsGraphicsAdapter::set_framebuffer_to_little_endian_format()
 UNMAP_AFTER_INIT BochsGraphicsAdapter::BochsGraphicsAdapter(PCI::DeviceIdentifier const& pci_device_identifier)
     : PCI::Device(pci_device_identifier.address())
     , m_mmio_registers(PCI::get_BAR2(pci_device_identifier.address()) & 0xfffffff0)
-    , m_registers(Memory::map_typed_writable<BochsDisplayMMIORegisters volatile>(m_mmio_registers))
+    , m_registers(Memory::map_typed_writable<BochsDisplayMMIORegisters volatile>(m_mmio_registers).release_value_but_fixme_should_propagate_errors())
 {
-    // We assume safe resolutio is 1024x768x32
+    // We assume safe resolution is 1024x768x32
     m_framebuffer_console = Graphics::ContiguousFramebufferConsole::initialize(PhysicalAddress(PCI::get_BAR0(pci_device_identifier.address()) & 0xfffffff0), 1024, 768, 1024 * sizeof(u32));
-    // FIXME: This is a very wrong way to do this...
-    GraphicsManagement::the().m_console = m_framebuffer_console;
+    GraphicsManagement::the().set_console(*m_framebuffer_console);
 
     // Note: If we use VirtualBox graphics adapter (which is based on Bochs one), we need to use IO ports
     if (pci_device_identifier.hardware_id().vendor_id == 0x80ee && pci_device_identifier.hardware_id().device_id == 0xbeef)
@@ -274,6 +273,14 @@ void BochsGraphicsAdapter::disable_consoles()
     m_registers->bochs_regs.y_offset = 0;
     m_framebuffer_console->disable();
     m_framebuffer_device->activate_writes();
+}
+
+ErrorOr<ByteBuffer> BochsGraphicsAdapter::get_edid(size_t output_port_index) const
+{
+    if (output_port_index != 0)
+        return Error::from_errno(ENODEV);
+
+    return ByteBuffer::copy(const_cast<u8 const*>(m_registers->edid_data), sizeof(m_registers->edid_data));
 }
 
 }

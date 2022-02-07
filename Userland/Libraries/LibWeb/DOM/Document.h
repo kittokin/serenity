@@ -177,7 +177,7 @@ public:
     JS::Value run_javascript(StringView source, StringView filename = "(unknown)");
 
     NonnullRefPtr<Element> create_element(const String& tag_name);
-    NonnullRefPtr<Element> create_element_ns(const String& namespace_, const String& qualifed_name);
+    NonnullRefPtr<Element> create_element_ns(const String& namespace_, const String& qualified_name);
     NonnullRefPtr<DocumentFragment> create_document_fragment();
     NonnullRefPtr<Text> create_text_node(const String& data);
     NonnullRefPtr<Comment> create_comment(const String& data);
@@ -304,11 +304,10 @@ public:
     void evaluate_media_queries_and_report_changes();
     void add_media_query_list(NonnullRefPtr<CSS::MediaQueryList>&);
 
+    bool has_focus() const;
+
 private:
     explicit Document(const AK::URL&);
-
-    // ^DOM::Node
-    virtual RefPtr<Layout::Node> create_layout_node() override;
 
     // ^HTML::GlobalEventHandlers
     virtual EventTarget& global_event_handlers_to_event_target() final { return *this; }
