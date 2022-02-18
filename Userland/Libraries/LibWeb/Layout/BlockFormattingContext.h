@@ -33,8 +33,13 @@ public:
     BlockContainer& root() { return static_cast<BlockContainer&>(context_box()); }
     BlockContainer const& root() const { return static_cast<BlockContainer const&>(context_box()); }
 
-protected:
+    virtual void parent_context_did_dimension_child_root_box() override;
+
     static void compute_height(Box&);
+
+    void add_absolutely_positioned_box(Box& box) { m_absolutely_positioned_boxes.append(box); }
+
+protected:
     void compute_position(Box&);
 
 private:
@@ -69,6 +74,8 @@ private:
 
     FloatSideData m_left_floats;
     FloatSideData m_right_floats;
+
+    Vector<Box&> m_absolutely_positioned_boxes;
 };
 
 }

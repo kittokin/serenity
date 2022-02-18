@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
- * Copyright (c) 2020-2021, the SerenityOS developers.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -387,12 +387,10 @@ NonnullRefPtr<GUI::Menu> HackStudioWidget::create_project_tree_view_context_menu
 {
     m_new_file_actions.append(create_new_file_action("C++ Source File", "/res/icons/16x16/filetype-cplusplus.png", "cpp"));
     m_new_file_actions.append(create_new_file_action("C++ Header File", "/res/icons/16x16/filetype-header.png", "h"));
-    // FIXME: Create a file icon for GML files
-    m_new_file_actions.append(create_new_file_action("GML File", "/res/icons/16x16/new.png", "gml"));
+    m_new_file_actions.append(create_new_file_action("GML File", "/res/icons/16x16/filetype-gml.png", "gml"));
     m_new_file_actions.append(create_new_file_action("JavaScript Source File", "/res/icons/16x16/filetype-javascript.png", "js"));
     m_new_file_actions.append(create_new_file_action("HTML File", "/res/icons/16x16/filetype-html.png", "html"));
-    // FIXME: Create a file icon for CSS files
-    m_new_file_actions.append(create_new_file_action("CSS File", "/res/icons/16x16/new.png", "css"));
+    m_new_file_actions.append(create_new_file_action("CSS File", "/res/icons/16x16/filetype-css.png", "css"));
 
     m_new_plain_file_action = create_new_file_action("Plain File", "/res/icons/16x16/new.png", "");
 
@@ -410,6 +408,7 @@ NonnullRefPtr<GUI::Menu> HackStudioWidget::create_project_tree_view_context_menu
     for (auto& new_file_action : m_new_file_actions) {
         new_file_submenu.add_action(new_file_action);
     }
+    new_file_submenu.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/new.png").release_value_but_fixme_should_propagate_errors());
     new_file_submenu.add_action(*m_new_plain_file_action);
     new_file_submenu.add_separator();
     new_file_submenu.add_action(*m_new_directory_action);
@@ -502,6 +501,7 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_open_selected_action()
         for (auto& file : files)
             open_file(file);
     });
+    open_selected_action->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png").release_value_but_fixme_should_propagate_errors());
     open_selected_action->set_enabled(true);
     return open_selected_action;
 }
@@ -553,7 +553,7 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_delete_action()
             }
 
             bool is_directory = S_ISDIR(st.st_mode);
-            if (auto result = Core::File::remove(file, Core::File::RecursionMode::Allowed, false); !result.is_error()) {
+            if (auto result = Core::File::remove(file, Core::File::RecursionMode::Allowed, false); result.is_error()) {
                 auto& error = result.error();
                 if (is_directory) {
                     GUI::MessageBox::show(window(),
@@ -655,7 +655,7 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_switch_to_previous_editor_ac
 
 NonnullRefPtr<GUI::Action> HackStudioWidget::create_remove_current_editor_action()
 {
-    return GUI::Action::create("&Remove Current Editor", { Mod_Alt | Mod_Shift, Key_E }, [this](auto&) {
+    return GUI::Action::create("&Remove Current Editor", { Mod_Alt | Mod_Shift, Key_E }, Gfx::Bitmap::try_load_from_file("/res/icons/hackstudio/remove-editor.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
         if (m_all_editor_wrappers.size() <= 1)
             return;
         auto wrapper = m_current_editor_wrapper;
@@ -695,7 +695,9 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_save_action()
         if (active_file().is_empty())
             m_save_as_action->activate();
 
-        current_editor_wrapper().save();
+        // NOTE active_file() could still be empty after a cancelled save_as_action
+        if (!active_file().is_empty())
+            current_editor_wrapper().save();
 
         if (m_git_widget->initialized())
             m_git_widget->refresh();
@@ -743,7 +745,7 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_save_as_action()
 
 NonnullRefPtr<GUI::Action> HackStudioWidget::create_remove_current_terminal_action()
 {
-    return GUI::Action::create("Remove &Current Terminal", { Mod_Alt | Mod_Shift, Key_T }, [this](auto&) {
+    return GUI::Action::create("Remove &Current Terminal", { Mod_Alt | Mod_Shift, Key_T }, Gfx::Bitmap::try_load_from_file("/res/icons/hackstudio/remove-terminal.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
         auto widget = m_action_tab_widget->active_widget();
         if (!widget)
             return;
@@ -760,7 +762,7 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_remove_current_terminal_acti
 NonnullRefPtr<GUI::Action> HackStudioWidget::create_add_editor_action()
 {
     return GUI::Action::create("Add New &Editor", { Mod_Ctrl | Mod_Alt, Key_E },
-        Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-text-editor.png").release_value_but_fixme_should_propagate_errors(),
+        Gfx::Bitmap::try_load_from_file("/res/icons/hackstudio/add-editor.png").release_value_but_fixme_should_propagate_errors(),
         [this](auto&) {
             add_new_editor(*m_editors_splitter);
             update_actions();
@@ -770,7 +772,7 @@ NonnullRefPtr<GUI::Action> HackStudioWidget::create_add_editor_action()
 NonnullRefPtr<GUI::Action> HackStudioWidget::create_add_terminal_action()
 {
     return GUI::Action::create("Add New &Terminal", { Mod_Ctrl | Mod_Alt, Key_T },
-        Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-terminal.png").release_value_but_fixme_should_propagate_errors(),
+        Gfx::Bitmap::try_load_from_file("/res/icons/hackstudio/add-terminal.png").release_value_but_fixme_should_propagate_errors(),
         [this](auto&) {
             auto& terminal_wrapper = m_action_tab_widget->add_tab<TerminalWrapper>("Terminal");
             reveal_action_tab(terminal_wrapper);
@@ -847,7 +849,7 @@ void HackStudioWidget::initialize_debugger()
                 m_disassembly_widget->update_state(*Debugger::the().session(), regs);
                 HackStudioWidget::reveal_action_tab(*m_debug_info_widget);
             });
-            Core::EventLoop::wake();
+            Core::EventLoop::wake_current();
 
             return Debugger::HasControlPassedToUser::Yes;
         },
@@ -857,7 +859,7 @@ void HackStudioWidget::initialize_debugger()
                 if (m_current_editor_in_execution)
                     m_current_editor_in_execution->editor().clear_execution_position();
             });
-            Core::EventLoop::wake();
+            Core::EventLoop::wake_current();
         },
         [this]() {
             deferred_invoke([this] {
@@ -877,7 +879,7 @@ void HackStudioWidget::initialize_debugger()
                 HackStudioWidget::hide_action_tabs();
                 GUI::MessageBox::show(window(), "Program Exited", "Debugger", GUI::MessageBox::Type::Information);
             });
-            Core::EventLoop::wake();
+            Core::EventLoop::wake_current();
         });
 }
 
@@ -1160,9 +1162,13 @@ void HackStudioWidget::create_project_menu(GUI::Window& window)
     for (auto& new_file_action : m_new_file_actions) {
         new_submenu.add_action(new_file_action);
     }
+    new_submenu.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/new.png").release_value_but_fixme_should_propagate_errors());
     new_submenu.add_action(*m_new_plain_file_action);
     new_submenu.add_separator();
     new_submenu.add_action(*m_new_directory_action);
+
+    m_toggle_semantic_highlighting_action = create_toggle_syntax_highlighting_mode_action();
+    project_menu.add_action(*m_toggle_semantic_highlighting_action);
 }
 
 void HackStudioWidget::create_edit_menu(GUI::Window& window)
@@ -1520,6 +1526,21 @@ void HackStudioWidget::for_each_open_file(Function<void(ProjectFile const&)> fun
     for (auto& open_file : m_open_files) {
         func(*open_file.value);
     }
+}
+
+NonnullRefPtr<GUI::Action> HackStudioWidget::create_toggle_syntax_highlighting_mode_action()
+{
+    auto action = GUI::Action::create_checkable("&Semantic Highlighting", Gfx::Bitmap::try_load_from_file("/res/icons/16x16/filetype-cplusplus.png").release_value_but_fixme_should_propagate_errors(), [this](auto& action) {
+        for (auto& editor_wrapper : m_all_editor_wrappers)
+            editor_wrapper.editor().set_semantic_syntax_highlighting(action.is_checked());
+    });
+
+    return action;
+}
+
+bool HackStudioWidget::semantic_syntax_highlighting_is_enabled() const
+{
+    return m_toggle_semantic_highlighting_action->is_checked();
 }
 
 }

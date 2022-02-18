@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2022, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -84,15 +84,16 @@ class Document;
 class DocumentFragment;
 class DocumentLoadEventDelayer;
 class DocumentType;
+class DOMEventListener;
 class DOMException;
 class DOMImplementation;
 class DOMTokenList;
 class Element;
 class Event;
 class EventHandler;
-class EventListener;
 class EventTarget;
 class HTMLCollection;
+class IDLEventListener;
 class LiveNodeList;
 class NamedNodeMap;
 class Node;
@@ -118,6 +119,7 @@ class TextEncoder;
 
 namespace Web::Geometry {
 class DOMRect;
+class DOMRectList;
 class DOMRectReadOnly;
 }
 
@@ -125,9 +127,13 @@ namespace Web::HTML {
 class BrowsingContext;
 class BrowsingContextContainer;
 class CanvasRenderingContext2D;
+class ClassicScript;
 class CloseEvent;
 class DOMParser;
 class DOMStringMap;
+struct Environment;
+struct EnvironmentSettingsObject;
+class ErrorEvent;
 struct EventHandler;
 class EventLoop;
 class HTMLAnchorElement;
@@ -209,9 +215,17 @@ class MessageEvent;
 class MessagePort;
 class PageTransitionEvent;
 class PromiseRejectionEvent;
+class WorkerDebugConsoleClient;
+class Storage;
 class SubmitEvent;
 class TextMetrics;
 class WebSocket;
+class WindowEnvironmentSettingsObject;
+class Worker;
+class WorkerEnvironmentSettingsObject;
+class WorkerGlobalScope;
+class WorkerLocation;
+class WorkerNavigator;
 }
 
 namespace Web::HighResolutionTime {
@@ -220,6 +234,10 @@ class Performance;
 
 namespace Web::IntersectionObserver {
 class IntersectionObserver;
+}
+
+namespace Web::MimeSniff {
+class MimeType;
 }
 
 namespace Web::NavigationTiming {
@@ -235,10 +253,16 @@ class ResizeObserver;
 }
 
 namespace Web::SVG {
+class SVGCircleElement;
 class SVGElement;
+class SVGEllipseElement;
 class SVGGeometryElement;
 class SVGGraphicsElement;
+class SVGLineElement;
 class SVGPathElement;
+class SVGPolygonElement;
+class SVGPolylineElement;
+class SVGRectElement;
 class SVGSVGElement;
 }
 
@@ -307,6 +331,7 @@ namespace Web::Bindings {
 class AbortControllerWrapper;
 class AbortSignalWrapper;
 class AttributeWrapper;
+struct CallbackType;
 class CanvasGradientWrapper;
 class CanvasRenderingContext2DWrapper;
 class CharacterDataWrapper;
@@ -325,11 +350,13 @@ class DocumentWrapper;
 class DOMExceptionWrapper;
 class DOMImplementationWrapper;
 class DOMParserWrapper;
+class DOMRectListWrapper;
 class DOMRectReadOnlyWrapper;
 class DOMRectWrapper;
 class DOMStringMapWrapper;
 class DOMTokenListWrapper;
 class ElementWrapper;
+class ErrorEventWrapper;
 class EventListenerWrapper;
 class EventTargetWrapper;
 class EventWrapper;
@@ -432,17 +459,24 @@ class RangePrototype;
 class RangeWrapper;
 class ResizeObserverWrapper;
 class ScreenWrapper;
-class ScriptExecutionContext;
 class SelectionWrapper;
+class StorageWrapper;
 class StyleSheetListWrapper;
 class StyleSheetWrapper;
 class SubmitEventWrapper;
 class SubtleCryptoWrapper;
+class SVGCircleElementWrapper;
 class SVGElementWrapper;
+class SVGEllipseElementWrapper;
 class SVGGeometryElementWrapper;
 class SVGGraphicsElementWrapper;
+class SVGLineElementWrapper;
 class SVGPathElementWrapper;
+class SVGPolygonElementWrapper;
+class SVGPolylineElementWrapper;
+class SVGRectElementWrapper;
 class SVGSVGElementWrapper;
+class TextDecoderWrapper;
 class TextEncoderWrapper;
 class TextMetricsWrapper;
 class TextWrapper;
@@ -457,10 +491,15 @@ class URLSearchParamsWrapper;
 class URLWrapper;
 class WebSocketWrapper;
 class WindowObject;
+class WorkerWrapper;
+class WorkerGlobalScopeWrapper;
+class WorkerLocationWrapper;
+class WorkerNavigatorWrapper;
 class Wrappable;
 class Wrapper;
 class XMLHttpRequestConstructor;
 class XMLHttpRequestEventTargetWrapper;
 class XMLHttpRequestPrototype;
 class XMLHttpRequestWrapper;
+enum class XMLHttpRequestResponseType;
 }

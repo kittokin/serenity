@@ -39,7 +39,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
 {
     TRY(Core::System::pledge("stdio recvfd sendfd proc exec rpath unix sigaction"));
     auto app = TRY(GUI::Application::try_create(arguments));
-    Config::pledge_domains("Taskbar");
+    Config::pledge_domain("Taskbar");
     Config::monitor_domain("Taskbar");
     app->event_loop().register_signal(SIGCHLD, [](int) {
         // Wait all available children
@@ -121,7 +121,7 @@ ErrorOr<NonnullRefPtr<GUI::Menu>> build_system_menu()
     system_menu->add_separator();
 
     // First we construct all the necessary app category submenus.
-    auto category_icons = Core::ConfigFile::open("/res/icons/SystemMenu.ini");
+    auto category_icons = TRY(Core::ConfigFile::open("/res/icons/SystemMenu.ini"));
     HashMap<String, NonnullRefPtr<GUI::Menu>> app_category_menus;
 
     Function<void(String const&)> create_category_menu;

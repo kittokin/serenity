@@ -88,7 +88,7 @@ public:
     void notify_progress_changed(Window&);
     void notify_modified_changed(Window&);
 
-    Gfx::IntRect maximized_window_rect(Window const&, bool relative_to_window_screen = false) const;
+    Gfx::IntRect tiled_window_rect(Window const&, WindowTileType tile_type = WindowTileType::Maximized, bool relative_to_window_screen = false) const;
 
     ClientConnection const* dnd_client() const { return m_dnd_client.ptr(); }
     Core::MimeData const& dnd_mime_data() const { return *m_dnd_mime_data; }
@@ -409,6 +409,8 @@ private:
 
     bool is_considered_doubleclick(MouseEvent const&, DoubleClickInfo::ClickMetadata const&) const;
 
+    Gfx::IntPoint to_floating_cursor_position(Gfx::IntPoint const&) const;
+
     DoubleClickInfo m_double_click_info;
     int m_double_click_speed { 0 };
     int m_max_distance_for_double_click { 4 };
@@ -423,6 +425,8 @@ private:
     WeakPtr<Window> m_move_window;
     Gfx::IntPoint m_move_origin;
     Gfx::IntPoint m_move_window_origin;
+    Gfx::IntPoint m_move_window_cursor_position;
+    Gfx::IntPoint m_mouse_down_origin;
 
     WeakPtr<Window> m_resize_window;
     WeakPtr<Window> m_resize_candidate;

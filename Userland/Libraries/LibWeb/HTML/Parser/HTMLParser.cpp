@@ -130,6 +130,7 @@ HTMLParser::HTMLParser(DOM::Document& document, StringView input, const String& 
     : m_tokenizer(input, encoding)
     , m_document(document)
 {
+    m_tokenizer.set_parser({}, *this);
     m_document->set_should_invalidate_styles_on_attribute_changes(false);
     auto standardized_encoding = TextCodec::get_standardized_encoding(encoding);
     VERIFY(standardized_encoding.has_value());
@@ -222,7 +223,7 @@ void HTMLParser::the_end()
     }
 
     // 6. Queue a global task on the DOM manipulation task source given the Document's relevant global object to run the following substeps:
-    queue_global_task(HTML::Task::Source::DOMManipulation, *m_document, [document = m_document]() mutable {
+    old_queue_global_task_with_document(HTML::Task::Source::DOMManipulation, m_document, [document = m_document]() mutable {
         // FIXME: 1. Set the Document's load timing info's DOM content loaded event start time to the current high resolution time given the Document's relevant global object.
 
         // 2. Fire an event named DOMContentLoaded at the Document object, with its bubbles attribute initialized to true.
@@ -249,7 +250,7 @@ void HTMLParser::the_end()
     });
 
     // 9. Queue a global task on the DOM manipulation task source given the Document's relevant global object to run the following steps:
-    queue_global_task(HTML::Task::Source::DOMManipulation, *m_document, [document = m_document]() mutable {
+    old_queue_global_task_with_document(HTML::Task::Source::DOMManipulation, m_document, [document = m_document]() mutable {
         // 1. Update the current document readiness to "complete".
         document->update_readiness(HTML::DocumentReadyState::Complete);
 
@@ -516,29 +517,49 @@ DOM::Element& HTMLParser::node_before_current_node()
     return m_stack_of_open_elements.elements().at(m_stack_of_open_elements.elements().size() - 2);
 }
 
+// https://html.spec.whatwg.org/multipage/parsing.html#appropriate-place-for-inserting-a-node
 HTMLParser::AdjustedInsertionLocation HTMLParser::find_appropriate_place_for_inserting_node()
 {
     auto& target = current_node();
     HTMLParser::AdjustedInsertionLocation adjusted_insertion_location;
 
+    // 2. Determine the adjusted insertion location using the first matching steps from the following list:
+
+    // `-> If foster parenting is enabled and target is a table, tbody, tfoot, thead, or tr element
     if (m_foster_parenting && target.local_name().is_one_of(HTML::TagNames::table, HTML::TagNames::tbody, HTML::TagNames::tfoot, HTML::TagNames::thead, HTML::TagNames::tr)) {
+        // 1. Let last template be the last template element in the stack of open elements, if any.
         auto last_template = m_stack_of_open_elements.last_element_with_tag_name(HTML::TagNames::template_);
+        // 2. Let last table be the last table element in the stack of open elements, if any.
         auto last_table = m_stack_of_open_elements.last_element_with_tag_name(HTML::TagNames::table);
+        // 3. If there is a last template and either there is no last table,
+        //    or there is one, but last template is lower (more recently added) than last table in the stack of open elements,
         if (last_template.element && (!last_table.element || last_template.index > last_table.index)) {
-            // This returns the template content, so no need to check the parent is a template.
+            // then: let adjusted insertion location be inside last template's template contents, after its last child (if any), and abort these steps.
+
+            // NOTE: This returns the template content, so no need to check the parent is a template.
             return { verify_cast<HTMLTemplateElement>(last_template.element)->content(), nullptr };
         }
+        // 4. If there is no last table, then let adjusted insertion location be inside the first element in the stack of open elements (the html element),
+        //    after its last child (if any), and abort these steps. (fragment case)
         if (!last_table.element) {
             VERIFY(m_parsing_fragment);
             // Guaranteed not to be a template element (it will be the html element),
             // so no need to check the parent is a template.
             return { m_stack_of_open_elements.elements().first(), nullptr };
         }
-        if (last_table.element->parent_node())
+        // 5. If last table has a parent node, then let adjusted insertion location be inside last table's parent node, immediately before last table, and abort these steps.
+        if (last_table.element->parent_node()) {
             adjusted_insertion_location = { last_table.element->parent_node(), last_table.element };
-        else
-            adjusted_insertion_location = { m_stack_of_open_elements.element_before(*last_table.element), nullptr };
+        } else {
+            // 6. Let previous element be the element immediately above last table in the stack of open elements.
+            auto previous_element = m_stack_of_open_elements.element_immediately_above(*last_table.element);
+
+            // 7. Let adjusted insertion location be inside previous element, after its last child (if any).
+            adjusted_insertion_location = { previous_element, nullptr };
+        }
     } else {
+        // `-> Otherwise
+        //     Let adjusted insertion location be inside target, after its last child (if any).
         adjusted_insertion_location = { target, nullptr };
     }
 
@@ -1091,8 +1112,7 @@ HTMLParser::AdoptionAgencyAlgorithmOutcome HTMLParser::run_the_adoption_agency_a
     }
 
     // FIXME: Implement the rest of the AAA :^)
-
-    TODO();
+    return AdoptionAgencyAlgorithmOutcome::DoNothing;
 }
 
 bool HTMLParser::is_special_tag(const FlyString& tag_name, const FlyString& namespace_)

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2020-2022, Linus Groh <linusg@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -18,7 +18,6 @@
 #include <LibJS/Runtime/PropertyDescriptor.h>
 #include <LibJS/Runtime/ProxyObject.h>
 #include <LibJS/Runtime/Shape.h>
-#include <LibJS/Runtime/TemporaryClearException.h>
 #include <LibJS/Runtime/Value.h>
 
 namespace JS {
@@ -43,6 +42,13 @@ Object::Object(GlobalObjectTag)
 Object::Object(ConstructWithoutPrototypeTag, GlobalObject& global_object)
 {
     m_shape = heap().allocate_without_global_object<Shape>(global_object);
+}
+
+Object::Object(GlobalObject& global_object, Object* prototype)
+{
+    m_shape = global_object.empty_object_shape();
+    if (prototype != nullptr)
+        set_prototype(prototype);
 }
 
 Object::Object(Object& prototype)
@@ -385,7 +391,7 @@ ThrowCompletionOr<bool> Object::test_integrity_level(IntegrityLevel level) const
 }
 
 // 7.3.24 EnumerableOwnPropertyNames ( O, kind ), https://tc39.es/ecma262/#sec-enumerableownpropertynames
-ThrowCompletionOr<MarkedValueList> Object::enumerable_own_property_names(PropertyKind kind) const
+ThrowCompletionOr<MarkedVector<Value>> Object::enumerable_own_property_names(PropertyKind kind) const
 {
     // NOTE: This has been flattened for readability, so some `else` branches in the
     //       spec text have been replaced with `continue`s in the loop below.
@@ -398,7 +404,7 @@ ThrowCompletionOr<MarkedValueList> Object::enumerable_own_property_names(Propert
     auto own_keys = TRY(internal_own_property_keys());
 
     // 3. Let properties be a new empty List.
-    auto properties = MarkedValueList { heap() };
+    auto properties = MarkedVector<Value> { heap() };
 
     // 4. For each element key of ownKeys, do
     for (auto& key : own_keys) {
@@ -895,12 +901,12 @@ ThrowCompletionOr<bool> Object::internal_delete(PropertyKey const& property_key)
 }
 
 // 10.1.11 [[OwnPropertyKeys]] ( ), https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-ownpropertykeys
-ThrowCompletionOr<MarkedValueList> Object::internal_own_property_keys() const
+ThrowCompletionOr<MarkedVector<Value>> Object::internal_own_property_keys() const
 {
     auto& vm = this->vm();
 
     // 1. Let keys be a new empty List.
-    MarkedValueList keys { heap() };
+    MarkedVector<Value> keys { heap() };
 
     // 2. For each own property key P of O such that P is an array index, in ascending numeric index order, do
     for (auto& entry : m_indexed_properties) {

@@ -11,7 +11,6 @@
 #include <LibCore/TCPServer.h>
 #include <LibCore/Timer.h>
 #include <LibCore/UDPServer.h>
-#include <LibCore/UDPSocket.h>
 #include <LibTest/TestCase.h>
 #include <LibThreading/BackgroundAction.h>
 #include <fcntl.h>
@@ -134,6 +133,18 @@ TEST_CASE(file_adopt_invalid_fd)
     auto maybe_file = Core::Stream::File::adopt_fd(-1, Core::Stream::OpenMode::Read);
     EXPECT(maybe_file.is_error());
     EXPECT_EQ(maybe_file.error().code(), EBADF);
+}
+
+TEST_CASE(file_truncate)
+{
+    auto maybe_file = Core::Stream::File::open("/tmp/file-truncate-test.txt", Core::Stream::OpenMode::Write);
+    auto file = maybe_file.release_value();
+
+    EXPECT(!file->truncate(999).is_error());
+    EXPECT_EQ(file->size().release_value(), 999);
+
+    EXPECT(!file->truncate(42).is_error());
+    EXPECT_EQ(file->size().release_value(), 42);
 }
 
 // TCPSocket tests

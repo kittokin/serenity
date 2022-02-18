@@ -2,6 +2,7 @@
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, Jakob-Niklas See <git@nwex.de>
  * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -131,10 +132,6 @@ BrowserWindow::BrowserWindow(CookieJar& cookie_jar, URL url)
     create_new_tab(move(url), true);
 }
 
-BrowserWindow::~BrowserWindow()
-{
-}
-
 void BrowserWindow::build_menus()
 {
     auto& file_menu = add_menu("&File");
@@ -205,7 +202,7 @@ void BrowserWindow::build_menus()
     m_view_source_action->set_status_tip("View source code of the current page");
 
     m_inspect_dom_tree_action = GUI::Action::create(
-        "Inspect &DOM Tree", { Mod_None, Key_F12 }, g_icon_bag.tree, [this](auto&) {
+        "Inspect &DOM Tree", { Mod_None, Key_F12 }, g_icon_bag.dom_tree, [this](auto&) {
             active_tab().show_inspector_window(Tab::InspectorTarget::Document);
         },
         this);
@@ -233,7 +230,7 @@ void BrowserWindow::build_menus()
     auto& settings_menu = add_menu("&Settings");
 
     m_change_homepage_action = GUI::Action::create(
-        "Set Homepage URL...", [this](auto&) {
+        "Set Homepage URL...", g_icon_bag.go_home, [this](auto&) {
             auto homepage_url = Config::read_string("Browser", "Preferences", "Home", "about:blank");
             if (GUI::InputBox::show(this, homepage_url, "Enter URL", "Change homepage URL") == GUI::InputBox::ExecOK) {
                 if (URL(homepage_url).is_valid()) {
@@ -279,32 +276,35 @@ void BrowserWindow::build_menus()
 
     auto& debug_menu = add_menu("&Debug");
     debug_menu.add_action(GUI::Action::create(
-        "Dump &DOM Tree", g_icon_bag.tree, [this](auto&) {
+        "Dump &DOM Tree", g_icon_bag.dom_tree, [this](auto&) {
             active_tab().m_web_content_view->debug_request("dump-dom-tree");
         },
         this));
     debug_menu.add_action(GUI::Action::create(
-        "Dump &Layout Tree", [this](auto&) {
+        "Dump &Layout Tree", g_icon_bag.layout, [this](auto&) {
             active_tab().m_web_content_view->debug_request("dump-layout-tree");
         },
         this));
     debug_menu.add_action(GUI::Action::create(
-        "Dump &Stacking Context Tree", [this](auto&) {
+        "Dump S&tacking Context Tree", g_icon_bag.layers, [this](auto&) {
             active_tab().m_web_content_view->debug_request("dump-stacking-context-tree");
         },
         this));
     debug_menu.add_action(GUI::Action::create(
-        "Dump &Style Sheets", [this](auto&) {
+        "Dump &Style Sheets", g_icon_bag.filetype_css, [this](auto&) {
             active_tab().m_web_content_view->debug_request("dump-style-sheets");
         },
         this));
-    debug_menu.add_action(GUI::Action::create("Dump &History", { Mod_Ctrl, Key_H }, [this](auto&) {
+    debug_menu.add_action(GUI::Action::create("Dump &History", { Mod_Ctrl, Key_H }, g_icon_bag.history, [this](auto&) {
         active_tab().m_history.dump();
     }));
     debug_menu.add_action(GUI::Action::create("Dump C&ookies", g_icon_bag.cookie, [this](auto&) {
         auto& tab = active_tab();
         if (tab.on_dump_cookies)
             tab.on_dump_cookies();
+    }));
+    debug_menu.add_action(GUI::Action::create("Dump Loc&al Storage", g_icon_bag.local_storage, [this](auto&) {
+        active_tab().m_web_content_view->debug_request("dump-local-storage");
     }));
     debug_menu.add_separator();
     auto line_box_borders_action = GUI::Action::create_checkable(
@@ -316,10 +316,10 @@ void BrowserWindow::build_menus()
     debug_menu.add_action(line_box_borders_action);
 
     debug_menu.add_separator();
-    debug_menu.add_action(GUI::Action::create("Collect &Garbage", { Mod_Ctrl | Mod_Shift, Key_G }, [this](auto&) {
+    debug_menu.add_action(GUI::Action::create("Collect &Garbage", { Mod_Ctrl | Mod_Shift, Key_G }, g_icon_bag.trash_can, [this](auto&) {
         active_tab().m_web_content_view->debug_request("collect-garbage");
     }));
-    debug_menu.add_action(GUI::Action::create("Clear &Cache", { Mod_Ctrl | Mod_Shift, Key_C }, [this](auto&) {
+    debug_menu.add_action(GUI::Action::create("Clear &Cache", { Mod_Ctrl | Mod_Shift, Key_C }, g_icon_bag.clear_cache, [this](auto&) {
         active_tab().m_web_content_view->debug_request("clear-cache");
     }));
 
@@ -330,6 +330,7 @@ void BrowserWindow::build_menus()
     });
     m_disable_user_agent_spoofing->set_status_tip(Web::default_user_agent);
     spoof_user_agent_menu.add_action(*m_disable_user_agent_spoofing);
+    spoof_user_agent_menu.set_icon(g_icon_bag.spoof);
     m_user_agent_spoof_actions.add_action(*m_disable_user_agent_spoofing);
     m_disable_user_agent_spoofing->set_checked(true);
 
@@ -362,7 +363,7 @@ void BrowserWindow::build_menus()
 
     debug_menu.add_separator();
     auto same_origin_policy_action = GUI::Action::create_checkable(
-        "Enable Same &Origin Policy", [this](auto& action) {
+        "Enable Same Origin &Policy", [this](auto& action) {
             active_tab().m_web_content_view->debug_request("same-origin-policy", action.is_checked() ? "on" : "off");
         },
         this);

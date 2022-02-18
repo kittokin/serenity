@@ -75,6 +75,9 @@ First, make sure you have enabled the `community` repository in `/etc/apk/reposi
 # the basics, if you have not already done so
 apk add bash curl git util-linux sudo
 
+# GNU coreutils for GNU's version of `du`
+apk add coreutils
+
 # rough equivalent of build-essential
 apk add build-base
 
@@ -94,6 +97,6 @@ doas pkg_add bash cmake g++ gcc git gmake gmp ninja ccache rsync coreutils qemu 
 ## FreeBSD prerequisites
 
 ```console
-pkg install bash cmake coreutils e2fsprogs fusefs-ext2 gcc git gmake ninja sudo gmp mpc mpfr ccache rsync
+pkg install qemu bash cmake coreutils e2fsprogs fusefs-ext2 gcc11 git gmake ninja sudo gmp mpc mpfr ccache rsync
 ```
 

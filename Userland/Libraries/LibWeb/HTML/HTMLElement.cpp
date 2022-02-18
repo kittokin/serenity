@@ -9,8 +9,8 @@
 #include <LibJS/Parser.h>
 #include <LibWeb/DOM/DOMException.h>
 #include <LibWeb/DOM/Document.h>
-#include <LibWeb/DOM/EventListener.h>
 #include <LibWeb/DOM/ExceptionOr.h>
+#include <LibWeb/DOM/IDLEventListener.h>
 #include <LibWeb/DOM/Window.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/BrowsingContextContainer.h>
@@ -172,10 +172,12 @@ void HTMLElement::parse_attribute(const FlyString& name, const String& value)
 {
     Element::parse_attribute(name, value);
 
+    // 1. If namespace is not null, or localName is not the name of an event handler content attribute on element, then return.
+    // FIXME: Add the namespace part once we support attribute namespaces.
 #undef __ENUMERATE
-#define __ENUMERATE(attribute_name, event_name)                          \
-    if (name == HTML::AttributeNames::attribute_name) {                  \
-        set_event_handler_attribute(event_name, EventHandler { value }); \
+#define __ENUMERATE(attribute_name, event_name)                     \
+    if (name == HTML::AttributeNames::attribute_name) {             \
+        element_event_handler_attribute_changed(event_name, value); \
     }
     ENUMERATE_GLOBAL_EVENT_HANDLERS(__ENUMERATE)
 #undef __ENUMERATE
@@ -387,4 +389,24 @@ void HTMLElement::focus()
     // 5. Unmark the element as locked for focus.
     m_locked_for_focus = false;
 }
+
+// https://html.spec.whatwg.org/multipage/interaction.html#dom-click
+void HTMLElement::click()
+{
+    // FIXME: 1. If this element is a form control that is disabled, then return.
+
+    // 2. If this element's click in progress flag is set, then return.
+    if (m_click_in_progress)
+        return;
+
+    // 3. Set this element's click in progress flag.
+    m_click_in_progress = true;
+
+    // FIXME: 4. Fire a synthetic pointer event named click at this element, with the not trusted flag set.
+    dispatch_event(DOM::Event::create("click"));
+
+    // 5. Unset this element's click in progress flag.
+    m_click_in_progress = false;
+}
+
 }

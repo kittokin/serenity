@@ -6,6 +6,7 @@
 
 #include <LibJS/Interpreter.h>
 #include <LibJS/Parser.h>
+#include <LibJS/Runtime/ArrayBuffer.h>
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibProtocol/WebSocket.h>
 #include <LibProtocol/WebSocketClient.h>
@@ -15,8 +16,8 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/EventDispatcher.h>
-#include <LibWeb/DOM/EventListener.h>
 #include <LibWeb/DOM/ExceptionOr.h>
+#include <LibWeb/DOM/IDLEventListener.h>
 #include <LibWeb/DOM/Window.h>
 #include <LibWeb/HTML/CloseEvent.h>
 #include <LibWeb/HTML/EventHandler.h>
@@ -67,7 +68,7 @@ DOM::ExceptionOr<NonnullRefPtr<WebSocket>> WebSocket::create_with_global_object(
 }
 
 WebSocket::WebSocket(DOM::Window& window, AK::URL& url)
-    : EventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.associated_document()))
+    : EventTarget()
     , m_window(window)
 {
     // FIXME: Integrate properly with FETCH as per https://fetch.spec.whatwg.org/#websocket-opening-handshake
@@ -209,14 +210,27 @@ void WebSocket::on_message(ByteBuffer message, bool is_text)
         return;
     if (is_text) {
         auto text_message = String(ReadonlyBytes(message));
-        MessageEventInit event_init {};
+        MessageEventInit event_init;
         event_init.data = JS::js_string(wrapper()->vm(), text_message);
         event_init.origin = url();
         dispatch_event(MessageEvent::create(EventNames::message, event_init));
         return;
     }
-    // type indicates that the data is Binary and binaryType is "blob"
-    // type indicates that the data is Binary and binaryType is "arraybuffer"
+
+    if (m_binary_type == "blob") {
+        // type indicates that the data is Binary and binaryType is "blob"
+        TODO();
+    } else if (m_binary_type == "arraybuffer") {
+        // type indicates that the data is Binary and binaryType is "arraybuffer"
+        auto& global_object = wrapper()->global_object();
+        MessageEventInit event_init;
+        event_init.data = JS::ArrayBuffer::create(global_object, message);
+        event_init.origin = url();
+        dispatch_event(MessageEvent::create(EventNames::message, event_init));
+        return;
+    }
+
+    dbgln("Unsupported WebSocket message type {}", m_binary_type);
     TODO();
 }
 
@@ -226,14 +240,14 @@ JS::Object* WebSocket::create_wrapper(JS::GlobalObject& global_object)
 }
 
 #undef __ENUMERATE
-#define __ENUMERATE(attribute_name, event_name)                    \
-    void WebSocket::set_##attribute_name(HTML::EventHandler value) \
-    {                                                              \
-        set_event_handler_attribute(event_name, move(value));      \
-    }                                                              \
-    HTML::EventHandler WebSocket::attribute_name()                 \
-    {                                                              \
-        return event_handler_attribute(event_name);                \
+#define __ENUMERATE(attribute_name, event_name)                                  \
+    void WebSocket::set_##attribute_name(Optional<Bindings::CallbackType> value) \
+    {                                                                            \
+        set_event_handler_attribute(event_name, move(value));                    \
+    }                                                                            \
+    Bindings::CallbackType* WebSocket::attribute_name()                          \
+    {                                                                            \
+        return event_handler_attribute(event_name);                              \
     }
 ENUMERATE_WEBSOCKET_EVENT_HANDLERS(__ENUMERATE)
 #undef __ENUMERATE

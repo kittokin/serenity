@@ -1,6 +1,5 @@
 @GUI::Frame {
     fill_with_background_color: true
-
     layout: @GUI::VerticalBoxLayout {
         margins: [10]
         spacing: 5
@@ -9,7 +8,6 @@
     @GUI::GroupBox {
         title: "Homepage"
         fixed_height: 70
-
         layout: @GUI::VerticalBoxLayout {
             margins: [16, 8, 8]
             spacing: 2
@@ -42,7 +40,6 @@
     @GUI::GroupBox {
         title: "Appearance"
         fixed_height: 104
-
         layout: @GUI::VerticalBoxLayout {
             margins: [16, 8, 8]
             spacing: 2
@@ -89,7 +86,6 @@
     @GUI::GroupBox {
         title: "Search Engine"
         fixed_height: 140
-
         layout: @GUI::VerticalBoxLayout {
             margins: [16, 8, 8]
             spacing: 2
@@ -116,7 +112,6 @@
             layout: @GUI::HorizontalBoxLayout {
                 spacing: 16
             }
-
             name: "search_engine_combobox_group"
 
             @GUI::Widget {
@@ -138,7 +133,6 @@
             layout: @GUI::HorizontalBoxLayout {
                 spacing: 16
             }
-
             name: "custom_search_engine_group"
 
             @GUI::Widget {
@@ -161,7 +155,6 @@
     @GUI::GroupBox {
         title: "Downloads"
         fixed_height: 70
-
         layout: @GUI::VerticalBoxLayout {
             margins: [16, 8, 8]
             spacing: 2

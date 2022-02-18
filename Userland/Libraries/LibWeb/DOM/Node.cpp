@@ -19,7 +19,7 @@
 #include <LibWeb/DOM/ElementFactory.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/EventDispatcher.h>
-#include <LibWeb/DOM/EventListener.h>
+#include <LibWeb/DOM/IDLEventListener.h>
 #include <LibWeb/DOM/LiveNodeList.h>
 #include <LibWeb/DOM/Node.h>
 #include <LibWeb/DOM/ProcessingInstruction.h>
@@ -57,7 +57,7 @@ Node* Node::from_id(i32 node_id)
 }
 
 Node::Node(Document& document, NodeType type)
-    : EventTarget(static_cast<Bindings::ScriptExecutionContext&>(document))
+    : EventTarget()
     , m_document(&document)
     , m_type(type)
     , m_id(allocate_node_id(this))

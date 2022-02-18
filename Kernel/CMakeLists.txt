@@ -46,6 +46,8 @@ set(KERNEL_SOURCES
     Coredump.cpp
     Devices/AsyncDeviceRequest.cpp
     Devices/Audio/AC97.cpp
+    Devices/Audio/Channel.cpp
+    Devices/Audio/Management.cpp
     Devices/Audio/SB16.cpp
     Devices/BlockDevice.cpp
     Devices/CharacterDevice.cpp
@@ -332,19 +334,14 @@ if ("${SERENITY_ARCH}" STREQUAL "i686" OR "${SERENITY_ARCH}" STREQUAL "x86_64")
 endif()
 
 set(AK_SOURCES
-    ../AK/FlyString.cpp
     ../AK/GenericLexer.cpp
     ../AK/Hex.cpp
-    ../AK/String.cpp
     ../AK/StringBuilder.cpp
-    ../AK/StringImpl.cpp
     ../AK/StringUtils.cpp
     ../AK/StringView.cpp
     ../AK/Time.cpp
     ../AK/Format.cpp
     ../AK/UUID.cpp
-    ../AK/Utf8View.cpp
-    ../AK/Utf16View.cpp
 )
 
 set(EDID_SOURCES
@@ -422,6 +419,8 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     link_directories(${TOOLCHAIN_ROOT}/lib/gcc/${SERENITY_ARCH}-pc-serenity/${GCC_VERSION}/)
 
     set(TARGET_STRING "")
+
+    add_link_options(LINKER:-z,pack-relative-relocs)
 else() # Assume Clang
     add_compile_options(-Waddress-of-packed-member)
     add_compile_options(-faligned-allocation)
@@ -429,7 +428,7 @@ else() # Assume Clang
     # We need this in order to pick up the #define __serenity__, otherwise we end up including unistd.h into the linker script
     set(TARGET_STRING "--target=${CMAKE_CXX_COMPILER_TARGET}")
     
-    add_link_options(LINKER:--build-id=none)
+    add_link_options(LINKER:--build-id=none LINKER:--pack-dyn-relocs=relr)
 endif()
 
 macro (set_new_alignment alignment)

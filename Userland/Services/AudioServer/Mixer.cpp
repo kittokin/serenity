@@ -23,7 +23,8 @@ namespace AudioServer {
 u8 Mixer::m_zero_filled_buffer[4096];
 
 Mixer::Mixer(NonnullRefPtr<Core::ConfigFile> config)
-    : m_device(Core::File::construct("/dev/audio", this))
+    // FIXME: Allow AudioServer to use other audio channels as well
+    : m_device(Core::File::construct("/dev/audio/0", this))
     , m_sound_thread(Threading::Thread::construct(
           [this] {
               mix();
@@ -190,7 +191,8 @@ void Mixer::request_setting_sync()
         m_config_write_timer = Core::Timer::create_single_shot(
             AUDIO_CONFIG_WRITE_INTERVAL,
             [this] {
-                m_config->sync();
+                if (auto result = m_config->sync(); result.is_error())
+                    dbgln("Failed to write audio mixer config: {}", result.error());
             },
             this);
         m_config_write_timer->start();

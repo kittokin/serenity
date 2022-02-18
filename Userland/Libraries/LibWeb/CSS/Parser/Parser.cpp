@@ -551,6 +551,8 @@ Result<Selector::SimpleSelector, Parser::ParsingResult> Parser::parse_simple_sel
                 simple_selector.pseudo_class.type = Selector::SimpleSelector::PseudoClass::Type::Link;
             } else if (pseudo_name.equals_ignoring_case("only-child")) {
                 simple_selector.pseudo_class.type = Selector::SimpleSelector::PseudoClass::Type::OnlyChild;
+            } else if (pseudo_name.equals_ignoring_case("only-of-type")) {
+                simple_selector.pseudo_class.type = Selector::SimpleSelector::PseudoClass::Type::OnlyOfType;
             } else if (pseudo_name.equals_ignoring_case("root")) {
                 simple_selector.pseudo_class.type = Selector::SimpleSelector::PseudoClass::Type::Root;
             } else if (pseudo_name.equals_ignoring_case("visited")) {
@@ -1124,6 +1126,9 @@ OwnPtr<MediaCondition> Parser::parse_media_in_parens(TokenStream<StyleComponentV
     }
 
     // `<general-enclosed>`
+    // FIXME: We should only be taking this branch if the grammar doesn't match the above options.
+    //        Currently we take it if the above fail to parse, which is different.
+    //        eg, `@media (min-width: 76yaks)` is valid grammar, but does not parse because `yaks` isn't a unit.
     if (auto maybe_general_enclosed = parse_general_enclosed(tokens); maybe_general_enclosed.has_value())
         return MediaCondition::from_general_enclosed(maybe_general_enclosed.release_value());
 
@@ -1611,7 +1616,7 @@ Optional<StyleDeclarationRule> Parser::consume_a_declaration(TokenStream<T>& tok
             if (bang_index.has_value()) {
                 declaration.m_values.remove(important_index.value());
                 declaration.m_values.remove(bang_index.value());
-                declaration.m_important = true;
+                declaration.m_important = Important::Yes;
             }
         }
     }
@@ -1934,8 +1939,10 @@ RefPtr<CSSRule> Parser::convert_to_rule(NonnullRefPtr<StyleRule> rule)
 
             auto media_query_tokens = TokenStream { rule->prelude() };
             auto media_query_list = parse_a_media_query_list(media_query_tokens);
+            if (media_query_list.is_empty() || !rule->block())
+                return {};
 
-            auto child_tokens = TokenStream { rule->block().values() };
+            auto child_tokens = TokenStream { rule->block()->values() };
             auto parser_rules = consume_a_list_of_rules(child_tokens, false);
             NonnullRefPtrVector<CSSRule> child_rules;
             for (auto& raw_rule : parser_rules) {
@@ -1980,7 +1987,9 @@ RefPtr<CSSRule> Parser::convert_to_rule(NonnullRefPtr<StyleRule> rule)
                 return {};
             }
 
-            auto child_tokens = TokenStream { rule->block().values() };
+            if (!rule->block())
+                return {};
+            auto child_tokens = TokenStream { rule->block()->values() };
             auto parser_rules = consume_a_list_of_rules(child_tokens, false);
             NonnullRefPtrVector<CSSRule> child_rules;
             for (auto& raw_rule : parser_rules) {
@@ -2145,7 +2154,7 @@ Optional<Parser::Dimension> Parser::parse_dimension(StyleComponentValueRule cons
     if (component_value.is(Token::Type::Dimension)) {
         float numeric_value = component_value.token().dimension_value();
         auto unit_string = component_value.token().dimension_unit();
-        Optional<Length::Type> length_type = Length::Type::Undefined;
+        Optional<Length::Type> length_type;
 
         if (unit_string.equals_ignoring_case("px"sv)) {
             length_type = Length::Type::Px;
@@ -3080,8 +3089,8 @@ RefPtr<StyleValue> Parser::parse_border_radius_value(Vector<StyleComponentValueR
 
 RefPtr<StyleValue> Parser::parse_border_radius_shorthand_value(Vector<StyleComponentValueRule> const& component_values)
 {
-    auto top_left = [&](Vector<Length>& radii) { return radii[0]; };
-    auto top_right = [&](Vector<Length>& radii) {
+    auto top_left = [&](Vector<LengthPercentage>& radii) { return radii[0]; };
+    auto top_right = [&](Vector<LengthPercentage>& radii) {
         switch (radii.size()) {
         case 4:
         case 3:
@@ -3093,7 +3102,7 @@ RefPtr<StyleValue> Parser::parse_border_radius_shorthand_value(Vector<StyleCompo
             VERIFY_NOT_REACHED();
         }
     };
-    auto bottom_right = [&](Vector<Length>& radii) {
+    auto bottom_right = [&](Vector<LengthPercentage>& radii) {
         switch (radii.size()) {
         case 4:
         case 3:
@@ -3105,7 +3114,7 @@ RefPtr<StyleValue> Parser::parse_border_radius_shorthand_value(Vector<StyleCompo
             VERIFY_NOT_REACHED();
         }
     };
-    auto bottom_left = [&](Vector<Length>& radii) {
+    auto bottom_left = [&](Vector<LengthPercentage>& radii) {
         switch (radii.size()) {
         case 4:
             return radii[3];
@@ -3119,8 +3128,8 @@ RefPtr<StyleValue> Parser::parse_border_radius_shorthand_value(Vector<StyleCompo
         }
     };
 
-    Vector<Length> horizontal_radii;
-    Vector<Length> vertical_radii;
+    Vector<LengthPercentage> horizontal_radii;
+    Vector<LengthPercentage> vertical_radii;
     bool reading_vertical = false;
 
     for (auto& value : component_values) {
@@ -3132,13 +3141,13 @@ RefPtr<StyleValue> Parser::parse_border_radius_shorthand_value(Vector<StyleCompo
             continue;
         }
 
-        auto maybe_length = parse_length(value);
-        if (!maybe_length.has_value())
+        auto maybe_dimension = parse_dimension(value);
+        if (!maybe_dimension.has_value() || !maybe_dimension->is_length_percentage())
             return nullptr;
         if (reading_vertical) {
-            vertical_radii.append(maybe_length.value());
+            vertical_radii.append(maybe_dimension->length_percentage());
         } else {
-            horizontal_radii.append(maybe_length.value());
+            horizontal_radii.append(maybe_dimension->length_percentage());
         }
     }
 
@@ -3169,43 +3178,107 @@ RefPtr<StyleValue> Parser::parse_box_shadow_value(Vector<StyleComponentValueRule
             return ident;
     }
 
-    // FIXME: Also support inset, spread-radius and multiple comma-separated box-shadows
-    Length offset_x {};
-    Length offset_y {};
-    Length blur_radius {};
-    Color color {};
+    return parse_comma_separated_value_list(component_values, [this](auto& tokens) {
+        return parse_single_box_shadow_value(tokens);
+    });
+}
 
-    if (component_values.size() < 3 || component_values.size() > 4)
+RefPtr<StyleValue> Parser::parse_single_box_shadow_value(TokenStream<StyleComponentValueRule>& tokens)
+{
+    auto start_position = tokens.position();
+    auto error = [&]() {
+        tokens.rewind_to_position(start_position);
         return nullptr;
+    };
 
-    auto maybe_x = parse_length(component_values[0]);
-    if (!maybe_x.has_value())
-        return nullptr;
-    offset_x = maybe_x.value();
+    Optional<Color> color;
+    Optional<Length> offset_x;
+    Optional<Length> offset_y;
+    Optional<Length> blur_radius;
+    Optional<Length> spread_distance;
+    Optional<BoxShadowPlacement> placement;
 
-    auto maybe_y = parse_length(component_values[1]);
-    if (!maybe_y.has_value())
-        return nullptr;
-    offset_y = maybe_y.value();
+    while (tokens.has_next_token()) {
+        auto& token = tokens.peek_token();
 
-    if (component_values.size() == 3) {
-        auto parsed_color = parse_color(component_values[2]);
-        if (!parsed_color.has_value())
-            return nullptr;
-        color = parsed_color.value();
-    } else if (component_values.size() == 4) {
-        auto maybe_blur_radius = parse_length(component_values[2]);
-        if (!maybe_blur_radius.has_value())
-            return nullptr;
-        blur_radius = maybe_blur_radius.value();
+        if (auto maybe_color = parse_color(token); maybe_color.has_value()) {
+            if (color.has_value())
+                return error();
+            color = maybe_color.release_value();
+            tokens.next_token();
+            continue;
+        }
 
-        auto parsed_color = parse_color(component_values[3]);
-        if (!parsed_color.has_value())
-            return nullptr;
-        color = parsed_color.value();
+        if (auto maybe_offset_x = parse_length(token); maybe_offset_x.has_value()) {
+            // horizontal offset
+            if (offset_x.has_value())
+                return error();
+            offset_x = maybe_offset_x.release_value();
+            tokens.next_token();
+
+            // vertical offset
+            if (!tokens.has_next_token())
+                return error();
+            auto maybe_offset_y = parse_length(tokens.peek_token());
+            if (!maybe_offset_y.has_value())
+                return error();
+            offset_y = maybe_offset_y.release_value();
+            tokens.next_token();
+
+            // blur radius (optional)
+            if (!tokens.has_next_token())
+                break;
+            auto maybe_blur_radius = parse_length(tokens.peek_token());
+            if (!maybe_blur_radius.has_value())
+                continue;
+            blur_radius = maybe_blur_radius.release_value();
+            tokens.next_token();
+
+            // spread distance (optional)
+            if (!tokens.has_next_token())
+                break;
+            auto maybe_spread_distance = parse_length(tokens.peek_token());
+            if (!maybe_spread_distance.has_value())
+                continue;
+            spread_distance = maybe_spread_distance.release_value();
+            tokens.next_token();
+
+            continue;
+        }
+
+        if (token.is(Token::Type::Ident) && token.token().ident().equals_ignoring_case("inset"sv)) {
+            if (placement.has_value())
+                return error();
+            placement = BoxShadowPlacement::Inner;
+            tokens.next_token();
+            continue;
+        }
+
+        if (token.is(Token::Type::Comma))
+            break;
+
+        return error();
     }
 
-    return BoxShadowStyleValue::create(offset_x, offset_y, blur_radius, color);
+    // FIXME: If color is absent, default to `currentColor`
+    if (!color.has_value())
+        color = Color::NamedColor::Black;
+
+    // x/y offsets are required
+    if (!offset_x.has_value() || !offset_y.has_value())
+        return error();
+
+    // Other lengths default to 0
+    if (!blur_radius.has_value())
+        blur_radius = Length::make_px(0);
+    if (!spread_distance.has_value())
+        spread_distance = Length::make_px(0);
+
+    // Placement is outer by default
+    if (!placement.has_value())
+        placement = BoxShadowPlacement::Outer;
+
+    return BoxShadowStyleValue::create(color.release_value(), offset_x.release_value(), offset_y.release_value(), blur_radius.release_value(), spread_distance.release_value(), placement.release_value());
 }
 
 RefPtr<StyleValue> Parser::parse_flex_value(Vector<StyleComponentValueRule> const& component_values)

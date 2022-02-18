@@ -783,48 +783,36 @@ bool Compositor::set_background_color(const String& background_color)
 
     auto& wm = WindowManager::the();
     wm.config()->write_entry("Background", "Color", background_color);
-    bool ret_val = wm.config()->sync();
+    bool succeeded = !wm.config()->sync().is_error();
 
-    if (ret_val)
+    if (succeeded)
         Compositor::invalidate_screen();
 
-    return ret_val;
+    return succeeded;
 }
 
 bool Compositor::set_wallpaper_mode(const String& mode)
 {
     auto& wm = WindowManager::the();
     wm.config()->write_entry("Background", "Mode", mode);
-    bool ret_val = wm.config()->sync();
+    bool succeeded = !wm.config()->sync().is_error();
 
-    if (ret_val) {
+    if (succeeded) {
         m_wallpaper_mode = mode_to_enum(mode);
         Compositor::invalidate_screen();
     }
 
-    return ret_val;
+    return succeeded;
 }
 
-bool Compositor::set_wallpaper(const String& path, Function<void(bool)>&& callback)
+bool Compositor::set_wallpaper(RefPtr<Gfx::Bitmap> bitmap)
 {
-    (void)Threading::BackgroundAction<ErrorOr<NonnullRefPtr<Gfx::Bitmap>>>::construct(
-        [path](auto&) {
-            return Gfx::Bitmap::try_load_from_file(path);
-        },
+    if (!bitmap)
+        m_wallpaper = nullptr;
+    else
+        m_wallpaper = bitmap;
+    invalidate_screen();
 
-        [this, path, callback = move(callback)](ErrorOr<NonnullRefPtr<Gfx::Bitmap>> bitmap) {
-            if (bitmap.is_error() && !path.is_empty()) {
-                callback(false);
-                return;
-            }
-            m_wallpaper_path = path;
-            if (bitmap.is_error())
-                m_wallpaper = nullptr;
-            else
-                m_wallpaper = bitmap.release_value();
-            invalidate_screen();
-            callback(true);
-        });
     return true;
 }
 

@@ -450,17 +450,17 @@ void Optimizer::append_alternation(ByteCode& target, ByteCode&& left, ByteCode&&
         if (left_is_empty && right_is_empty)
             return;
 
-        // ForkJump right (+ left.size() + 2 + right.size())
-        // (left)
-        // Jump end (+ right.size())
+        // ForkJump left (+ 2 + right.size())
         // (right)
+        // Jump end (+ left.size())
+        // (left)
         // LABEL end
         target.append(static_cast<ByteCodeValueType>(OpCodeId::ForkJump));
-        target.append(left.size() + 2 + right.size());
-        target.extend(move(left));
-        target.append(static_cast<ByteCodeValueType>(OpCodeId::Jump));
-        target.append(right.size());
+        target.append(2 + right.size());
         target.extend(move(right));
+        target.append(static_cast<ByteCodeValueType>(OpCodeId::Jump));
+        target.append(left.size());
+        target.extend(move(left));
         return;
     }
 
@@ -484,7 +484,12 @@ void Optimizer::append_alternation(ByteCode& target, ByteCode&& left, ByteCode&&
         if (left.spans().slice(left_block.start, left_end - left_block.start) != right.spans().slice(right_block.start, right_end - right_block.start))
             break;
 
-        left_skip = left_end;
+        state.instruction_position = 0;
+        while (state.instruction_position < left_end) {
+            auto& opcode = left.get_opcode(state);
+            left_skip = state.instruction_position;
+            state.instruction_position += opcode.size();
+        }
     }
 
     dbgln_if(REGEX_DEBUG, "Skipping {}/{} bytecode entries from {}/{}", left_skip, 0, left.size(), right.size());

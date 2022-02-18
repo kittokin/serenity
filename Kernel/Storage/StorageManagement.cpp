@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -57,7 +58,7 @@ UNMAP_AFTER_INIT void StorageManagement::enumerate_controllers(bool force_pio, b
             }
 
             {
-                static constexpr PCI::HardwareID vmd_device = { 0x8086, 0x9a0b };
+                constexpr PCI::HardwareID vmd_device = { 0x8086, 0x9a0b };
                 if (device_identifier.hardware_id() == vmd_device) {
                     auto controller = PCI::VolumeManagementDevice::must_create(device_identifier);
                     PCI::Access::the().add_host_controller_and_enumerate_attached_devices(move(controller), [this, nvme_poll](PCI::DeviceIdentifier const& device_identifier) -> void {
@@ -221,12 +222,6 @@ UNMAP_AFTER_INIT void StorageManagement::determine_boot_device_with_partition_uu
 
     auto partition_uuid = UUID(m_boot_argument.substring_view(partition_uuid_prefix.length()), UUID::Endianness::Mixed);
 
-    if (partition_uuid.to_string().length() != 36) {
-        // FIXME: It would be helpful to output the specified and detected UUIDs in this case,
-        //        but we never actually enter this path - if the length doesn't match, the UUID
-        //        constructor above crashes with a VERIFY in convert_string_view_to_uuid().
-        PANIC("StorageManagement: Specified partition UUID is not valid");
-    }
     for (auto& storage_device : m_storage_devices) {
         for (auto& partition : storage_device.partitions()) {
             if (partition.metadata().unique_guid().is_zero())

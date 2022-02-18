@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -21,7 +22,7 @@ namespace LanguageServers {
 class ClientConnection : public IPC::ClientConnection<LanguageClientEndpoint, LanguageServerEndpoint> {
 public:
     explicit ClientConnection(NonnullOwnPtr<Core::Stream::LocalSocket>);
-    ~ClientConnection() override;
+    ~ClientConnection() override = default;
 
     virtual void die() override;
 
@@ -34,6 +35,7 @@ protected:
     virtual void auto_complete_suggestions(GUI::AutocompleteProvider::ProjectLocation const&) override;
     virtual void find_declaration(GUI::AutocompleteProvider::ProjectLocation const&) override;
     virtual void get_parameters_hint(GUI::AutocompleteProvider::ProjectLocation const&) override;
+    virtual void get_tokens_info(String const&) override;
 
     FileDB m_filedb;
     OwnPtr<CodeComprehensionEngine> m_autocomplete_engine;

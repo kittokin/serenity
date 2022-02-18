@@ -11,7 +11,6 @@ set(SOURCES
     Bindings/MainThreadVM.cpp
     Bindings/NavigatorObject.cpp
     Bindings/NodeWrapperFactory.cpp
-    Bindings/ScriptExecutionContext.cpp
     Bindings/WindowObject.cpp
     Bindings/Wrappable.cpp
     Crypto/Crypto.cpp
@@ -29,6 +28,7 @@ set(SOURCES
     CSS/CSSSupportsRule.cpp
     CSS/ResolvedCSSStyleDeclaration.cpp
     CSS/DefaultStyleSheetSource.cpp
+    CSS/Display.cpp
     CSS/Length.cpp
     CSS/MediaList.cpp
     CSS/MediaQuery.cpp
@@ -63,6 +63,7 @@ set(SOURCES
     DOM/CharacterData.idl
     DOM/Comment.cpp
     DOM/CustomEvent.cpp
+    DOM/DOMEventListener.cpp
     DOM/DOMImplementation.cpp
     DOM/DOMTokenList.cpp
     DOM/DOMTokenList.idl
@@ -74,7 +75,6 @@ set(SOURCES
     DOM/ElementFactory.cpp
     DOM/Event.cpp
     DOM/EventDispatcher.cpp
-    DOM/EventListener.cpp
     DOM/EventTarget.cpp
     DOM/HTMLCollection.cpp
     DOM/LiveNodeList.cpp
@@ -94,8 +94,11 @@ set(SOURCES
     DOMParsing/InnerHTML.cpp
     DOMTreeModel.cpp
     Dump.cpp
+    Encoding/TextDecoder.cpp
     Encoding/TextEncoder.cpp
+    Fetch/AbstractOperations.cpp
     FontCache.cpp
+    Geometry/DOMRectList.cpp
     HTML/AttributeNames.cpp
     HTML/BrowsingContext.cpp
     HTML/BrowsingContextContainer.cpp
@@ -194,11 +197,19 @@ set(SOURCES
     HTML/Parser/ListOfActiveFormattingElements.cpp
     HTML/Parser/StackOfOpenElements.cpp
     HTML/Scripting/ClassicScript.cpp
+    HTML/Scripting/Environments.cpp
+    HTML/Scripting/ExceptionReporter.cpp
     HTML/Scripting/Script.cpp
+    HTML/Scripting/WindowEnvironmentSettingsObject.cpp
+    HTML/Storage.cpp
     HTML/SyntaxHighlighter/SyntaxHighlighter.cpp
     HTML/TagNames.cpp
     HTML/TextMetrics.cpp
     HTML/WebSocket.cpp
+    HTML/Worker.cpp
+    HTML/WorkerDebugConsoleClient.cpp
+    HTML/WorkerGlobalScope.cpp
+    HTML/WorkerLocation.cpp
     HighResolutionTime/Performance.cpp
     ImageDecoding.cpp
     InProcessWebView.cpp
@@ -227,12 +238,13 @@ set(SOURCES
     Layout/ListItemBox.cpp
     Layout/ListItemMarkerBox.cpp
     Layout/Node.cpp
+    Layout/Progress.cpp
     Layout/RadioButton.cpp
     Layout/ReplacedBox.cpp
     Layout/SVGBox.cpp
     Layout/SVGFormattingContext.cpp
+    Layout/SVGGeometryBox.cpp
     Layout/SVGGraphicsBox.cpp
-    Layout/SVGPathBox.cpp
     Layout/SVGSVGBox.cpp
     Layout/TableBox.cpp
     Layout/TableCellBox.cpp
@@ -248,6 +260,7 @@ set(SOURCES
     Loader/LoadRequest.cpp
     Loader/Resource.cpp
     Loader/ResourceLoader.cpp
+    MimeSniff/MimeType.cpp
     Namespace.cpp
     NavigationTiming/PerformanceTiming.cpp
     OutOfProcessWebView.cpp
@@ -261,11 +274,18 @@ set(SOURCES
     RequestIdleCallback/IdleDeadline.cpp
     ResizeObserver/ResizeObserver.cpp
     SVG/AttributeNames.cpp
+    SVG/AttributeParser.cpp
     SVG/SVGElement.cpp
     SVG/SVGGElement.cpp
     SVG/SVGGeometryElement.cpp
     SVG/SVGGraphicsElement.cpp
     SVG/SVGPathElement.cpp
+    SVG/SVGCircleElement.cpp
+    SVG/SVGEllipseElement.cpp
+    SVG/SVGLineElement.cpp
+    SVG/SVGPolygonElement.cpp
+    SVG/SVGPolylineElement.cpp
+    SVG/SVGRectElement.cpp
     SVG/SVGSVGElement.cpp
     SVG/TagNames.cpp
     SVG/ViewBox.cpp
@@ -346,9 +366,11 @@ function(libweb_js_wrapper class)
     foreach(iter RANGE "${bindings_end}")
         list(GET BINDINGS_SOURCES ${iter} bindings_src)
         list(GET BINDINGS_TYPES ${iter} bindings_type)
+        get_property(include_paths DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES)
+        list(TRANSFORM include_paths PREPEND -i)
         add_custom_command(
             OUTPUT "${bindings_src}"
-            COMMAND "$<TARGET_FILE:Lagom::WrapperGenerator>" "--${bindings_type}" "${CMAKE_CURRENT_SOURCE_DIR}/${class}.idl" "${CMAKE_CURRENT_SOURCE_DIR}/" > "${bindings_src}.tmp"
+            COMMAND "$<TARGET_FILE:Lagom::WrapperGenerator>" "--${bindings_type}" ${include_paths} "${CMAKE_CURRENT_SOURCE_DIR}/${class}.idl" "${CMAKE_CURRENT_SOURCE_DIR}/" > "${bindings_src}.tmp"
             COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${bindings_src}.tmp" "${bindings_src}"
             COMMAND "${CMAKE_COMMAND}" -E remove "${bindings_src}.tmp"
             VERBATIM
@@ -405,14 +427,17 @@ libweb_js_wrapper(DOM/ProcessingInstruction)
 libweb_js_wrapper(DOM/Range)
 libweb_js_wrapper(DOM/ShadowRoot)
 libweb_js_wrapper(DOM/Text)
+libweb_js_wrapper(Encoding/TextDecoder)
 libweb_js_wrapper(Encoding/TextEncoder)
 libweb_js_wrapper(Geometry/DOMRect)
+libweb_js_wrapper(Geometry/DOMRectList)
 libweb_js_wrapper(Geometry/DOMRectReadOnly)
 libweb_js_wrapper(HTML/CanvasGradient)
 libweb_js_wrapper(HTML/CanvasRenderingContext2D)
 libweb_js_wrapper(HTML/CloseEvent)
 libweb_js_wrapper(HTML/DOMParser)
 libweb_js_wrapper(HTML/DOMStringMap)
+libweb_js_wrapper(HTML/ErrorEvent)
 libweb_js_wrapper(HTML/History)
 libweb_js_wrapper(HTML/HTMLAnchorElement)
 libweb_js_wrapper(HTML/HTMLAreaElement)
@@ -491,9 +516,14 @@ libweb_js_wrapper(HTML/MessageEvent)
 libweb_js_wrapper(HTML/MessagePort)
 libweb_js_wrapper(HTML/PageTransitionEvent)
 libweb_js_wrapper(HTML/PromiseRejectionEvent)
+libweb_js_wrapper(HTML/Storage)
 libweb_js_wrapper(HTML/SubmitEvent)
 libweb_js_wrapper(HTML/TextMetrics)
 libweb_js_wrapper(HTML/WebSocket)
+libweb_js_wrapper(HTML/Worker)
+libweb_js_wrapper(HTML/WorkerGlobalScope)
+libweb_js_wrapper(HTML/WorkerLocation)
+libweb_js_wrapper(HTML/WorkerNavigator)
 libweb_js_wrapper(HighResolutionTime/Performance)
 libweb_js_wrapper(IntersectionObserver/IntersectionObserver)
 libweb_js_wrapper(NavigationTiming/PerformanceTiming)
@@ -502,7 +532,13 @@ libweb_js_wrapper(ResizeObserver/ResizeObserver)
 libweb_js_wrapper(SVG/SVGElement)
 libweb_js_wrapper(SVG/SVGGeometryElement)
 libweb_js_wrapper(SVG/SVGGraphicsElement)
+libweb_js_wrapper(SVG/SVGCircleElement)
+libweb_js_wrapper(SVG/SVGEllipseElement)
+libweb_js_wrapper(SVG/SVGLineElement)
 libweb_js_wrapper(SVG/SVGPathElement)
+libweb_js_wrapper(SVG/SVGPolygonElement)
+libweb_js_wrapper(SVG/SVGPolylineElement)
+libweb_js_wrapper(SVG/SVGRectElement)
 libweb_js_wrapper(SVG/SVGSVGElement)
 libweb_js_wrapper(Selection/Selection)
 libweb_js_wrapper(UIEvents/FocusEvent)

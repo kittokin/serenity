@@ -1,13 +1,13 @@
 /*
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Format.h>
 #include <LibWeb/Layout/SVGFormattingContext.h>
-#include <LibWeb/Layout/SVGPathBox.h>
-#include <LibWeb/Layout/SVGSVGBox.h>
+#include <LibWeb/Layout/SVGGeometryBox.h>
 
 namespace Web::Layout {
 
@@ -22,25 +22,22 @@ SVGFormattingContext::~SVGFormattingContext()
 
 void SVGFormattingContext::run(Box& box, LayoutMode)
 {
-    // FIXME: This formatting context is basically a total hack.
-    //        It works by computing the united bounding box of all <path>'s
-    //        within an <svg>, and using that as the size of this box.
-
-    Gfx::FloatRect total_bounding_box;
-
     box.for_each_in_subtree_of_type<SVGBox>([&](auto& descendant) {
-        if (is<SVGPathBox>(descendant)) {
-            auto& path_box = static_cast<SVGPathBox&>(descendant);
-            auto& path = path_box.dom_node().get_path();
-            path_box.set_content_size(path.bounding_box().size());
+        if (is<SVGGeometryBox>(descendant)) {
+            auto& geometry_box = static_cast<SVGGeometryBox&>(descendant);
+            auto& path = geometry_box.dom_node().get_path();
+            auto bounding_box = path.bounding_box();
 
-            total_bounding_box = total_bounding_box.united(path.bounding_box());
+            // Stroke increases the path's size by stroke_width/2 per side.
+            auto stroke_width = geometry_box.dom_node().stroke_width().value_or(0);
+            bounding_box.inflate(stroke_width, stroke_width);
+
+            geometry_box.set_offset(bounding_box.top_left());
+            geometry_box.set_content_size(bounding_box.size());
         }
 
         return IterationDecision::Continue;
     });
-
-    box.set_content_size(total_bounding_box.size());
 }
 
 }

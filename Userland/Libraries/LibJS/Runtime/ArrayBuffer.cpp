@@ -10,13 +10,12 @@
 
 namespace JS {
 
-ArrayBuffer* ArrayBuffer::create(GlobalObject& global_object, size_t byte_length)
+ThrowCompletionOr<ArrayBuffer*> ArrayBuffer::create(GlobalObject& global_object, size_t byte_length)
 {
     auto buffer = ByteBuffer::create_zeroed(byte_length);
-    if (buffer.is_error()) {
-        global_object.vm().throw_exception<RangeError>(global_object, ErrorType::NotEnoughMemoryToAllocate, byte_length);
-        return nullptr;
-    }
+    if (buffer.is_error())
+        return global_object.vm().throw_completion<RangeError>(global_object, ErrorType::NotEnoughMemoryToAllocate, byte_length);
+
     return global_object.heap().allocate<ArrayBuffer>(global_object, buffer.release_value(), *global_object.array_buffer_prototype());
 }
 
@@ -72,6 +71,32 @@ ThrowCompletionOr<ArrayBuffer*> allocate_array_buffer(GlobalObject& global_objec
 
     // 5. Return obj.
     return obj;
+}
+
+// 25.1.2.4 CloneArrayBuffer ( srcBuffer, srcByteOffset, srcLength, cloneConstructor ), https://tc39.es/ecma262/#sec-clonearraybuffer
+ThrowCompletionOr<ArrayBuffer*> clone_array_buffer(GlobalObject& global_object, ArrayBuffer& source_buffer, size_t source_byte_offset, size_t source_length, FunctionObject& clone_constructor)
+{
+    auto& vm = global_object.vm();
+
+    // 1. Let targetBuffer be ? AllocateArrayBuffer(cloneConstructor, srcLength).
+    auto* target_buffer = TRY(allocate_array_buffer(global_object, clone_constructor, source_length));
+
+    // 2. If IsDetachedBuffer(srcBuffer) is true, throw a TypeError exception.
+    if (source_buffer.is_detached())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::DetachedArrayBuffer);
+
+    // 3. Let srcBlock be srcBuffer.[[ArrayBufferData]].
+    auto& source_block = source_buffer.buffer();
+
+    // 4. Let targetBlock be targetBuffer.[[ArrayBufferData]].
+    auto& target_block = target_buffer->buffer();
+
+    // 5. Perform CopyDataBlockBytes(targetBlock, 0, srcBlock, srcByteOffset, srcLength).
+    // FIXME: This is only correct for ArrayBuffers, once SharedArrayBuffer is implemented, the AO has to be implemented
+    target_block.overwrite(0, source_block.offset_pointer(source_byte_offset), source_length);
+
+    // 6. Return targetBuffer.
+    return target_buffer;
 }
 
 }

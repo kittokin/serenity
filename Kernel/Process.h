@@ -12,7 +12,6 @@
 #include <AK/IntrusiveListRelaxedConst.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/OwnPtr.h>
-#include <AK/String.h>
 #include <AK/Userspace.h>
 #include <AK/Variant.h>
 #include <AK/WeakPtr.h>
@@ -434,6 +433,8 @@ public:
     Custody* executable() { return m_executable.ptr(); }
     const Custody* executable() const { return m_executable.ptr(); }
 
+    static constexpr size_t max_arguments_size = Thread::default_userspace_stack_size / 8;
+    static constexpr size_t max_environment_size = Thread::default_userspace_stack_size / 8;
     NonnullOwnPtrVector<KString> const& arguments() const { return m_arguments; };
     NonnullOwnPtrVector<KString> const& environment() const { return m_environment; };
 
@@ -519,7 +520,7 @@ private:
     bool add_thread(Thread&);
     bool remove_thread(Thread&);
 
-    Process(NonnullOwnPtr<KString> name, UserID, GroupID, ProcessID ppid, bool is_kernel_process, RefPtr<Custody> cwd, RefPtr<Custody> executable, TTY* tty);
+    Process(NonnullOwnPtr<KString> name, UserID, GroupID, ProcessID ppid, bool is_kernel_process, RefPtr<Custody> cwd, RefPtr<Custody> executable, TTY* tty, UnveilNode unveil_tree);
     static ErrorOr<NonnullRefPtr<Process>> try_create(RefPtr<Thread>& first_thread, NonnullOwnPtr<KString> name, UserID, GroupID, ProcessID ppid, bool is_kernel_process, RefPtr<Custody> cwd = nullptr, RefPtr<Custody> executable = nullptr, TTY* = nullptr, Process* fork_parent = nullptr);
     ErrorOr<void> attach_resources(NonnullOwnPtr<Memory::AddressSpace>&&, RefPtr<Thread>& first_thread, Process* fork_parent);
     static ProcessID allocate_pid();
@@ -553,6 +554,8 @@ private:
     void clear_futex_queues_on_exec();
 
     ErrorOr<void> remap_range_as_stack(FlatPtr address, size_t size);
+
+    ErrorOr<FlatPtr> read_impl(int fd, Userspace<u8*> buffer, size_t size);
 
 public:
     NonnullRefPtr<ProcessProcFSTraits> procfs_traits() const { return *m_procfs_traits; }
@@ -722,9 +725,9 @@ public:
 
     class ProcessProcFSTraits : public ProcFSExposedComponent {
     public:
-        static ErrorOr<NonnullRefPtr<ProcessProcFSTraits>> try_create(Badge<Process>, Process& process)
+        static ErrorOr<NonnullRefPtr<ProcessProcFSTraits>> try_create(Badge<Process>, WeakPtr<Process> process)
         {
-            return adopt_nonnull_ref_or_enomem(new (nothrow) ProcessProcFSTraits(process));
+            return adopt_nonnull_ref_or_enomem(new (nothrow) ProcessProcFSTraits(move(process)));
         }
 
         virtual InodeIndex component_index() const override;
@@ -736,8 +739,8 @@ public:
         virtual GroupID owner_group() const override;
 
     private:
-        explicit ProcessProcFSTraits(Process& process)
-            : m_process(process.make_weak_ptr())
+        explicit ProcessProcFSTraits(WeakPtr<Process> process)
+            : m_process(move(process))
         {
         }
 
@@ -796,7 +799,7 @@ private:
     RefPtr<Timer> m_alarm_timer;
 
     VeilState m_veil_state { VeilState::None };
-    UnveilNode m_unveiled_paths { "/", { .full_path = "/" } };
+    UnveilNode m_unveiled_paths;
 
     OwnPtr<PerformanceEventBuffer> m_perf_event_buffer;
 

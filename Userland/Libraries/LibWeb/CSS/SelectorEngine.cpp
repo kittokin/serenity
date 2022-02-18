@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2022, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -11,7 +11,8 @@
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Text.h>
 #include <LibWeb/HTML/AttributeNames.h>
-#include <LibWeb/HTML/HTMLElement.h>
+#include <LibWeb/HTML/HTMLHtmlElement.h>
+#include <LibWeb/HTML/HTMLInputElement.h>
 
 namespace Web::SelectorEngine {
 
@@ -52,6 +53,24 @@ static inline bool matches_attribute(CSS::Selector::SimpleSelector::Attribute co
     return false;
 }
 
+static inline DOM::Element const* previous_sibling_with_same_tag_name(DOM::Element const& element)
+{
+    for (auto const* sibling = element.previous_element_sibling(); sibling; sibling = sibling->previous_element_sibling()) {
+        if (sibling->tag_name() == element.tag_name())
+            return sibling;
+    }
+    return nullptr;
+}
+
+static inline DOM::Element const* next_sibling_with_same_tag_name(DOM::Element const& element)
+{
+    for (auto const* sibling = element.next_element_sibling(); sibling; sibling = sibling->next_element_sibling()) {
+        if (sibling->tag_name() == element.tag_name())
+            return sibling;
+    }
+    return nullptr;
+}
+
 static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoClass const& pseudo_class, DOM::Element const& element)
 {
     switch (pseudo_class.type) {
@@ -77,19 +96,13 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
     case CSS::Selector::SimpleSelector::PseudoClass::Type::Empty:
         return !(element.first_child_of_type<DOM::Element>() || element.first_child_of_type<DOM::Text>());
     case CSS::Selector::SimpleSelector::PseudoClass::Type::Root:
-        return is<HTML::HTMLElement>(element);
+        return is<HTML::HTMLHtmlElement>(element);
     case CSS::Selector::SimpleSelector::PseudoClass::Type::FirstOfType:
-        for (auto* sibling = element.previous_element_sibling(); sibling; sibling = sibling->previous_element_sibling()) {
-            if (sibling->tag_name() == element.tag_name())
-                return false;
-        }
-        return true;
+        return !previous_sibling_with_same_tag_name(element);
     case CSS::Selector::SimpleSelector::PseudoClass::Type::LastOfType:
-        for (auto* sibling = element.next_element_sibling(); sibling; sibling = sibling->next_element_sibling()) {
-            if (sibling->tag_name() == element.tag_name())
-                return false;
-        }
-        return true;
+        return !next_sibling_with_same_tag_name(element);
+    case CSS::Selector::SimpleSelector::PseudoClass::Type::OnlyOfType:
+        return !previous_sibling_with_same_tag_name(element) && !next_sibling_with_same_tag_name(element);
     case CSS::Selector::SimpleSelector::PseudoClass::Type::Disabled:
         if (!element.tag_name().equals_ignoring_case(HTML::TagNames::input))
             return false;
@@ -105,9 +118,7 @@ static inline bool matches_pseudo_class(CSS::Selector::SimpleSelector::PseudoCla
     case CSS::Selector::SimpleSelector::PseudoClass::Type::Checked:
         if (!element.tag_name().equals_ignoring_case(HTML::TagNames::input))
             return false;
-        if (!element.has_attribute("checked"))
-            return false;
-        return true;
+        return static_cast<HTML::HTMLInputElement const&>(element).checked();
     case CSS::Selector::SimpleSelector::PseudoClass::Type::Not:
         for (auto& selector : pseudo_class.not_selector) {
             if (matches(selector, element))

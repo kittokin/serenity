@@ -13,10 +13,10 @@
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/URL.h>
+#include <AK/Vector.h>
 #include <AK/WeakPtr.h>
 #include <LibCore/Forward.h>
 #include <LibJS/Forward.h>
-#include <LibWeb/Bindings/ScriptExecutionContext.h>
 #include <LibWeb/Bindings/WindowObject.h>
 #include <LibWeb/CSS/CSSStyleSheet.h>
 #include <LibWeb/CSS/StyleComputer.h>
@@ -28,6 +28,7 @@
 #include <LibWeb/HTML/DocumentReadyState.h>
 #include <LibWeb/HTML/HTMLScriptElement.h>
 #include <LibWeb/HTML/History.h>
+#include <LibWeb/HTML/Scripting/Environments.h>
 
 namespace Web::DOM {
 
@@ -40,8 +41,7 @@ enum class QuirksMode {
 class Document
     : public ParentNode
     , public NonElementParentNode<Document>
-    , public HTML::GlobalEventHandlers
-    , public Bindings::ScriptExecutionContext {
+    , public HTML::GlobalEventHandlers {
 public:
     using WrapperType = Bindings::DocumentWrapper;
 
@@ -57,7 +57,7 @@ public:
     virtual ~Document() override;
 
     String cookie(Cookie::Source = Cookie::Source::NonHttp);
-    void set_cookie(String, Cookie::Source = Cookie::Source::NonHttp);
+    void set_cookie(String const&, Cookie::Source = Cookie::Source::NonHttp);
 
     String referrer() const;
 
@@ -171,7 +171,8 @@ public:
     const String& source() const { return m_source; }
     void set_source(const String& source) { m_source = source; }
 
-    virtual JS::Realm& realm() override;
+    HTML::EnvironmentSettingsObject& relevant_settings_object();
+    JS::Realm& realm();
     JS::Interpreter& interpreter();
 
     JS::Value run_javascript(StringView source, StringView filename = "(unknown)");
@@ -242,6 +243,9 @@ public:
     void removed_last_ref();
 
     Window& window() { return *m_window; }
+
+    void write(Vector<String> const& strings);
+    void writeln(Vector<String> const& strings);
 
     Window* default_view() { return m_window; }
 

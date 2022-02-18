@@ -923,6 +923,8 @@ TEST_CASE(optimizer_atomic_groups)
         Tuple { "(a|)"sv, ""sv, true },                   // Ensure that empty alternatives are not outright removed
         Tuple { "a{2,3}|a{5,8}"sv, "abc"sv, false },      // Optimizer should not mess up the instruction stream by ignoring inter-insn dependencies, see #11247.
         Tuple { "^(a{2,3}|a{5,8})$"sv, "aaaa"sv, false }, // Optimizer should not mess up the instruction stream by ignoring inter-insn dependencies, see #11247.
+        // Optimizer should not chop off *half* of an instruction when fusing instructions.
+        Tuple { "cubic-bezier\\(\\s*(-?\\d+\\.?\\d*|-?\\.\\d+)\\s*,\\s*(-?\\d+\\.?\\d*|-?\\.\\d+)\\s*,\\s*(-?\\d+\\.?\\d*|-?\\.\\d+)\\s*,\\s*(-?\\d+\\.?\\d*|-?\\.\\d+)\\s*\\)"sv, "cubic-bezier(.05, 0, 0, 1)"sv, true },
         // ForkReplace shouldn't be applied where it would change the semantics
         Tuple { "(1+)\\1"sv, "11"sv, true },
         Tuple { "(1+)1"sv, "11"sv, true },
@@ -954,6 +956,21 @@ TEST_CASE(optimizer_char_class_lut)
     // This will go through _all_ alternatives in the character class, and then fail.
     for (size_t i = 0; i < 1'000'000; ++i)
         EXPECT_EQ(re.match("1635488940000"sv).success, false);
+}
+
+TEST_CASE(optimizer_alternation)
+{
+    Array tests {
+        // Pattern, Subject, Expected length
+        Tuple { "a|"sv, "a"sv, 1u },
+    };
+
+    for (auto& test : tests) {
+        Regex<ECMA262> re(test.get<0>());
+        auto result = re.match(test.get<1>());
+        EXPECT(result.success);
+        EXPECT_EQ(result.matches.first().view.length(), test.get<2>());
+    }
 }
 
 TEST_CASE(posix_basic_dollar_is_end_anchor)

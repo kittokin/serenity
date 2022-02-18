@@ -2,6 +2,7 @@
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, kleines Filmröllchen <filmroellchen@serenityos.org>
  * Copyright (c) 2021, David Isaksson <davidisaksson93@gmail.com>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -134,7 +135,7 @@ private:
     };
 
 public:
-    virtual ~AudioWidget() override { }
+    virtual ~AudioWidget() override = default;
 
     void set_audio_widget_size(bool show_percent)
     {
@@ -235,7 +236,7 @@ ErrorOr<int> serenity_main(Main::Arguments arguments)
     TRY(Core::System::pledge("stdio recvfd sendfd rpath wpath cpath unix"));
 
     auto app = TRY(GUI::Application::try_create(arguments));
-    Config::pledge_domains("AudioApplet");
+    Config::pledge_domain("AudioApplet");
     TRY(Core::System::unveil("/tmp/portal/audio", "rw"));
     TRY(Core::System::unveil("/res", "r"));
     TRY(Core::System::unveil(nullptr, nullptr));

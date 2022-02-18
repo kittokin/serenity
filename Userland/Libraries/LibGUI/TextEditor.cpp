@@ -10,6 +10,7 @@
 #include <AK/ScopeGuard.h>
 #include <AK/StringBuilder.h>
 #include <AK/TemporaryChange.h>
+#include <LibCore/File.h>
 #include <LibCore/Timer.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/AutocompleteProvider.h>
@@ -40,6 +41,8 @@ TextEditor::TextEditor(Type type)
 {
     REGISTER_STRING_PROPERTY("text", text, set_text);
     REGISTER_STRING_PROPERTY("placeholder", placeholder, set_placeholder);
+    REGISTER_BOOL_PROPERTY("gutter", is_gutter_visible, set_gutter_visible);
+    REGISTER_BOOL_PROPERTY("ruler", is_ruler_visible, set_ruler_visible);
     REGISTER_ENUM_PROPERTY("mode", mode, set_mode, Mode,
         { Editable, "Editable" },
         { ReadOnly, "ReadOnly" },
@@ -86,7 +89,7 @@ void TextEditor::create_actions()
     m_paste_action->set_enabled(is_editable() && Clipboard::the().fetch_mime_type().starts_with("text/"));
     if (is_multi_line()) {
         m_go_to_line_action = Action::create(
-            "Go to line...", { Mod_Ctrl, Key_L }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
+            "Go to line...", { Mod_Ctrl, Key_L }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-to.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
                 String value;
                 if (InputBox::show(window(), value, "Line:", "Go to line") == InputBox::ExecOK) {
                     auto line_target = value.to_uint();
@@ -368,12 +371,12 @@ Gfx::IntRect TextEditor::gutter_content_rect(size_t line_index) const
 
 Gfx::IntRect TextEditor::ruler_rect_in_inner_coordinates() const
 {
-    return { gutter_width(), 0, ruler_width(), height() - height_occupied_by_horizontal_scrollbar() };
+    return { gutter_width(), 0, ruler_width(), widget_inner_rect().height() };
 }
 
 Gfx::IntRect TextEditor::gutter_rect_in_inner_coordinates() const
 {
-    return { 0, 0, gutter_width(), height() - height_occupied_by_horizontal_scrollbar() };
+    return { 0, 0, gutter_width(), widget_inner_rect().height() };
 }
 
 Gfx::IntRect TextEditor::visible_text_rect_in_inner_coordinates() const
@@ -401,8 +404,8 @@ void TextEditor::paint_event(PaintEvent& event)
 
     // NOTE: This lambda and TextEditor::text_width_for_font() are used to substitute all glyphs with m_substitution_code_point if necessary.
     //       Painter::draw_text() and Gfx::Font::width() should not be called directly, but using this lambda and TextEditor::text_width_for_font().
-    auto draw_text = [&](Gfx::IntRect const& rect, auto const& raw_text, Gfx::Font const& font, Gfx::TextAlignment alignment, Gfx::TextAttributes attributes, bool substitue = true) {
-        if (m_substitution_code_point && substitue) {
+    auto draw_text = [&](Gfx::IntRect const& rect, auto const& raw_text, Gfx::Font const& font, Gfx::TextAlignment alignment, Gfx::TextAttributes attributes, bool substitute = true) {
+        if (m_substitution_code_point && substitute) {
             painter.draw_text(rect, substitution_code_point_view(raw_text.length()), font, alignment, attributes.color);
         } else {
             painter.draw_text(rect, raw_text, font, alignment, attributes.color);
@@ -416,19 +419,21 @@ void TextEditor::paint_event(PaintEvent& event)
     };
 
     if (is_displayonly() && is_focused()) {
-        widget_background_color = palette().selection();
         Gfx::IntRect display_rect {
             widget_inner_rect().x() + 1,
             widget_inner_rect().y() + 1,
             widget_inner_rect().width() - 2,
             widget_inner_rect().height() - 2
         };
-        painter.add_clip_rect(display_rect);
-        painter.add_clip_rect(event.rect());
-        painter.fill_rect(event.rect(), widget_background_color);
+        painter.fill_rect(display_rect, palette().selection());
     }
 
     painter.translate(frame_thickness(), frame_thickness());
+
+    if (!is_multi_line() && m_icon) {
+        Gfx::IntRect icon_rect { icon_padding(), 1, icon_size(), icon_size() };
+        painter.draw_scaled_bitmap(icon_rect, *m_icon, m_icon->rect());
+    }
 
     if (m_gutter_visible) {
         auto gutter_rect = gutter_rect_in_inner_coordinates();
@@ -467,19 +472,8 @@ void TextEditor::paint_event(PaintEvent& event)
         }
     }
 
-    auto text_left = 0;
-    if (m_ruler_visible)
-        text_left = ruler_rect_in_inner_coordinates().right() + 1;
-    else if (m_gutter_visible)
-        text_left = gutter_rect_in_inner_coordinates().right() + 1;
-    text_left += frame_thickness();
-
-    Gfx::IntRect text_clip_rect {
-        0,
-        frame_thickness(),
-        width() - width_occupied_by_vertical_scrollbar() - text_left,
-        height() - height_occupied_by_horizontal_scrollbar()
-    };
+    auto gutter_ruler_width = gutter_width() + ruler_width();
+    Gfx::IntRect text_clip_rect { 0, 0, widget_inner_rect().width() - gutter_ruler_width, widget_inner_rect().height() };
     text_clip_rect.translate_by(horizontal_scrollbar().value(), vertical_scrollbar().value());
     painter.add_clip_rect(text_clip_rect);
 
@@ -516,8 +510,15 @@ void TextEditor::paint_event(PaintEvent& event)
 
         size_t visual_line_index = 0;
         for_each_visual_line(line_index, [&](Gfx::IntRect const& visual_line_rect, auto& visual_line_text, size_t start_of_visual_line, [[maybe_unused]] bool is_last_visual_line) {
-            if (is_multi_line() && line_index == m_cursor.line() && is_cursor_line_highlighted())
-                painter.fill_rect(visual_line_rect, widget_background_color.darkened(0.9f));
+            if (is_focused() && is_multi_line() && line_index == m_cursor.line() && is_cursor_line_highlighted()) {
+                Gfx::IntRect visible_content_line_rect {
+                    visible_content_rect().x(),
+                    visual_line_rect.y(),
+                    widget_inner_rect().width() - gutter_ruler_width,
+                    line_height()
+                };
+                painter.fill_rect(visible_content_line_rect, widget_background_color.darkened(0.9f));
+            }
             if constexpr (TEXTEDITOR_DEBUG)
                 painter.draw_rect(visual_line_rect, Color::Cyan);
 
@@ -715,11 +716,6 @@ void TextEditor::paint_event(PaintEvent& event)
             ++visual_line_index;
             return IterationDecision::Continue;
         });
-    }
-
-    if (!is_multi_line() && m_icon) {
-        Gfx::IntRect icon_rect { icon_padding(), 1, icon_size(), icon_size() };
-        painter.draw_scaled_bitmap(icon_rect, *m_icon, m_icon->rect());
     }
 
     if (is_enabled() && is_focused() && m_cursor_state && !is_displayonly())
@@ -1907,12 +1903,22 @@ void TextEditor::rehighlight_if_needed()
 {
     if (!m_needs_rehighlight)
         return;
+    force_rehighlight();
+}
+
+void TextEditor::force_rehighlight()
+{
     if (m_highlighter)
         m_highlighter->rehighlight(palette());
     m_needs_rehighlight = false;
 }
 
 Syntax::Highlighter const* TextEditor::syntax_highlighter() const
+{
+    return m_highlighter.ptr();
+}
+
+Syntax::Highlighter* TextEditor::syntax_highlighter()
 {
     return m_highlighter.ptr();
 }

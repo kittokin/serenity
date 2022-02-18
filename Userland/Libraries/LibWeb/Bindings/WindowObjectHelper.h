@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2021-2022, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -43,6 +43,8 @@
 #include <LibWeb/Bindings/DOMParserConstructor.h>
 #include <LibWeb/Bindings/DOMParserPrototype.h>
 #include <LibWeb/Bindings/DOMRectConstructor.h>
+#include <LibWeb/Bindings/DOMRectListConstructor.h>
+#include <LibWeb/Bindings/DOMRectListPrototype.h>
 #include <LibWeb/Bindings/DOMRectPrototype.h>
 #include <LibWeb/Bindings/DOMRectReadOnlyConstructor.h>
 #include <LibWeb/Bindings/DOMRectReadOnlyPrototype.h>
@@ -56,6 +58,8 @@
 #include <LibWeb/Bindings/DocumentTypePrototype.h>
 #include <LibWeb/Bindings/ElementConstructor.h>
 #include <LibWeb/Bindings/ElementPrototype.h>
+#include <LibWeb/Bindings/ErrorEventConstructor.h>
+#include <LibWeb/Bindings/ErrorEventPrototype.h>
 #include <LibWeb/Bindings/EventConstructor.h>
 #include <LibWeb/Bindings/EventPrototype.h>
 #include <LibWeb/Bindings/EventTargetConstructor.h>
@@ -245,14 +249,26 @@
 #include <LibWeb/Bindings/RangePrototype.h>
 #include <LibWeb/Bindings/ResizeObserverConstructor.h>
 #include <LibWeb/Bindings/ResizeObserverPrototype.h>
+#include <LibWeb/Bindings/SVGCircleElementConstructor.h>
+#include <LibWeb/Bindings/SVGCircleElementPrototype.h>
 #include <LibWeb/Bindings/SVGElementConstructor.h>
 #include <LibWeb/Bindings/SVGElementPrototype.h>
+#include <LibWeb/Bindings/SVGEllipseElementConstructor.h>
+#include <LibWeb/Bindings/SVGEllipseElementPrototype.h>
 #include <LibWeb/Bindings/SVGGeometryElementConstructor.h>
 #include <LibWeb/Bindings/SVGGeometryElementPrototype.h>
 #include <LibWeb/Bindings/SVGGraphicsElementConstructor.h>
 #include <LibWeb/Bindings/SVGGraphicsElementPrototype.h>
+#include <LibWeb/Bindings/SVGLineElementConstructor.h>
+#include <LibWeb/Bindings/SVGLineElementPrototype.h>
 #include <LibWeb/Bindings/SVGPathElementConstructor.h>
 #include <LibWeb/Bindings/SVGPathElementPrototype.h>
+#include <LibWeb/Bindings/SVGPolygonElementConstructor.h>
+#include <LibWeb/Bindings/SVGPolygonElementPrototype.h>
+#include <LibWeb/Bindings/SVGPolylineElementConstructor.h>
+#include <LibWeb/Bindings/SVGPolylineElementPrototype.h>
+#include <LibWeb/Bindings/SVGRectElementConstructor.h>
+#include <LibWeb/Bindings/SVGRectElementPrototype.h>
 #include <LibWeb/Bindings/SVGSVGElementConstructor.h>
 #include <LibWeb/Bindings/SVGSVGElementPrototype.h>
 #include <LibWeb/Bindings/ScreenConstructor.h>
@@ -261,6 +277,8 @@
 #include <LibWeb/Bindings/SelectionPrototype.h>
 #include <LibWeb/Bindings/ShadowRootConstructor.h>
 #include <LibWeb/Bindings/ShadowRootPrototype.h>
+#include <LibWeb/Bindings/StorageConstructor.h>
+#include <LibWeb/Bindings/StoragePrototype.h>
 #include <LibWeb/Bindings/StyleSheetConstructor.h>
 #include <LibWeb/Bindings/StyleSheetListConstructor.h>
 #include <LibWeb/Bindings/StyleSheetListPrototype.h>
@@ -270,6 +288,8 @@
 #include <LibWeb/Bindings/SubtleCryptoConstructor.h>
 #include <LibWeb/Bindings/SubtleCryptoPrototype.h>
 #include <LibWeb/Bindings/TextConstructor.h>
+#include <LibWeb/Bindings/TextDecoderConstructor.h>
+#include <LibWeb/Bindings/TextDecoderPrototype.h>
 #include <LibWeb/Bindings/TextEncoderConstructor.h>
 #include <LibWeb/Bindings/TextEncoderPrototype.h>
 #include <LibWeb/Bindings/TextMetricsConstructor.h>
@@ -283,6 +303,8 @@
 #include <LibWeb/Bindings/URLSearchParamsPrototype.h>
 #include <LibWeb/Bindings/WebSocketConstructor.h>
 #include <LibWeb/Bindings/WebSocketPrototype.h>
+#include <LibWeb/Bindings/WorkerConstructor.h>
+#include <LibWeb/Bindings/WorkerPrototype.h>
 #include <LibWeb/Bindings/XMLHttpRequestConstructor.h>
 #include <LibWeb/Bindings/XMLHttpRequestEventTargetConstructor.h>
 #include <LibWeb/Bindings/XMLHttpRequestEventTargetPrototype.h>
@@ -322,9 +344,11 @@
     ADD_WINDOW_OBJECT_INTERFACE(DOMImplementation)         \
     ADD_WINDOW_OBJECT_INTERFACE(DOMParser)                 \
     ADD_WINDOW_OBJECT_INTERFACE(DOMRect)                   \
+    ADD_WINDOW_OBJECT_INTERFACE(DOMRectList)               \
     ADD_WINDOW_OBJECT_INTERFACE(DOMRectReadOnly)           \
     ADD_WINDOW_OBJECT_INTERFACE(DOMStringMap)              \
     ADD_WINDOW_OBJECT_INTERFACE(Element)                   \
+    ADD_WINDOW_OBJECT_INTERFACE(ErrorEvent)                \
     ADD_WINDOW_OBJECT_INTERFACE(Event)                     \
     ADD_WINDOW_OBJECT_INTERFACE(EventTarget)               \
     ADD_WINDOW_OBJECT_INTERFACE(History)                   \
@@ -421,22 +445,31 @@
     ADD_WINDOW_OBJECT_INTERFACE(Screen)                    \
     ADD_WINDOW_OBJECT_INTERFACE(Selection)                 \
     ADD_WINDOW_OBJECT_INTERFACE(ShadowRoot)                \
+    ADD_WINDOW_OBJECT_INTERFACE(Storage)                   \
     ADD_WINDOW_OBJECT_INTERFACE(StyleSheet)                \
     ADD_WINDOW_OBJECT_INTERFACE(StyleSheetList)            \
     ADD_WINDOW_OBJECT_INTERFACE(SubmitEvent)               \
     ADD_WINDOW_OBJECT_INTERFACE(SubtleCrypto)              \
     ADD_WINDOW_OBJECT_INTERFACE(SVGElement)                \
+    ADD_WINDOW_OBJECT_INTERFACE(SVGCircleElement)          \
+    ADD_WINDOW_OBJECT_INTERFACE(SVGEllipseElement)         \
     ADD_WINDOW_OBJECT_INTERFACE(SVGGeometryElement)        \
     ADD_WINDOW_OBJECT_INTERFACE(SVGGraphicsElement)        \
+    ADD_WINDOW_OBJECT_INTERFACE(SVGLineElement)            \
     ADD_WINDOW_OBJECT_INTERFACE(SVGPathElement)            \
+    ADD_WINDOW_OBJECT_INTERFACE(SVGPolygonElement)         \
+    ADD_WINDOW_OBJECT_INTERFACE(SVGPolylineElement)        \
+    ADD_WINDOW_OBJECT_INTERFACE(SVGRectElement)            \
     ADD_WINDOW_OBJECT_INTERFACE(SVGSVGElement)             \
     ADD_WINDOW_OBJECT_INTERFACE(Text)                      \
+    ADD_WINDOW_OBJECT_INTERFACE(TextDecoder)               \
     ADD_WINDOW_OBJECT_INTERFACE(TextEncoder)               \
     ADD_WINDOW_OBJECT_INTERFACE(TextMetrics)               \
     ADD_WINDOW_OBJECT_INTERFACE(UIEvent)                   \
     ADD_WINDOW_OBJECT_INTERFACE(URLSearchParams)           \
     ADD_WINDOW_OBJECT_INTERFACE(URL)                       \
     ADD_WINDOW_OBJECT_INTERFACE(WebSocket)                 \
+    ADD_WINDOW_OBJECT_INTERFACE(Worker)                    \
     ADD_WINDOW_OBJECT_INTERFACE(XMLHttpRequest)            \
     ADD_WINDOW_OBJECT_INTERFACE(XMLHttpRequestEventTarget) \
     ADD_WINDOW_OBJECT_CONSTRUCTOR_AND_PROTOTYPE(Image, ImageConstructor, HTMLImageElementPrototype)

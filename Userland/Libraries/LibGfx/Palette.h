@@ -22,7 +22,7 @@ class PaletteImpl : public RefCounted<PaletteImpl> {
     AK_MAKE_NONMOVABLE(PaletteImpl);
 
 public:
-    ~PaletteImpl();
+    ~PaletteImpl() = default;
     static NonnullRefPtr<PaletteImpl> create_with_anonymous_buffer(Core::AnonymousBuffer);
     NonnullRefPtr<PaletteImpl> clone() const;
 
@@ -60,7 +60,7 @@ class Palette {
 
 public:
     explicit Palette(const PaletteImpl&);
-    ~Palette();
+    ~Palette() = default;
 
     Color accent() const { return color(ColorRole::Accent); }
     Color window() const { return color(ColorRole::Window); }
@@ -108,7 +108,7 @@ public:
     Color rubber_band_fill() const { return color(ColorRole::RubberBandFill); }
     Color rubber_band_border() const { return color(ColorRole::RubberBandBorder); }
     Color gutter() const { return color(ColorRole::Gutter); }
-    Color gutter_border() const { return color(ColorRole::Gutter); }
+    Color gutter_border() const { return color(ColorRole::GutterBorder); }
     Color ruler() const { return color(ColorRole::Ruler); }
     Color ruler_border() const { return color(ColorRole::RulerBorder); }
     Color ruler_active_text() const { return color(ColorRole::RulerActiveText); }
@@ -131,6 +131,12 @@ public:
     Color syntax_control_keyword() const { return color(ColorRole::SyntaxControlKeyword); }
     Color syntax_preprocessor_statement() const { return color(ColorRole::SyntaxPreprocessorStatement); }
     Color syntax_preprocessor_value() const { return color(ColorRole::SyntaxPreprocessorValue); }
+    Color syntax_function() const { return color(ColorRole::SyntaxFunction); }
+    Color syntax_variable() const { return color(ColorRole::SyntaxVariable); }
+    Color syntax_custom_type() const { return color(ColorRole::SyntaxCustomType); }
+    Color syntax_namespace() const { return color(ColorRole::SyntaxNamespace); }
+    Color syntax_member() const { return color(ColorRole::SyntaxMember); }
+    Color syntax_parameter() const { return color(ColorRole::SyntaxParameter); }
 
     Gfx::TextAlignment title_alignment() const { return alignment(AlignmentRole::TitleAlignment); }
 

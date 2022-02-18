@@ -126,16 +126,16 @@ ErrorOr<NonnullRefPtr<Inode>> Process::lookup_file_descriptions_directory(const 
 ErrorOr<void> Process::procfs_get_pledge_stats(KBufferBuilder& builder) const
 {
     JsonObjectSerializer obj { builder };
-#define __ENUMERATE_PLEDGE_PROMISE(x) \
-    if (has_promised(Pledge::x)) {    \
-        if (!builder.is_empty())      \
-            builder.append(' ');      \
-        builder.append(#x);           \
+#define __ENUMERATE_PLEDGE_PROMISE(x)     \
+    if (has_promised(Pledge::x)) {        \
+        if (!builder.is_empty())          \
+            TRY(builder.try_append(' ')); \
+        TRY(builder.try_append(#x));      \
     }
     if (has_promises()) {
         StringBuilder builder;
         ENUMERATE_PLEDGE_PROMISES
-        obj.add("promises", builder.build());
+        obj.add("promises", builder.string_view());
     }
 #undef __ENUMERATE_PLEDGE_PROMISE
     obj.finish();
@@ -145,9 +145,9 @@ ErrorOr<void> Process::procfs_get_pledge_stats(KBufferBuilder& builder) const
 ErrorOr<void> Process::procfs_get_unveil_stats(KBufferBuilder& builder) const
 {
     JsonArraySerializer array { builder };
-    for (auto const& unveiled_path : unveiled_paths()) {
+    TRY(unveiled_paths().for_each_node_in_tree_order([&](auto const& unveiled_path) {
         if (!unveiled_path.was_explicitly_unveiled())
-            continue;
+            return;
         auto obj = array.add_object();
         obj.add("path", unveiled_path.path());
         StringBuilder permissions_builder;
@@ -162,7 +162,7 @@ ErrorOr<void> Process::procfs_get_unveil_stats(KBufferBuilder& builder) const
         if (unveiled_path.permissions() & UnveilAccess::Browse)
             permissions_builder.append('b');
         obj.add("permissions", permissions_builder.string_view());
-    }
+    }));
     array.finish();
     return {};
 }

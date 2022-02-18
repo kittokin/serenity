@@ -11,7 +11,6 @@
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/IteratorOperations.h>
-#include <LibJS/Runtime/TemporaryClearException.h>
 
 namespace JS {
 
@@ -141,10 +140,6 @@ static Completion iterator_close_impl(GlobalObject& global_object, Iterator cons
     // 2. Let iterator be iteratorRecord.[[Iterator]].
     auto* iterator = iterator_record.iterator;
 
-    // The callers of iterator_close() are often in an exceptional state.
-    // Temporarily clear that exception for invocation(s) to Call.
-    TemporaryClearException clear_exception(vm);
-
     // 3. Let innerResult be GetMethod(iterator, "return").
     auto inner_result = ThrowCompletionOr<Value> { js_undefined() };
     auto get_method_result = Value(iterator).get_method(global_object, vm.names.return_);
@@ -217,10 +212,10 @@ Object* create_iterator_result_object(GlobalObject& global_object, Value value, 
 }
 
 // 7.4.11 IterableToList ( items [ , method ] ), https://tc39.es/ecma262/#sec-iterabletolist
-ThrowCompletionOr<MarkedValueList> iterable_to_list(GlobalObject& global_object, Value iterable, Optional<Value> method)
+ThrowCompletionOr<MarkedVector<Value>> iterable_to_list(GlobalObject& global_object, Value iterable, Optional<Value> method)
 {
     auto& vm = global_object.vm();
-    MarkedValueList values(vm.heap());
+    MarkedVector<Value> values(vm.heap());
 
     (void)TRY(get_iterator_values(
         global_object, iterable, [&](auto value) -> Optional<Completion> {
