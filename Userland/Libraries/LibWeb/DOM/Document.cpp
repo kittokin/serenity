@@ -53,6 +53,7 @@
 #include <LibWeb/HTML/HTMLScriptElement.h>
 #include <LibWeb/HTML/HTMLTitleElement.h>
 #include <LibWeb/HTML/MessageEvent.h>
+#include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Scripting/WindowEnvironmentSettingsObject.h>
 #include <LibWeb/Layout/BlockFormattingContext.h>
@@ -148,15 +149,155 @@ void Document::removed_last_ref()
 }
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-write
-void Document::write(Vector<String> const& strings)
+ExceptionOr<void> Document::write(Vector<String> const& strings)
 {
-    dbgln("TODO: document.write({})", strings);
+    StringBuilder builder;
+    builder.join(""sv, strings);
+
+    return run_the_document_write_steps(builder.build());
 }
 
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-writeln
-void Document::writeln(Vector<String> const& strings)
+ExceptionOr<void> Document::writeln(Vector<String> const& strings)
 {
-    dbgln("TODO: document.writeln({})", strings);
+    StringBuilder builder;
+    builder.join(""sv, strings);
+    builder.append("\n"sv);
+
+    return run_the_document_write_steps(builder.build());
+}
+
+// https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#document-write-steps
+ExceptionOr<void> Document::run_the_document_write_steps(String input)
+{
+    // 1. If document is an XML document, then throw an "InvalidStateError" DOMException.
+    if (doctype() && doctype()->name() == "xml")
+        return DOM::InvalidStateError::create("write() called on XML document.");
+
+    // 2. If document's throw-on-dynamic-markup-insertion counter is greater than 0, then throw an "InvalidStateError" DOMException.
+    if (m_throw_on_dynamic_markup_insertion_counter > 0)
+        return DOM::InvalidStateError::create("throw-on-dynamic-markup-insertion-counter greater than zero.");
+
+    // 3. If document's active parser was aborted is true, then return.
+    if (m_active_parser_was_aborted)
+        return {};
+
+    // 4. If the insertion point is undefined, then:
+    if (!(m_parser && m_parser->tokenizer().is_insertion_point_defined())) {
+        // 1. If document's unload counter is greater than 0 or document's ignore-destructive-writes counter is greater than 0, then return.
+        if (m_unload_counter > 0 || m_ignore_destructive_writes_counter > 0)
+            return {};
+
+        // 2. Run the document open steps with document.
+        open();
+    }
+
+    // 5. Insert input into the input stream just before the insertion point.
+    m_parser->tokenizer().insert_input_at_insertion_point(input);
+
+    // 6. If there is no pending parsing-blocking script, have the HTML parser process input, one code point at a time, processing resulting tokens as they are emitted, and stopping when the tokenizer reaches the insertion point or when the processing of the tokenizer is aborted by the tree construction stage (this can happen if a script end tag token is emitted by the tokenizer).
+    if (!pending_parsing_blocking_script())
+        m_parser->run();
+
+    return {};
+}
+
+// https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-open
+ExceptionOr<Document*> Document::open(String const&, String const&)
+{
+    // 1. If document is an XML document, then throw an "InvalidStateError" DOMException exception.
+    if (doctype() && doctype()->name() == "xml")
+        return DOM::InvalidStateError::create("open() called on XML document.");
+
+    // 2. If document's throw-on-dynamic-markup-insertion counter is greater than 0, then throw an "InvalidStateError" DOMException.
+    if (m_throw_on_dynamic_markup_insertion_counter > 0)
+        return DOM::InvalidStateError::create("throw-on-dynamic-markup-insertion-counter greater than zero.");
+
+    // FIXME: 3. Let entryDocument be the entry global object's associated Document.
+    auto& entry_document = *this;
+
+    // 4. If document's origin is not same origin to entryDocument's origin, then throw a "SecurityError" DOMException.
+    if (origin() != entry_document.origin())
+        return DOM::SecurityError::create("Document.origin() not the same as entryDocument's.");
+
+    // 5. If document has an active parser whose script nesting level is greater than 0, then return document.
+    if (m_parser && m_parser->script_nesting_level() > 0)
+        return this;
+
+    // 6. Similarly, if document's unload counter is greater than 0, then return document.
+    if (m_unload_counter > 0)
+        return this;
+
+    // 7. If document's active parser was aborted is true, then return document.
+    if (m_active_parser_was_aborted)
+        return this;
+
+    // FIXME: 8. If document's browsing context is non-null and there is an existing attempt to navigate document's browsing context, then stop document loading given document.
+
+    // FIXME: 9. For each shadow-including inclusive descendant node of document, erase all event listeners and handlers given node.
+
+    // FIXME 10. If document is the associated Document of document's relevant global object, then erase all event listeners and handlers given document's relevant global object.
+
+    // 11. Replace all with null within document, without firing any mutation events.
+    replace_all(nullptr);
+
+    // 12. If document is fully active, then:
+    if (is_fully_active()) {
+        // 1. Let newURL be a copy of entryDocument's URL.
+        auto new_url = entry_document.url();
+        // 2. If entryDocument is not document, then set newURL's fragment to null.
+        if (&entry_document != this)
+            new_url.set_fragment("");
+
+        // FIXME: 3. Run the URL and history update steps with document and newURL.
+    }
+
+    // FIXME: 13. Set document's is initial about:blank to false.
+
+    // FIXME: 14. If document's iframe load in progress flag is set, then set document's mute iframe load flag.
+
+    // 15. Set document to no-quirks mode.
+    set_quirks_mode(QuirksMode::No);
+
+    // 16. Create a new HTML parser and associate it with document. This is a script-created parser (meaning that it can be closed by the document.open() and document.close() methods, and that the tokenizer will wait for an explicit call to document.close() before emitting an end-of-file token). The encoding confidence is irrelevant.
+    m_parser = HTML::HTMLParser::create_for_scripting(*this);
+
+    // 17. Set the insertion point to point at just before the end of the input stream (which at this point will be empty).
+    m_parser->tokenizer().update_insertion_point();
+
+    // 18. Update the current document readiness of document to "loading".
+    update_readiness(HTML::DocumentReadyState::Loading);
+
+    // 19. Return document.
+    return this;
+}
+
+// https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#closing-the-input-stream
+ExceptionOr<void> Document::close()
+{
+    // 1. If document is an XML document, then throw an "InvalidStateError" DOMException exception.
+    if (doctype() && doctype()->name() == "xml")
+        return DOM::InvalidStateError::create("close() called on XML document.");
+
+    // 2. If document's throw-on-dynamic-markup-insertion counter is greater than 0, then throw an "InvalidStateError" DOMException.
+    if (m_throw_on_dynamic_markup_insertion_counter > 0)
+        return DOM::InvalidStateError::create("throw-on-dynamic-markup-insertion-counter greater than zero.");
+
+    // 3. If there is no script-created parser associated with the document, then return.
+    if (!m_parser)
+        return {};
+
+    // FIXME: 4. Insert an explicit "EOF" character at the end of the parser's input stream.
+    m_parser->tokenizer().insert_eof();
+
+    // 5. If there is a pending parsing-blocking script, then return.
+    if (pending_parsing_blocking_script())
+        return {};
+
+    // FIXME: 6. Run the tokenizer, processing resulting tokens as they are emitted, and stopping when the tokenizer reaches the explicit "EOF" character or spins the event loop.
+    m_parser->run();
+
+    return {};
 }
 
 Origin Document::origin() const
@@ -303,7 +444,7 @@ void Document::set_title(const String& title)
 
     RefPtr<HTML::HTMLTitleElement> title_element = head_element->first_child_of_type<HTML::HTMLTitleElement>();
     if (!title_element) {
-        title_element = static_ptr_cast<HTML::HTMLTitleElement>(create_element(HTML::TagNames::title));
+        title_element = static_ptr_cast<HTML::HTMLTitleElement>(create_element(HTML::TagNames::title).release_value());
         head_element->append_child(*title_element);
     }
 
@@ -426,11 +567,16 @@ void Document::update_layout()
         m_layout_root = static_ptr_cast<Layout::InitialContainingBlock>(tree_builder.build(*this));
     }
 
-    Layout::BlockFormattingContext root_formatting_context(*m_layout_root, nullptr);
+    Layout::FormattingState formatting_state;
+    Layout::BlockFormattingContext root_formatting_context(formatting_state, *m_layout_root, nullptr);
     m_layout_root->build_stacking_context_tree();
-    m_layout_root->set_content_size(viewport_rect.size().to_type<float>());
+
+    auto& icb_state = formatting_state.get_mutable(*m_layout_root);
+    icb_state.content_width = viewport_rect.width();
+    icb_state.content_height = viewport_rect.height();
 
     root_formatting_context.run(*m_layout_root, Layout::LayoutMode::Default);
+    formatting_state.commit();
 
     browsing_context()->set_needs_display();
 
@@ -718,15 +864,18 @@ JS::Value Document::run_javascript(StringView source, StringView filename)
 
 // https://dom.spec.whatwg.org/#dom-document-createelement
 // FIXME: This only implements step 6 of the algorithm and does not take in options.
-NonnullRefPtr<Element> Document::create_element(const String& tag_name)
+DOM::ExceptionOr<NonnullRefPtr<Element>> Document::create_element(String const& tag_name)
 {
+    if (!is_valid_name(tag_name))
+        return DOM::InvalidCharacterError::create("Invalid character in tag name.");
+
     // FIXME: Let namespace be the HTML namespace, if this is an HTML document or this’s content type is "application/xhtml+xml", and null otherwise.
     return DOM::create_element(*this, tag_name, Namespace::HTML);
 }
 
 // https://dom.spec.whatwg.org/#internal-createelementns-steps
 // FIXME: This only implements step 4 of the algorithm and does not take in options.
-NonnullRefPtr<Element> Document::create_element_ns(const String& namespace_, const String& qualified_name)
+DOM::ExceptionOr<NonnullRefPtr<Element>> Document::create_element_ns(const String& namespace_, const String& qualified_name)
 {
     return DOM::create_element(*this, qualified_name, namespace_);
 }
@@ -1036,10 +1185,10 @@ void Document::set_cookie(String const& cookie_string, Cookie::Source source)
 String Document::dump_dom_tree_as_json() const
 {
     StringBuilder builder;
-    JsonObjectSerializer json(builder);
+    auto json = MUST(JsonObjectSerializer<>::try_create(builder));
     serialize_tree_as_json(json);
 
-    json.finish();
+    MUST(json.finish());
     return builder.to_string();
 }
 
@@ -1180,6 +1329,115 @@ bool Document::has_focus() const
 {
     // FIXME: Return whether we actually have focus.
     return true;
+}
+
+void Document::set_parser(Badge<HTML::HTMLParser>, HTML::HTMLParser& parser)
+{
+    m_parser = parser;
+}
+
+void Document::detach_parser(Badge<HTML::HTMLParser>)
+{
+    m_parser = nullptr;
+}
+
+// https://www.w3.org/TR/xml/#NT-NameStartChar
+static bool is_valid_name_start_character(u32 code_point)
+{
+    return code_point == ':'
+        || (code_point >= 'A' && code_point <= 'Z')
+        || code_point == '_'
+        || (code_point >= 'a' && code_point <= 'z')
+        || (code_point >= 0xc0 && code_point <= 0xd6)
+        || (code_point >= 0xd8 && code_point <= 0xf6)
+        || (code_point >= 0xf8 && code_point <= 0x2ff)
+        || (code_point >= 0x370 && code_point <= 0x37d)
+        || (code_point >= 0x37f && code_point <= 0x1fff)
+        || (code_point >= 0x200c && code_point <= 0x200d)
+        || (code_point >= 0x2070 && code_point <= 0x218f)
+        || (code_point >= 0x2c00 && code_point <= 0x2fef)
+        || (code_point >= 0x3001 && code_point <= 0xD7ff)
+        || (code_point >= 0xf900 && code_point <= 0xfdcf)
+        || (code_point >= 0xfdf0 && code_point <= 0xfffd)
+        || (code_point >= 0x10000 && code_point <= 0xeffff);
+}
+
+// https://www.w3.org/TR/xml/#NT-NameChar
+static inline bool is_valid_name_character(u32 code_point)
+{
+    return is_valid_name_start_character(code_point)
+        || code_point == '-'
+        || code_point == '.'
+        || (code_point >= '0' && code_point <= '9')
+        || code_point == 0xb7
+        || (code_point >= 0x300 && code_point <= 0x36f)
+        || (code_point >= 0x203f && code_point <= 0x2040);
+}
+
+bool Document::is_valid_name(String const& name)
+{
+    if (name.is_empty())
+        return false;
+
+    if (!is_valid_name_start_character(name[0]))
+        return false;
+
+    for (size_t i = 1; i < name.length(); ++i) {
+        if (!is_valid_name_character(name[i]))
+            return false;
+    }
+
+    return true;
+}
+
+// https://dom.spec.whatwg.org/#validate
+ExceptionOr<Document::PrefixAndTagName> Document::validate_qualified_name(String const& qualified_name)
+{
+    if (qualified_name.is_empty())
+        return InvalidCharacterError::create("Empty string is not a valid qualified name.");
+
+    Utf8View utf8view { qualified_name };
+    if (!utf8view.validate())
+        return InvalidCharacterError::create("Invalid qualified name.");
+
+    Optional<size_t> colon_offset;
+
+    bool in_name = false;
+
+    for (auto it = utf8view.begin(); it != utf8view.end(); ++it) {
+        auto code_point = *it;
+        if (code_point == ':') {
+            if (colon_offset.has_value())
+                return InvalidCharacterError::create("More than one colon (:) in qualified name.");
+            colon_offset = utf8view.byte_offset_of(it);
+            continue;
+        }
+        if (in_name) {
+            if (!is_valid_name_start_character(code_point))
+                return InvalidCharacterError::create("Invalid start of qualified name.");
+            in_name = false;
+            continue;
+        }
+        if (!is_valid_name_character(code_point))
+            return InvalidCharacterError::create("Invalid character in qualified name.");
+    }
+
+    if (!colon_offset.has_value())
+        return Document::PrefixAndTagName {
+            .prefix = {},
+            .tag_name = qualified_name,
+        };
+
+    if (*colon_offset == 0)
+        return InvalidCharacterError::create("Qualified name can't start with colon (:).");
+
+    if (*colon_offset >= (qualified_name.length() - 1))
+        return InvalidCharacterError::create("Qualified name can't end with colon (:).");
+
+    return Document::PrefixAndTagName {
+        .prefix = qualified_name.substring_view(0, *colon_offset),
+        .tag_name = qualified_name.substring_view(*colon_offset + 1),
+    };
 }
 
 }

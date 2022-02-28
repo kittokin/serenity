@@ -16,11 +16,11 @@
 #include <LibWeb/DOM/NamedNodeMap.h>
 #include <LibWeb/DOM/NonDocumentTypeChildNode.h>
 #include <LibWeb/DOM/ParentNode.h>
+#include <LibWeb/DOM/QualifiedName.h>
 #include <LibWeb/HTML/AttributeNames.h>
 #include <LibWeb/HTML/EventLoop/Task.h>
 #include <LibWeb/HTML/TagNames.h>
 #include <LibWeb/Layout/Node.h>
-#include <LibWeb/QualifiedName.h>
 
 namespace Web::DOM {
 
@@ -32,7 +32,7 @@ class Element
 public:
     using WrapperType = Bindings::ElementWrapper;
 
-    Element(Document&, QualifiedName);
+    Element(Document&, DOM::QualifiedName);
     virtual ~Element() override;
 
     const String& qualified_name() const { return m_qualified_name.as_string(); }
@@ -133,6 +133,8 @@ public:
 
     virtual void did_receive_focus() { }
     virtual void did_lose_focus() { }
+
+    static RefPtr<Layout::Node> create_layout_node_for_display_type(DOM::Document&, CSS::Display const&, NonnullRefPtr<CSS::StyleProperties>, Element*);
 
 protected:
     virtual void children_changed() override;

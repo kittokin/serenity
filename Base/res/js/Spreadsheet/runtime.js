@@ -57,6 +57,52 @@ class Position {
         );
     }
 
+    range_up() {
+        if (this.row === 0) throw new Error(`No cells above this cell`);
+        const up_one = this.up(1);
+        let current_point = up_one;
+        for (
+            let point = current_point.up(1);
+            current_point.row !== 0 && point.value() !== "";
+            point = current_point.up(1)
+        )
+            current_point = point;
+        return R(current_point.name + ":" + up_one.name);
+    }
+
+    range_down() {
+        let down_one = this.down(1);
+        let current_point = down_one;
+        for (let point = current_point.down(1); point.value() !== ""; point = current_point.down(1))
+            current_point = point;
+        return R(current_point.name + ":" + down_one.name);
+    }
+
+    range_left() {
+        if (this.column === "A") throw new Error(`No cells to the left of this cell`);
+        const left_one = this.left(1);
+        let current_point = left_one;
+        for (
+            let point = current_point.left(1);
+            current_point.column !== "A" && point.value() !== "";
+            point = current_point.left(1)
+        )
+            current_point = point;
+        return R(current_point.name + ":" + left_one.name);
+    }
+
+    range_right() {
+        let right_one = this.right(1);
+        let current_point = right_one;
+        for (
+            let point = current_point.right(1);
+            point.value() !== "";
+            point = current_point.right(1)
+        )
+            current_point = point;
+        return R(current_point.name + ":" + right_one.name);
+    }
+
     with_column(value) {
         return new Position(value, this.row, this.sheet);
     }
@@ -85,6 +131,10 @@ class Position {
 class Ranges {
     constructor(ranges) {
         this.ranges = ranges;
+    }
+
+    first() {
+        return this.ranges[0].first();
     }
 
     static from(...ranges) {
@@ -116,6 +166,9 @@ class Ranges {
 
 class Range {
     constructor(startingColumnName, endingColumnName, startingRow, endingRow, columnStep, rowStep) {
+        // using == to account for '0' since js will parse `+'0'` to 0
+        if (columnStep == 0 || rowStep == 0)
+            throw new Error("rowStep or columnStep is 0, this will cause an infinite loop");
         this.startingColumnName = startingColumnName;
         this.endingColumnName = endingColumnName;
         this.startingRow = startingRow;
@@ -127,6 +180,10 @@ class Range {
             throw new Error("A Range with a defined end row must also have a defined start row");
 
         this.normalize();
+    }
+
+    first() {
+        return new Position(this.startingColumnName, this.startingRow);
     }
 
     forEach(callback) {
@@ -149,9 +206,9 @@ class Range {
             });
         }
 
-        for (const range of ranges) {
+        outer: for (const range of ranges) {
             for (let row = range.rowStart; row <= range.rowEnd; row += this.rowStep) {
-                callback(range.column + row);
+                if (callback(range.column + row) === Break) break outer;
             }
         }
     }
@@ -183,47 +240,36 @@ class Range {
     }
 
     toString() {
-        return `Range(${this.startingColumnName}, ${this.endingColumnName}, ${this.startingRow}, ${this.endingRow}, ${this.columnStep}, ${this.rowStep})`;
+        const endingRow = this.endingRow ?? "";
+        return `R\`${this.startingColumnName}${this.startingRow}:${this.endingColumnName}${endingRow}:${this.columnStep}:${this.rowStep}\``;
     }
-}
-
-function range(start, end, columnStep, rowStep) {
-    columnStep = integer(columnStep ?? 1);
-    rowStep = integer(rowStep ?? 1);
-    if (!(start instanceof Position)) {
-        start = thisSheet.parse_cell_name(start) ?? { column: undefined, row: undefined };
-    }
-
-    let didAssignToEnd = false;
-    if (end !== undefined && !(end instanceof Position)) {
-        didAssignToEnd = true;
-        if (/^[a-zA-Z_]+$/.test(end)) end = { column: end, row: undefined };
-        else end = thisSheet.parse_cell_name(end);
-    } else if (end === undefined) {
-        didAssignToEnd = true;
-        end = start;
-    }
-
-    if (!didAssignToEnd) throw new Error(`Invalid value for range 'end': ${end}`);
-
-    return new Range(start.column, end.column, start.row, end.row, columnStep, rowStep);
 }
 
 function R(fmt, ...args) {
     if (args.length !== 0) throw new TypeError("R`` format must be a literal");
-
-    fmt = fmt[0];
-
-    // CellName (: (CellName|ColumnName) (: Integer (: Integer)?)?)?
-    // ColumnName (: ColumnName (: Integer (: Integer)?)?)?
-    let specs = fmt.split(":");
-
-    if (specs.length > 4 || specs.length < 1) throw new SyntaxError(`Invalid range ${fmt}`);
-
-    if (/^[a-zA-Z_]+\d+$/.test(specs[0])) return range(...specs);
-
-    // Otherwise, it has to be a column name.
-    return new Range(specs[0], specs[1], undefined, undefined, specs[2], specs[3]);
+    // done because:
+    // const myFunc = xyz => JSON.stringify(xyz)
+    // myFunc("ABC") => ""ABC""
+    // myFunc`ABC` => "["ABC"]"
+    if (Array.isArray(fmt)) fmt = fmt[0];
+    const parts = fmt.split(":");
+    if (parts.length !== 2 && parts.length !== 4)
+        throw new Error("Invalid Format. Expected Format: R`A0:A1` or R`A0:A2:1:2`");
+    // ColRow:Col(Row)?(:ColStep:RowStep)?
+    const start = thisSheet.parse_cell_name(parts[0]);
+    let end = parts[1];
+    if (/^[a-zA-Z_]+$/.test(end)) end = { column: end, row: undefined };
+    else end = thisSheet.parse_cell_name(parts[1]);
+    parts[2] ??= 1;
+    parts[3] ??= 1;
+    return new Range(
+        start.column,
+        end.column,
+        start.row,
+        end.row,
+        integer(parts[2]),
+        integer(parts[3])
+    );
 }
 
 function select(criteria, t, f) {
@@ -311,6 +357,36 @@ function averageIf(condition, cells) {
         cells
     );
     return sumAndCount[0] / sumAndCount[1];
+}
+
+function maxIf(condition, cells) {
+    return Math.max(...numericResolve(cells).filter(condition));
+}
+
+function max(cells) {
+    return maxIf(() => true, cells);
+}
+
+function minIf(condition, cells) {
+    return Math.min(...numericResolve(cells).filter(condition));
+}
+
+function min(cells) {
+    return minIf(() => true, cells);
+}
+
+function sumProductIf(condition, rangeOne, rangeTwo) {
+    const rangeOneNums = numericResolve(rangeOne);
+    const rangeTwoNums = numericResolve(rangeTwo);
+    return rangeOneNums.reduce((accumulator, curr, i) => {
+        const prod = curr * rangeTwoNums[i];
+        if (!condition(curr, rangeTwoNums[i], prod)) return accumulator;
+        return accumulator + prod;
+    }, 0);
+}
+
+function sumProduct(rangeOne, rangeTwo) {
+    return sumProductIf(() => true, rangeOne, rangeTwo);
 }
 
 function median(cells) {
@@ -475,42 +551,22 @@ function reflookup(req_lookup_value, lookup_inputs, lookup_outputs, if_missing, 
 }
 
 // Cheat the system and add documentation
-range.__documentation = JSON.stringify({
-    name: "range",
-    argc: 2,
-    argnames: ["start", "end", "column step", "row step"],
-    doc:
-        "Generates a list of cell names in a rectangle defined by two " +
-        "_top left_ and _bottom right_ cells `start` and `end`, spaced" +
-        " `column step` columns, and `row step` rows apart. Short form: [`R`](spreadsheet://doc/R)",
-    examples: {
-        'range("A1", "C4")': "Generate a range A1:C4",
-        'range("A1", "C4", 2)': "Generate a range A1:C4, skipping every other column",
-        'range("AA1", "AC4", 2)': "Generate a range AA1:AC4, skipping every other column",
-    },
-});
-
 R.__documentation = JSON.stringify({
     name: "R",
     argc: 1,
     argnames: ["range specifier"],
     doc:
-        "Generates a Range object, denoted by the" +
-        "_range specifier_, which must conform to the following syntax.\n\n" +
-        "```\n" +
-        "RangeSpecifier : RangeBounds RangeStep?\n" +
-        "RangeBounds :\n" +
-        "              CellName (':' CellName)?\n" +
-        "            | ColumnName (':' ColumnName)?\n" +
-        "RangeStep : Integer (':' Integer)?\n" +
-        "```\n",
+        "Generates a Range object, from the given" +
+        "range specifier, which must conform to the syntax shown below",
     examples: {
-        "R`A1:C4`":
-            "Generate a Range representing all cells in a rectangle with the top-left cell A1, and the bottom-right cell C4",
         "R`A`": "Generate a Range representing all the cells in the column A",
         "R`A:C`": "Generate a Range representing all the cells in the columns A through C",
         "R`A:C:2:2`":
             "Generate a Range representing every other cells in every other column in A through C",
+        "R`A1:C4`":
+            "Generate a Range representing all cells in a rectangle with the top-left cell A1, and the bottom-right cell C4",
+        "R`A0:B10:1:2`":
+            "Generate a Range representing all cells in a rectangle with the top-left cell A1, and the bottom-right cell C4, with every column, and skipping every other row",
     },
 });
 
@@ -601,7 +657,7 @@ reduce.__documentation = JSON.stringify({
         "Please keep in mind that this function respects the cell type, and can yield non-numeric " +
         "values to the `current value`.",
     examples: {
-        'reduce((acc, x) => acc * x, 1, range("A0", "A5"))':
+        "reduce((acc, x) => acc * x, 1, R`A0:A5`)":
             "Calculate the product of all values in the range A0:A5",
     },
 });
@@ -616,7 +672,7 @@ numericReduce.__documentation = JSON.stringify({
         "accumulator, then the current value, and returning the new accumulator value\n\nThis function, " +
         "unlike [`reduce`](spreadsheet://doc/reduce), casts the values to a number before passing them to the `reduction function`.",
     examples: {
-        'numericReduce((acc, x) => acc * x, 1, range("A0", "A5"))':
+        "numericReduce((acc, x) => acc * x, 1, R`A0:A5`)":
             "Calculate the numeric product of all values in the range A0:A5",
     },
 });
@@ -627,7 +683,7 @@ sum.__documentation = JSON.stringify({
     argnames: ["cell names"],
     doc: "Calculates the sum of the values in `cells`",
     examples: {
-        'sum(range("A0", "C3"))':
+        "sum(R`A0:C3`)":
             "Calculate the sum of the values in A0:C3, [Click to view](spreadsheet://example/variance#simple)",
     },
 });
@@ -638,7 +694,7 @@ sumIf.__documentation = JSON.stringify({
     argnames: ["condition", "cell names"],
     doc: "Calculates the sum of cells the value of which evaluates to true when passed to `condition`",
     examples: {
-        'sumIf(x => x instanceof Number, range("A1", "C4"))':
+        "sumIf(x => x instanceof Number, R`A1:C4`)":
             "Calculates the sum of all numbers within A1:C4",
     },
 });
@@ -649,7 +705,7 @@ count.__documentation = JSON.stringify({
     argnames: ["cell names"],
     doc: "Counts the number of cells in the given range",
     examples: {
-        'count(range("A0", "C3"))':
+        "count(R`A0:C3`)":
             "Count the number of cells in A0:C3, [Click to view](spreadsheet://example/variance#simple)",
     },
 });
@@ -660,7 +716,7 @@ countIf.__documentation = JSON.stringify({
     argnames: ["condition", "cell names"],
     doc: "Counts cells the value of which evaluates to true when passed to `condition`",
     examples: {
-        'countIf(x => x instanceof Number, range("A1", "C3"))':
+        "countIf(x => x instanceof Number, R`A1:C3`)":
             "Count the number of cells which have numbers within A1:C3",
     },
 });
@@ -671,7 +727,7 @@ average.__documentation = JSON.stringify({
     argnames: ["cell names"],
     doc: "Calculates the average of the values in `cells`",
     examples: {
-        'average(range("A0", "C3"))':
+        "average(R`A0:C3`)":
             "Calculate the average of the values in A0:C3, [Click to view](spreadsheet://example/variance#simple)",
     },
 });
@@ -682,8 +738,116 @@ averageIf.__documentation = JSON.stringify({
     argnames: ["condition", "cell names"],
     doc: "Calculates the average of cells the value of which evaluates to true when passed to `condition`",
     examples: {
-        'averageIf(x => x > 4, range("A1", "C4"))':
+        "averageIf(x => x > 4, R`A1:C4`)":
             "Calculate the sum of all numbers larger then 4 within A1:C4",
+    },
+});
+
+max.__documentation = JSON.stringify({
+    name: "max",
+    argc: 1,
+    argnames: ["the range"],
+    doc: "Gets the largest cell's value in the range",
+    examples: {
+        "max(R`A1:C4`)": "Finds the largest number within A1:C4",
+    },
+});
+
+maxIf.__documentation = JSON.stringify({
+    name: "max",
+    argc: 1,
+    argnames: ["condition", "the range"],
+    doc: "Gets the largest cell's value in the range which evaluates to true when passed to `condition`",
+    examples: {
+        "maxIf(x => x > 4, R`A1:C4`)":
+            "Finds the largest number within A1:C4 that is greater than 4",
+    },
+});
+
+min.__documentation = JSON.stringify({
+    name: "min",
+    argc: 1,
+    argnames: ["the range"],
+    doc: "Gets the smallest cell's value in the range",
+    examples: {
+        "min(R`A1:C4`)": "Finds the smallest number within A1:C4",
+    },
+});
+
+minIf.__documentation = JSON.stringify({
+    name: "min",
+    argc: 1,
+    argnames: ["condition", "the range"],
+    doc: "Gets the smallest cell's value in the range which evaluates to true when passed to `condition`",
+    examples: {
+        "minIf(x => x > 4, R`A1:C4`)":
+            "Finds the smallest number within A1:C4 that is greater than 4",
+    },
+});
+
+sumProduct.__documentation = JSON.stringify({
+    name: "sumProduct",
+    argc: 2,
+    argnames: ["range one", "range two"],
+    doc: "For each cell in the first range, multiply it by the cell at the same index in range two, then add the result to a sum",
+    example_data: {
+        "sumProductIf((a, b, prod) => a > 2, R`A0:A`, R`B0:B`)":
+            "Calculate the product of each cell in a times it's equivalent cell in b, then adds the products, [Click to view](spreadsheet://example/sumProductIf#sum_product)",
+    },
+});
+
+sumProductIf.__documentation = JSON.stringify({
+    name: "sumProductIf",
+    argc: 3,
+    argnames: ["condition", "range one", "range two"],
+    doc: "For each cell in the first range, multiply it by the cell at the same index in range two, then add the result to a sum, if the condition evaluated to true",
+    examples: {
+        "sumProductIf((a, b, prod) => a > 2, R`A0:A`, R`B0:B`)":
+            "Calculate the product of each cell in a times it's equivalent cell in b, then adds the products if a's value was greater than 2, [Click to view](spreadsheet://example/sumProductIf#sum_product)",
+    },
+    example_data: {
+        sum_product: {
+            name: "Sum Product",
+            columns: ["A", "B", "C"],
+            rows: 3,
+            cells: {
+                C0: {
+                    kind: "Formula",
+                    source: "sumProduct(R`A0:A`, R`B0:B`)",
+                    value: "300.0",
+                    type: "Numeric",
+                    type_metadata: {
+                        format: "sumProduct: %f",
+                    },
+                },
+                C1: {
+                    kind: "Formula",
+                    source: "sumProductIf((a, b, prod) => a > 2, R`A0:A`, R`B0:B`)",
+                    value: "250.0",
+                    type: "Numeric",
+                    type_metadata: {
+                        format: "sumProductIf: %f",
+                    },
+                },
+                ...Array.apply(null, { length: 4 })
+                    .map((_, i) => i)
+                    .reduce((acc, i) => {
+                        return {
+                            ...acc,
+                            [`A${i}`]: {
+                                kind: "LiteralString",
+                                value: `${i + 1}`,
+                                type: "Numeric",
+                            },
+                            [`B${i}`]: {
+                                kind: "LiteralString",
+                                value: `${(i + 1) * 10}`,
+                                type: "Numeric",
+                            },
+                        };
+                    }, {}),
+            },
+        },
     },
 });
 
@@ -693,7 +857,7 @@ median.__documentation = JSON.stringify({
     argnames: ["cell names"],
     doc: "Calculates the median of the numeric values in the given range of cells",
     examples: {
-        'median(range("A0", "C3"))':
+        "median(R`A0:C3`)":
             "Calculate the median of the values in A0:C3, [Click to view](spreadsheet://example/variance#simple)",
     },
 });
@@ -704,7 +868,7 @@ variance.__documentation = JSON.stringify({
     argnames: ["cell names"],
     doc: "Calculates the variance of the numeric values in the given range of cells",
     examples: {
-        'variance(range("A0", "C3"))':
+        "variance(R`A0:C3`)":
             "Calculate the variance of the values in A0:C3, [Click to view](spreadsheet://example/variance#simple)",
     },
     example_data: {
@@ -809,7 +973,7 @@ mode.__documentation = JSON.stringify({
     argnames: ["cell names"],
     doc: "Calculates the mode of the numeric values in the given range of cells, i.e. the value that appears most often",
     examples: {
-        'mode(range("A2", "A14"))':
+        "mode(R`A2:A14`)":
             "Calculate the mode of the values in A2:A14, [Click to view](spreadsheet://example/variance#simple)",
     },
 });
@@ -820,7 +984,7 @@ stddev.__documentation = JSON.stringify({
     argnames: ["cell names"],
     doc: "Calculates the standard deviation of the numeric values in the given range of cells",
     examples: {
-        'stddev(range("A0", "C3"))':
+        "stddev(R`A0:C3`)":
             "Calculate the standard deviation of the values in A0:C3, [Click to view](spreadsheet://example/variance#simple)",
     },
 });
@@ -852,10 +1016,15 @@ here.__documentation = JSON.stringify({
     doc:
         "Returns an object representing the current cell's position, see `Position` below.\n\n" +
         "## Position\na `Position` is an object representing a given cell position in a given sheet.\n" +
-        "### Methods:\n- `up(count = 1)`: goes up count cells, or returns the top position if at the top\n" +
+        "### Methods:\n" +
+        "- `up(count = 1)`: goes up count cells, or returns the top position if at the top\n" +
         "- `down(count = 1)`: goes down count cells\n" +
         "- `left(count = 1)`: Goes left count cells, or returns the leftmost position if the edge\n" +
         "- `right(count = 1)`: Goes right count cells.\n" +
+        "- `range_up()`: make a range from the cell above this cell, upward, until there is a cell with no number in it.\n" +
+        "- `range_down()`: make a range from the cell below this cell, downward, until there is a cell with no number in it.\n" +
+        "- `range_left()`: make a range from the cell to the left of this cell, going left, until there is a cell with no number in it.\n" +
+        "- `range_right()`: make a range from the cell to the right of this cell, going right, until there is a cell with no number in it.\n" +
         "- `with_row(row)`: Returns a Position with its column being this object's, and its row being the provided the value.\n" +
         "- `with_column(column)`: Similar to `with_row()`, but changes the column instead.\n" +
         "- `in_sheet(the_sheet)`: Returns a Position with the same column and row as this one, but with its sheet being `the_sheet`.\n" +

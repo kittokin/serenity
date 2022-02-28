@@ -19,6 +19,9 @@ class SubtleCrypto;
 }
 
 namespace Web::CSS {
+class Angle;
+class AnglePercentage;
+class AngleStyleValue;
 class BackgroundRepeatStyleValue;
 class BackgroundSizeStyleValue;
 class BackgroundStyleValue;
@@ -27,6 +30,7 @@ class BorderStyleValue;
 class BoxShadowStyleValue;
 class CalculatedStyleValue;
 class ColorStyleValue;
+class ContentStyleValue;
 class CSSImportRule;
 class CSSMediaRule;
 class CSSRule;
@@ -40,6 +44,9 @@ class ElementInlineCSSStyleDeclaration;
 class FlexFlowStyleValue;
 class FlexStyleValue;
 class FontStyleValue;
+class Frequency;
+class FrequencyPercentage;
+class FrequencyStyleValue;
 class IdentifierStyleValue;
 class ImageStyleValue;
 class InheritStyleValue;
@@ -58,6 +65,8 @@ class Percentage;
 class PercentageStyleValue;
 class PositionStyleValue;
 class PropertyOwningCSSStyleDeclaration;
+class Resolution;
+class ResolutionStyleValue;
 class Screen;
 class Selector;
 class StringStyleValue;
@@ -68,12 +77,16 @@ class StyleValue;
 class StyleValueList;
 class Supports;
 class TextDecorationStyleValue;
+class Time;
+class TimePercentage;
+class TimeStyleValue;
 class TransformationStyleValue;
 class UnresolvedStyleValue;
 class UnsetStyleValue;
 }
 
 namespace Web::DOM {
+class AbstractRange;
 class AbortController;
 class AbortSignal;
 class Attribute;
@@ -104,10 +117,13 @@ class ProcessingInstruction;
 class Range;
 class ShadowRoot;
 class StaticNodeList;
+class StaticRange;
 class Text;
 class Timer;
 class Window;
 enum class QuirksMode;
+struct EventListenerOptions;
+struct AddEventListenerOptions;
 
 template<typename ValueType>
 class ExceptionOr;
@@ -219,7 +235,6 @@ class WorkerDebugConsoleClient;
 class Storage;
 class SubmitEvent;
 class TextMetrics;
-class WebSocket;
 class WindowEnvironmentSettingsObject;
 class Worker;
 class WorkerEnvironmentSettingsObject;
@@ -270,6 +285,10 @@ namespace Web::Selection {
 class Selection;
 }
 
+namespace Web::WebSockets {
+class WebSocket;
+}
+
 namespace Web::Layout {
 enum class LayoutMode;
 enum class PaintPhase;
@@ -286,6 +305,8 @@ class Label;
 class LabelableNode;
 class LineBox;
 class LineBoxFragment;
+class ListItemBox;
+class ListItemMarkerBox;
 class Node;
 class NodeWithStyle;
 class NodeWithStyleAndBoxModelMetrics;
@@ -328,6 +349,7 @@ class URLSearchParamsIterator;
 }
 
 namespace Web::Bindings {
+class AbstractRangeWrapper;
 class AbortControllerWrapper;
 class AbortSignalWrapper;
 class AttributeWrapper;
@@ -460,6 +482,7 @@ class RangeWrapper;
 class ResizeObserverWrapper;
 class ScreenWrapper;
 class SelectionWrapper;
+class StaticRangeWrapper;
 class StorageWrapper;
 class StyleSheetListWrapper;
 class StyleSheetWrapper;
@@ -501,5 +524,6 @@ class XMLHttpRequestConstructor;
 class XMLHttpRequestEventTargetWrapper;
 class XMLHttpRequestPrototype;
 class XMLHttpRequestWrapper;
+enum class DOMParserSupportedType;
 enum class XMLHttpRequestResponseType;
 }

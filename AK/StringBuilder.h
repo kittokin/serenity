@@ -35,6 +35,7 @@ public:
         return vformat(*this, fmtstr.view(), variadic_format_params);
     }
     ErrorOr<void> try_append(char const*, size_t);
+    ErrorOr<void> try_append_escaped_for_json(StringView);
 
     void append(StringView);
 #ifndef KERNEL
@@ -70,7 +71,7 @@ public:
     void trim(size_t count) { m_buffer.resize(m_buffer.size() - count); }
 
     template<class SeparatorType, class CollectionType>
-    void join(SeparatorType const& separator, CollectionType const& collection)
+    void join(SeparatorType const& separator, CollectionType const& collection, StringView fmtstr = "{}"sv)
     {
         bool first = true;
         for (auto& item : collection) {
@@ -78,7 +79,7 @@ public:
                 first = false;
             else
                 append(separator);
-            appendff("{}", item);
+            appendff(fmtstr, item);
         }
     }
 

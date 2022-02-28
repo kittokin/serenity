@@ -17,8 +17,8 @@
 
 namespace Web::Layout {
 
-InlineNode::InlineNode(DOM::Document& document, DOM::Element& element, NonnullRefPtr<CSS::StyleProperties> style)
-    : Layout::NodeWithStyleAndBoxModelMetrics(document, &element, move(style))
+InlineNode::InlineNode(DOM::Document& document, DOM::Element* element, NonnullRefPtr<CSS::StyleProperties> style)
+    : Layout::NodeWithStyleAndBoxModelMetrics(document, element, move(style))
 {
     set_inline(true);
 }
@@ -61,10 +61,10 @@ void InlineNode::paint(PaintContext& context, PaintPhase phase)
                 for (auto const& layer : computed_box_shadow) {
                     resolved_box_shadow_data.empend(
                         layer.color,
-                        static_cast<int>(layer.offset_x.resolved_or_zero(*this).to_px(*this)),
-                        static_cast<int>(layer.offset_y.resolved_or_zero(*this).to_px(*this)),
-                        static_cast<int>(layer.blur_radius.resolved_or_zero(*this).to_px(*this)),
-                        static_cast<int>(layer.spread_distance.resolved_or_zero(*this).to_px(*this)),
+                        static_cast<int>(layer.offset_x.to_px(*this)),
+                        static_cast<int>(layer.offset_y.to_px(*this)),
+                        static_cast<int>(layer.blur_radius.to_px(*this)),
+                        static_cast<int>(layer.spread_distance.to_px(*this)),
                         layer.placement == CSS::BoxShadowPlacement::Outer ? Painting::BoxShadowPlacement::Outer : Painting::BoxShadowPlacement::Inner);
                 }
                 Painting::paint_box_shadow(context, enclosing_int_rect(absolute_fragment_rect), resolved_box_shadow_data);
@@ -112,7 +112,9 @@ void InlineNode::paint(PaintContext& context, PaintPhase phase)
         });
     }
 
-    if (phase == PaintPhase::Foreground && document().inspected_node() == dom_node()) {
+    // FIXME: We check for a non-null dom_node(), since pseudo-elements have a null one and were getting
+    //        highlighted incorrectly. A better solution will be needed if we want to inspect them too.
+    if (phase == PaintPhase::Overlay && dom_node() && document().inspected_node() == dom_node()) {
         // FIXME: This paints a double-thick border between adjacent fragments, where ideally there
         //        would be none. Once we implement non-rectangular outlines for the `outline` CSS
         //        property, we can use that here instead.

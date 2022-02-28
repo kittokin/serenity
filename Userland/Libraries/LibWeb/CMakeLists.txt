@@ -1,4 +1,5 @@
 set(SOURCES
+    Bindings/AudioConstructor.cpp
     Bindings/CSSNamespace.cpp
     Bindings/CSSRuleWrapperFactory.cpp
     Bindings/CSSStyleDeclarationWrapperCustom.cpp
@@ -15,7 +16,7 @@ set(SOURCES
     Bindings/Wrappable.cpp
     Crypto/Crypto.cpp
     Crypto/SubtleCrypto.cpp
-    CSS/Serialize.cpp
+    CSS/Angle.cpp
     CSS/CSSConditionRule.cpp
     CSS/CSSGroupingRule.cpp
     CSS/CSSImportRule.cpp
@@ -26,9 +27,9 @@ set(SOURCES
     CSS/CSSStyleRule.cpp
     CSS/CSSStyleSheet.cpp
     CSS/CSSSupportsRule.cpp
-    CSS/ResolvedCSSStyleDeclaration.cpp
     CSS/DefaultStyleSheetSource.cpp
     CSS/Display.cpp
+    CSS/Frequency.cpp
     CSS/Length.cpp
     CSS/MediaList.cpp
     CSS/MediaQuery.cpp
@@ -42,9 +43,12 @@ set(SOURCES
     CSS/PropertyID.cpp
     CSS/PropertyID.h
     CSS/QuirksModeStyleSheetSource.cpp
+    CSS/Resolution.cpp
+    CSS/ResolvedCSSStyleDeclaration.cpp
     CSS/Screen.cpp
     CSS/Selector.cpp
     CSS/SelectorEngine.cpp
+    CSS/Serialize.cpp
     CSS/StyleComputer.cpp
     CSS/StyleProperties.cpp
     CSS/StyleSheet.cpp
@@ -52,6 +56,7 @@ set(SOURCES
     CSS/StyleValue.cpp
     CSS/Supports.cpp
     CSS/SyntaxHighlighter/SyntaxHighlighter.cpp
+    CSS/Time.cpp
     CSS/ValueID.cpp
     CSS/ValueID.h
     Cookie/ParsedCookie.cpp
@@ -84,9 +89,11 @@ set(SOURCES
     DOM/ParentNode.cpp
     DOM/Position.cpp
     DOM/ProcessingInstruction.cpp
+    DOM/QualifiedName.cpp
     DOM/Range.cpp
     DOM/ShadowRoot.cpp
     DOM/StaticNodeList.cpp
+    DOM/StaticRange.cpp
     DOM/Text.cpp
     DOM/Text.idl
     DOM/Timer.cpp
@@ -205,7 +212,6 @@ set(SOURCES
     HTML/SyntaxHighlighter/SyntaxHighlighter.cpp
     HTML/TagNames.cpp
     HTML/TextMetrics.cpp
-    HTML/WebSocket.cpp
     HTML/Worker.cpp
     HTML/WorkerDebugConsoleClient.cpp
     HTML/WorkerGlobalScope.cpp
@@ -224,6 +230,7 @@ set(SOURCES
     Layout/CheckBox.cpp
     Layout/FlexFormattingContext.cpp
     Layout/FormattingContext.cpp
+    Layout/FormattingState.cpp
     Layout/FrameBox.cpp
     Layout/ImageBox.cpp
     Layout/InitialContainingBlock.cpp
@@ -310,6 +317,7 @@ set(SOURCES
     WebAssembly/WebAssemblyTableObject.cpp
     WebAssembly/WebAssemblyTablePrototype.cpp
     WebContentClient.cpp
+    WebSockets/WebSocket.cpp
     XHR/EventNames.cpp
     XHR/XMLHttpRequest.cpp
     XHR/XMLHttpRequestEventTarget.cpp
@@ -404,6 +412,7 @@ libweb_js_wrapper(CSS/MediaQueryListEvent)
 libweb_js_wrapper(CSS/Screen)
 libweb_js_wrapper(CSS/StyleSheet)
 libweb_js_wrapper(CSS/StyleSheetList)
+libweb_js_wrapper(DOM/AbstractRange)
 libweb_js_wrapper(DOM/Attribute)
 libweb_js_wrapper(DOM/AbortController)
 libweb_js_wrapper(DOM/AbortSignal)
@@ -426,6 +435,7 @@ libweb_js_wrapper(DOM/NodeList)
 libweb_js_wrapper(DOM/ProcessingInstruction)
 libweb_js_wrapper(DOM/Range)
 libweb_js_wrapper(DOM/ShadowRoot)
+libweb_js_wrapper(DOM/StaticRange)
 libweb_js_wrapper(DOM/Text)
 libweb_js_wrapper(Encoding/TextDecoder)
 libweb_js_wrapper(Encoding/TextEncoder)
@@ -519,7 +529,6 @@ libweb_js_wrapper(HTML/PromiseRejectionEvent)
 libweb_js_wrapper(HTML/Storage)
 libweb_js_wrapper(HTML/SubmitEvent)
 libweb_js_wrapper(HTML/TextMetrics)
-libweb_js_wrapper(HTML/WebSocket)
 libweb_js_wrapper(HTML/Worker)
 libweb_js_wrapper(HTML/WorkerGlobalScope)
 libweb_js_wrapper(HTML/WorkerLocation)
@@ -547,6 +556,7 @@ libweb_js_wrapper(UIEvents/MouseEvent)
 libweb_js_wrapper(UIEvents/UIEvent)
 libweb_js_wrapper(URL/URL)
 libweb_js_wrapper(URL/URLSearchParams ITERABLE)
+libweb_js_wrapper(WebSockets/WebSocket)
 libweb_js_wrapper(XHR/ProgressEvent)
 libweb_js_wrapper(XHR/XMLHttpRequest)
 libweb_js_wrapper(XHR/XMLHttpRequestEventTarget)

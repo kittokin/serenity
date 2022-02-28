@@ -446,6 +446,14 @@ void Process::OpenFileDescriptions::enumerate(Function<void(const OpenFileDescri
     }
 }
 
+ErrorOr<void> Process::OpenFileDescriptions::try_enumerate(Function<ErrorOr<void>(const OpenFileDescriptionAndFlags&)> callback) const
+{
+    for (auto const& file_description_metadata : m_fds_metadatas) {
+        TRY(callback(file_description_metadata));
+    }
+    return {};
+}
+
 void Process::OpenFileDescriptions::change_each(Function<void(OpenFileDescriptionAndFlags&)> callback)
 {
     for (auto& file_description_metadata : m_fds_metadatas) {
@@ -606,7 +614,7 @@ void Process::finalize()
     {
         // FIXME: PID/TID BUG
         if (auto parent_thread = Thread::from_tid(ppid().value())) {
-            if ((parent_thread->m_signal_action_data[SIGCHLD].flags & SA_NOCLDWAIT) != SA_NOCLDWAIT)
+            if (parent_thread->process().is_user_process() && (parent_thread->m_signal_action_data[SIGCHLD].flags & SA_NOCLDWAIT) != SA_NOCLDWAIT)
                 parent_thread->send_signal(SIGCHLD, this);
         }
     }
@@ -707,6 +715,7 @@ void Process::terminate_due_to_signal(u8 signal)
 
 ErrorOr<void> Process::send_signal(u8 signal, Process* sender)
 {
+    VERIFY(is_user_process());
     // Try to send it to the "obvious" main thread:
     auto receiver_thread = Thread::from_tid(pid().value());
     // If the main thread has died, there may still be other threads:

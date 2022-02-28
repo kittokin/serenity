@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "ClientConnection.h"
+#include "ConnectionFromClient.h"
 #include <AK/Badge.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/Painter.h>
@@ -624,7 +624,7 @@ void WindowFrame::invalidate(Gfx::IntRect relative_rect)
     auto window_rect = m_window.rect();
     relative_rect.translate_by(frame_rect.x() - window_rect.x(), frame_rect.y() - window_rect.y());
     set_dirty();
-    m_window.invalidate(relative_rect);
+    m_window.invalidate(relative_rect, true);
 }
 
 void WindowFrame::window_rect_changed(const Gfx::IntRect& old_rect, const Gfx::IntRect& new_rect)

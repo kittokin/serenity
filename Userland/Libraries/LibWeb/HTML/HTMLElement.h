@@ -19,7 +19,7 @@ class HTMLElement
 public:
     using WrapperType = Bindings::HTMLElementWrapper;
 
-    HTMLElement(DOM::Document&, QualifiedName);
+    HTMLElement(DOM::Document&, DOM::QualifiedName);
     virtual ~HTMLElement() override;
 
     String title() const { return attribute(HTML::AttributeNames::title); }
@@ -43,6 +43,8 @@ public:
     void focus();
 
     void click();
+
+    bool fire_a_synthetic_pointer_event(FlyString const& type, DOM::Element& target, bool not_trusted);
 
 protected:
     virtual void parse_attribute(const FlyString& name, const String& value) override;

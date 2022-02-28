@@ -7,8 +7,8 @@
 #include "Window.h"
 #include "Animation.h"
 #include "AppletManager.h"
-#include "ClientConnection.h"
 #include "Compositor.h"
+#include "ConnectionFromClient.h"
 #include "Event.h"
 #include "EventLoop.h"
 #include "Screen.h"
@@ -96,7 +96,7 @@ Window::Window(Core::Object& parent, WindowType type)
     frame().window_was_constructed({});
 }
 
-Window::Window(ClientConnection& client, WindowType window_type, int window_id, bool modal, bool minimizable, bool closeable, bool frameless, bool resizable, bool fullscreen, bool accessory, Window* parent_window)
+Window::Window(ConnectionFromClient& client, WindowType window_type, int window_id, bool modal, bool minimizable, bool closeable, bool frameless, bool resizable, bool fullscreen, bool accessory, Window* parent_window)
     : Core::Object(&client)
     , m_client(&client)
     , m_type(window_type)
@@ -650,23 +650,23 @@ void Window::invalidate(bool invalidate_frame, bool re_render_frame)
     Compositor::the().invalidate_window();
 }
 
-void Window::invalidate(Gfx::IntRect const& rect)
+void Window::invalidate(Gfx::IntRect const& rect, bool invalidate_frame)
 {
     if (type() == WindowType::Applet) {
         AppletManager::the().invalidate_applet(*this, rect);
         return;
     }
 
-    if (invalidate_no_notify(rect))
+    if (invalidate_no_notify(rect, invalidate_frame))
         Compositor::the().invalidate_window();
 }
 
-bool Window::invalidate_no_notify(const Gfx::IntRect& rect, bool with_frame)
+bool Window::invalidate_no_notify(const Gfx::IntRect& rect, bool invalidate_frame)
 {
     if (rect.is_empty())
         return false;
     if (m_invalidated_all) {
-        if (with_frame)
+        if (invalidate_frame)
             m_invalidated_frame |= true;
         return false;
     }
@@ -680,7 +680,7 @@ bool Window::invalidate_no_notify(const Gfx::IntRect& rect, bool with_frame)
         return false;
 
     m_invalidated = true;
-    if (with_frame)
+    if (invalidate_frame)
         m_invalidated_frame |= true;
     m_dirty_rects.add(inner_rect.translated(-outer_rect.location()));
     return true;
@@ -1017,7 +1017,7 @@ void Window::set_tiled(WindowTileType tile_type)
     Core::EventLoop::current().post_event(*this, make<ResizeEvent>(m_rect));
 }
 
-void Window::detach_client(Badge<ClientConnection>)
+void Window::detach_client(Badge<ConnectionFromClient>)
 {
     m_client = nullptr;
 }

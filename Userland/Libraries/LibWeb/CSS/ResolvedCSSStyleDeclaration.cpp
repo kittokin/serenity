@@ -358,6 +358,17 @@ static CSS::ValueID to_css_value_id(CSS::FlexWrap value)
     VERIFY_NOT_REACHED();
 }
 
+static CSS::ValueID to_css_value_id(CSS::ImageRendering value)
+{
+    switch (value) {
+    case ImageRendering::Auto:
+        return CSS::ValueID::Auto;
+    case ImageRendering::Pixelated:
+        return CSS::ValueID::Pixelated;
+    }
+    VERIFY_NOT_REACHED();
+}
+
 static CSS::ValueID to_css_value_id(CSS::JustifyContent value)
 {
     switch (value) {
@@ -388,6 +399,29 @@ static CSS::ValueID to_css_value_id(CSS::Overflow value)
         return CSS::ValueID::Scroll;
     case Overflow::Visible:
         return CSS::ValueID::Visible;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+static CSS::ValueID to_css_value_id(CSS::VerticalAlign value)
+{
+    switch (value) {
+    case CSS::VerticalAlign::Baseline:
+        return CSS::ValueID::Baseline;
+    case CSS::VerticalAlign::Bottom:
+        return CSS::ValueID::Bottom;
+    case CSS::VerticalAlign::Middle:
+        return CSS::ValueID::Middle;
+    case CSS::VerticalAlign::Sub:
+        return CSS::ValueID::Sub;
+    case CSS::VerticalAlign::Super:
+        return CSS::ValueID::Super;
+    case CSS::VerticalAlign::TextBottom:
+        return CSS::ValueID::TextBottom;
+    case CSS::VerticalAlign::TextTop:
+        return CSS::ValueID::TextTop;
+    case CSS::VerticalAlign::Top:
+        return CSS::ValueID::Top;
     }
     VERIFY_NOT_REACHED();
 }
@@ -515,6 +549,8 @@ RefPtr<StyleValue> ResolvedCSSStyleDeclaration::style_value_for_property(Layout:
         return NumericStyleValue::create_float(layout_node.computed_values().flex_shrink());
     case CSS::PropertyID::Opacity:
         return NumericStyleValue::create_float(layout_node.computed_values().opacity());
+    case CSS::PropertyID::ImageRendering:
+        return IdentifierStyleValue::create(to_css_value_id(layout_node.computed_values().image_rendering()));
     case CSS::PropertyID::JustifyContent:
         return IdentifierStyleValue::create(to_css_value_id(layout_node.computed_values().justify_content()));
     case CSS::PropertyID::BoxShadow: {
@@ -536,25 +572,25 @@ RefPtr<StyleValue> ResolvedCSSStyleDeclaration::style_value_for_property(Layout:
         return StyleValueList::create(move(box_shadow), StyleValueList::Separator::Comma);
     }
     case CSS::PropertyID::Width:
-        return style_value_for_length_percentage(layout_node.computed_values().width());
+        return style_value_for_length_percentage(layout_node.computed_values().width().value_or(Length::make_auto()));
     case CSS::PropertyID::MinWidth:
-        if (layout_node.computed_values().min_width().is_length() && layout_node.computed_values().min_width().length().is_undefined_or_auto())
+        if (!layout_node.computed_values().min_width().has_value())
             return IdentifierStyleValue::create(CSS::ValueID::Auto);
-        return style_value_for_length_percentage(layout_node.computed_values().min_width());
+        return style_value_for_length_percentage(layout_node.computed_values().min_width().value());
     case CSS::PropertyID::MaxWidth:
-        if (layout_node.computed_values().max_width().is_length() && layout_node.computed_values().max_width().length().is_undefined())
+        if (!layout_node.computed_values().max_width().has_value())
             return IdentifierStyleValue::create(CSS::ValueID::None);
-        return style_value_for_length_percentage(layout_node.computed_values().max_width());
+        return style_value_for_length_percentage(layout_node.computed_values().max_width().value());
     case CSS::PropertyID::Height:
-        return style_value_for_length_percentage(layout_node.computed_values().height());
+        return style_value_for_length_percentage(layout_node.computed_values().height().value_or(Length::make_auto()));
     case CSS::PropertyID::MinHeight:
-        if (layout_node.computed_values().min_height().is_length() && layout_node.computed_values().min_height().length().is_undefined_or_auto())
+        if (!layout_node.computed_values().min_height().has_value())
             return IdentifierStyleValue::create(CSS::ValueID::Auto);
-        return style_value_for_length_percentage(layout_node.computed_values().min_height());
+        return style_value_for_length_percentage(layout_node.computed_values().min_height().value());
     case CSS::PropertyID::MaxHeight:
-        if (layout_node.computed_values().max_height().is_length() && layout_node.computed_values().max_height().length().is_undefined())
+        if (!layout_node.computed_values().max_height().has_value())
             return IdentifierStyleValue::create(CSS::ValueID::None);
-        return style_value_for_length_percentage(layout_node.computed_values().max_height());
+        return style_value_for_length_percentage(layout_node.computed_values().max_height().value());
     case CSS::PropertyID::Margin: {
         auto margin = layout_node.computed_values().margin();
         auto values = NonnullRefPtrVector<StyleValue> {};
@@ -703,6 +739,15 @@ RefPtr<StyleValue> ResolvedCSSStyleDeclaration::style_value_for_property(Layout:
             value_or_default(maybe_background_origin, IdentifierStyleValue::create(CSS::ValueID::PaddingBox)),
             value_or_default(maybe_background_clip, IdentifierStyleValue::create(CSS::ValueID::BorderBox)));
     }
+    case CSS::PropertyID::VerticalAlign:
+        if (auto const* length_percentage = layout_node.computed_values().vertical_align().get_pointer<CSS::LengthPercentage>()) {
+            if (length_percentage->is_length())
+                return LengthStyleValue::create(length_percentage->length());
+            if (length_percentage->is_percentage())
+                return PercentageStyleValue::create(length_percentage->percentage());
+            VERIFY_NOT_REACHED();
+        }
+        return IdentifierStyleValue::create(to_css_value_id(layout_node.computed_values().vertical_align().get<CSS::VerticalAlign>()));
     case CSS::PropertyID::ListStyleType:
         return IdentifierStyleValue::create(to_css_value_id(layout_node.computed_values().list_style_type()));
     case CSS::PropertyID::BoxSizing:

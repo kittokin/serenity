@@ -19,7 +19,7 @@
 #include <LibGfx/Painter.h>
 #include <LibGfx/StylePainter.h>
 #include <LibGfx/Triangle.h>
-#include <WindowServer/ClientConnection.h>
+#include <WindowServer/ConnectionFromClient.h>
 #include <WindowServer/WindowClientEndpoint.h>
 
 namespace WindowServer {
@@ -37,7 +37,7 @@ u32 find_ampersand_shortcut_character(StringView string)
     return 0;
 }
 
-Menu::Menu(ClientConnection* client, int menu_id, String name)
+Menu::Menu(ConnectionFromClient* client, int menu_id, String name)
     : Core::Object(client)
     , m_client(client)
     , m_menu_id(menu_id)
@@ -560,6 +560,11 @@ MenuItem* Menu::item_with_identifier(unsigned identifier)
             return &item;
     }
     return nullptr;
+}
+
+bool Menu::remove_item_with_identifier(unsigned identifier)
+{
+    return m_items.remove_first_matching([&](auto& item) { return item->identifier() == identifier; });
 }
 
 int Menu::item_index_at(const Gfx::IntPoint& position)

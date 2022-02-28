@@ -46,28 +46,28 @@ static bool build_markdown_document(DOM::Document& document, const ByteBuffer& d
     if (!markdown_document)
         return false;
 
-    HTML::HTMLParser parser(document, markdown_document->render_to_html(), "utf-8");
-    parser.run(document.url());
+    auto parser = HTML::HTMLParser::create(document, markdown_document->render_to_html(), "utf-8");
+    parser->run(document.url());
     return true;
 }
 
 static bool build_text_document(DOM::Document& document, const ByteBuffer& data)
 {
-    auto html_element = document.create_element("html");
+    auto html_element = document.create_element("html").release_value();
     document.append_child(html_element);
 
-    auto head_element = document.create_element("head");
+    auto head_element = document.create_element("head").release_value();
     html_element->append_child(head_element);
-    auto title_element = document.create_element("title");
+    auto title_element = document.create_element("title").release_value();
     head_element->append_child(title_element);
 
     auto title_text = document.create_text_node(document.url().basename());
     title_element->append_child(title_text);
 
-    auto body_element = document.create_element("body");
+    auto body_element = document.create_element("body").release_value();
     html_element->append_child(body_element);
 
-    auto pre_element = document.create_element("pre");
+    auto pre_element = document.create_element("pre").release_value();
     body_element->append_child(pre_element);
 
     pre_element->append_child(document.create_text_node(String::copy(data)));
@@ -85,22 +85,22 @@ static bool build_image_document(DOM::Document& document, ByteBuffer const& data
     if (!bitmap)
         return false;
 
-    auto html_element = document.create_element("html");
+    auto html_element = document.create_element("html").release_value();
     document.append_child(html_element);
 
-    auto head_element = document.create_element("head");
+    auto head_element = document.create_element("head").release_value();
     html_element->append_child(head_element);
-    auto title_element = document.create_element("title");
+    auto title_element = document.create_element("title").release_value();
     head_element->append_child(title_element);
 
     auto basename = LexicalPath::basename(document.url().path());
     auto title_text = adopt_ref(*new DOM::Text(document, String::formatted("{} [{}x{}]", basename, bitmap->width(), bitmap->height())));
     title_element->append_child(title_text);
 
-    auto body_element = document.create_element("body");
+    auto body_element = document.create_element("body").release_value();
     html_element->append_child(body_element);
 
-    auto image_element = document.create_element("img");
+    auto image_element = document.create_element("img").release_value();
     image_element->set_attribute(HTML::AttributeNames::src, document.url().to_string());
     body_element->append_child(image_element);
 
@@ -116,8 +116,8 @@ static bool build_gemini_document(DOM::Document& document, const ByteBuffer& dat
     dbgln_if(GEMINI_DEBUG, "Gemini data:\n\"\"\"{}\"\"\"", gemini_data);
     dbgln_if(GEMINI_DEBUG, "Converted to HTML:\n\"\"\"{}\"\"\"", html_data);
 
-    HTML::HTMLParser parser(document, html_data, "utf-8");
-    parser.run(document.url());
+    auto parser = HTML::HTMLParser::create(document, html_data, "utf-8");
+    parser->run(document.url());
     return true;
 }
 
@@ -226,9 +226,9 @@ bool FrameLoader::load(const AK::URL& url, Type type)
 void FrameLoader::load_html(StringView html, const AK::URL& url)
 {
     auto document = DOM::Document::create(url);
-    HTML::HTMLParser parser(document, html, "utf-8");
-    parser.run(url);
-    browsing_context().set_active_document(&parser.document());
+    auto parser = HTML::HTMLParser::create(document, html, "utf-8");
+    parser->run(url);
+    browsing_context().set_active_document(&parser->document());
 }
 
 // FIXME: Use an actual templating engine (our own one when it's built, preferably
